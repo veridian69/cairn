@@ -1,0 +1,21 @@
+# The cluster's egress gateway (I-93, P-64): one HTTP CONNECT forward
+# proxy in its own namespace, applied once per cluster.
+#
+# It lives under `overlays/` because it is cluster material rather than
+# portable instance material, and it is its own kustomization rather than
+# part of the three target overlays because it is one per *cluster* while
+# those are one per *instance*. Rendering it from each of them would put
+# three identical copies of a namespace in three renders, and applying
+# any two of them would fight.
+#
+# The one value an operator is expected to edit is the allow-list in
+# `configmap.yaml`. Everything else is a consequence of I-93.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml

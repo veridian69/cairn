@@ -1,0 +1,81 @@
+name: Check
+
+on:
+  schedule:
+    # The scheduled workflow always runs the default branch. This catches
+    # newly disclosed, fixable base-image CVEs even when the source is quiet.
+    - cron: "17 3 * * *"
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ordinary:
+    name: Ordinary checks
+    runs-on: ubuntu-24.04
+    # The hosted runner reached 97% before the former 15-minute job limit.
+    # This changes only the CI envelope, not test or benchmark deadlines.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: "0.12.0"
+          enable-cache: true
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - name: Offline CI policy and selection contracts
+        run: |
+          uv run --locked python -B .github/ci/test_bwrap_policy.py
+          uv run --locked python -B .github/ci/test_private_namespace_canary.py
+          uv run --locked python -B .github/ci/test_ci_split.py
+      # uv build has no --locked option; build backends are pinned in pyproject.
+      - run: uv build --wheel
+      # make check verifies pinned renders and client-only Compose config too.
+      - run: ./scripts/fetch-kubectl
+      - name: Check ordinary suite with existing coverage reporting
+        env:
+          PYTEST_ADDOPTS: "-m 'not host_isolation'"
+        run: make check
+      - name: State coverage boundary
+        if: always()
+        run: |
+          echo '### Ordinary checks: host isolation excluded' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Only marked real Bubblewrap/namespace tests are excluded; all other tests and existing branch-coverage reporting remain enabled.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This job does not certify host isolation or full host acceptance. Manual diagnostics are separate; local make check still runs the full suite.' >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: Image gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - run: make image IMAGE=cairn:ci
+      - run: make smoke-image IMAGE=cairn:ci
+      - name: Report all HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn:ci
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          severity: HIGH,CRITICAL
+      - name: Reject fixable HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL

@@ -1,0 +1,202 @@
+# Retrieval, included by choice (I-91) — the Compose counterpart of the
+# `falkordb` Kustomize component, and used the same way: an overlay file
+# that is either passed or not.
+#
+#     docker compose --env-file ../images.lock --env-file .env \
+#       -f compose.yaml -f compose.graphiti.yaml up -d
+#
+# Without it the project has no index service, no index password and no
+# adapter credentials to supply. With it, the instance's configuration
+# document must also say so — `graphiti.enabled: true`, `host: falkordb`,
+# `port: 6379` — because the switch lives in `cairn.config/v1`, not here.
+# README.md's retrieval section is the worked example of both halves.
+#
+# One FalkorDB per instance, never a shared one: the scope isolation
+# Cairn enforces above the index would be worth nothing if two instances
+# shared the store beneath it. Project-prefixed volumes and a
+# project-private network are what make "per instance" mechanical here.
+
+services:
+  cairn:
+    depends_on:
+      falkordb:
+        # Cairn opens its index connection during composition, so an
+        # index that is merely *started* is not enough — this waits for
+        # the healthcheck below.
+        condition: service_healthy
+
+  falkordb:
+    image: ${FALKORDB_IMAGE:?read it from deploy/images.lock with --env-file}
+    depends_on:
+      falkordb-init:
+        condition: service_completed_successfully
+    # Nothing is published. The index is reachable only as `falkordb` on
+    # this project's own network, which is what the instance's
+    # configuration document names.
+    #
+    # 10001 for the kind overlay's reason, and the same number so that
+    # one identity serves both targets: the image declares no USER, so
+    # somebody must name one, and it must be a UID the image's own
+    # /etc/passwd does not name. That file names 999 as `redis` in group
+    # 999 and 1001 as `nextjs` in group 1001, so either would take its
+    # primary group from the image whenever the group is left unstated.
+    # It is stated here, which makes the choice belt-and-braces rather
+    # than load-bearing — but a worked example should not teach the UID
+    # that bit the Kubernetes overlay on 13 August 2026.
+    #
+    # Compose is, for once, the more forgiving target. A bind-mounted
+    # file keeps its host ownership, so README.md gives each credential
+    # to the UID that reads it and 0400 works through the owner bits; a
+    # Kubernetes Secret projects `root:root` and cannot be chowned, which
+    # is what makes group 0 load-bearing there and merely tidy here.
+    #
+    # One consequence Compose cannot paper over: a fresh named volume is
+    # created root-owned, because the image contains no
+    # /var/lib/falkordb/data for Docker to copy ownership from.
+    # Kubernetes hands the volume to the pod; Compose has no fsGroup, so
+    # `falkordb-init` below prepares the volume once. Forgetting it is a
+    # container that exits with a redis permission error rather than
+    # anything subtle.
+    user: "10001:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # A *path*, not a password: the entrypoint expands REDIS_ARGS ahead
+      # of every other argument, and redis-server reads its first
+      # argument as a configuration file. The credential therefore
+      # reaches redis as a file and enters no environment and no argv,
+      # which is what P-63 as amended requires of both targets.
+      REDIS_ARGS: /etc/falkordb/cairn.conf
+      # The image ships a web console and starts it beside redis unless
+      # told not to. Nothing in Cairn uses it, and an unauthenticated
+      # console next to the index is not a surface to leave to a default.
+      BROWSER: "0"
+      # No TLS: the connection never leaves this project's network. The
+      # image's TLS mode generates its own certificates at start, which
+      # is a weaker claim than it looks.
+      TLS: "0"
+      # P-82 gate-4 ruling (25 August 2026): the queued-query ceiling the
+      # chunk-size sweep hit at its compiled default of 25. The entrypoint
+      # appends this to the `--loadmodule` line. Preserve the pinned
+      # image's result-set control while changing the queued-query ceiling.
+      # Gate-5's exact replay measured the retained graph's relationship
+      # full-text query at 1,207.9 ms, beyond the image's 1,000 ms timeout;
+      # keep a bounded 5,000 ms ceiling with margin. The delivery process's own
+      # `graphiti.index_concurrency_limit` stays below this value.
+      FALKORDB_ARGS: "MAX_QUEUED_QUERIES 200 TIMEOUT 5000 RESULTSET_SIZE 10000"
+    volumes:
+      # The index's configuration file, and the only place its credential
+      # exists in this project. Operator-supplied, read-only, and owned by
+      # the index's own UID — README.md generates it in the same step as
+      # Cairn's copy of the password, from the same bytes.
+      #
+      # `create_host_path: false` so that a missing file is refused: the
+      # default would create a *directory* at that path, and redis would
+      # then fail with something that reads like a corrupt configuration
+      # rather than an absent one.
+      - type: bind
+        source: ${FALKORDB_CONFIG_FILE:?the index configuration file carrying requirepass}
+        target: /etc/falkordb/cairn.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      # The image's FALKORDB_DATA_PATH, and the only path its entrypoint
+      # or redis writes to — `--dir` is set to exactly this.
+      #
+      # The index is derived state: the backup bundle excludes it on
+      # purpose (P-65), and losing this volume is a `cairn rebuild-index`
+      # rather than a data loss.
+      - type: volume
+        source: falkordb-data
+        target: /var/lib/falkordb/data
+    # `ping` rather than a TCP connect, because redis-cli is in the image
+    # and answers the only question worth asking — is it serving
+    # authenticated clients yet.
+    #
+    # The credential is read out of the configuration file the server
+    # itself is using and handed to redis-cli on **stdin**, as an `AUTH`
+    # command: redis-cli executes what it is piped when its input is not
+    # a terminal. Not argv, and not an environment variable either —
+    # `REDISCLI_AUTH` would have put it in one, which P-63 as amended
+    # forbids on both targets, transient child process or not.
+    #
+    # The *answer* is compared, not the exit status: redis-cli exits 0 on
+    # a `NOAUTH Authentication required.` reply exactly as it does on
+    # `PONG`, so a status-only check would call an index healthy that is
+    # refusing the credential it was given. Measured against the pinned
+    # image, not assumed.
+    #
+    # What it proves is bounded, and worth stating: the index is up and
+    # authenticating with its own configured credential. It cannot prove
+    # that Cairn's copy of that password matches — both are written from
+    # one generated secret, and a mismatch surfaces in Cairn's delivery
+    # loop, not here.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          { sed -n 's/^requirepass /AUTH /p' /etc/falkordb/cairn.conf; echo PING; }
+          | redis-cli -h 127.0.0.1 -p 6379 | grep -q '^PONG$$'
+      start_period: 60s
+      start_interval: 2s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  # Compose's init container: the one-shot that hands the index's volume
+  # to the index, and the reason the operator has no fifth step to
+  # forget. It runs before FalkorDB on every `up` and is idempotent — a
+  # volume that is already right is left exactly as it was, and one
+  # restored from elsewhere is put right.
+  #
+  # It is a service rather than a `docker run` line in the README so that
+  # the image pin, the volume and the UID all stay in this file: an
+  # operator typing a project-prefixed volume name by hand is an operator
+  # who will one day type another instance's.
+  #
+  # A latent failure is what this exists to prevent, not an inconvenient
+  # one. FalkorDB with an unwritable data directory *starts*, serves and
+  # reports healthy — it discovers the problem at its first background
+  # save, long after anyone is watching.
+  falkordb-init:
+    image: ${FALKORDB_IMAGE:?read it from deploy/images.lock with --env-file}
+    # The only container in this project that is root, and the only one
+    # with a capability: CHOWN, because giving a directory away is the
+    # whole of what it does.
+    #
+    # Ownership and nothing else. The mode Docker gives a fresh volume —
+    # 0755 — already lets its owner write, and a `chmod` here would need
+    # CAP_FOWNER on the second run, when the directory no longer belongs
+    # to root: the one-shot would then fail on every `up` after the
+    # first. Observed, not reasoned about.
+    user: "0:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    # It chowns a directory. It has no business on a network, and the one
+    # container here that runs as root is the one that should be able to
+    # reach nothing at all.
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - sh
+      - -c
+      - chown 10001:0 /var/lib/falkordb/data
+    volumes:
+      - type: volume
+        source: falkordb-data
+        target: /var/lib/falkordb/data
+    # A one-shot that comes back is a loop.
+    restart: "no"
+
+volumes:
+  # Project-prefixed, for the reason `cairn-data` is.
+  falkordb-data:

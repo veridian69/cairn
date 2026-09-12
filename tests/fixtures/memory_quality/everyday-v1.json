@@ -1,0 +1,39 @@
+{
+  "schema": "cairn.synthetic-memory-quality/v1",
+  "description": "Synthetic-only fixed corpus. Expected labels are evaluation truth, never supplied to the retrieval provider as answers.",
+  "facts": [
+    {"label": "thermal_response", "body": "Elevated temperature activates the cooling fan.", "recorded_at": "2024-01-01T12:00:00Z", "scope": "job"},
+    {"label": "entry_approval", "body": "The warehouse entrance requires two separate approvals.", "recorded_at": "2024-01-02T12:00:00Z", "scope": "job"},
+    {"label": "archive_lifetime", "body": "Recovered archives expire after twelve weeks.", "recorded_at": "2024-01-03T12:00:00Z", "scope": "job"},
+    {"label": "literal_identifier", "body": "Valve QZ-731 uses a ceramic seal.", "recorded_at": "2024-01-04T12:00:00Z", "scope": "job"},
+    {"label": "old_route", "body": "Synthetic recovery traffic uses the west tunnel.", "recorded_at": "2024-01-05T12:00:00Z", "scope": "job"},
+    {"label": "new_route", "body": "Synthetic recovery traffic uses the east tunnel.", "recorded_at": "2026-01-01T12:00:00Z", "scope": "job"},
+    {"label": "fan_inspection", "body": "The cooling fan inspection takes place on Fridays.", "recorded_at": "2026-01-02T12:00:00Z", "scope": "job"},
+    {"label": "warehouse_paint", "body": "The warehouse entrance paint is green.", "recorded_at": "2026-01-03T12:00:00Z", "scope": "job"},
+    {"label": "archive_format", "body": "Recovered archives use the tar format.", "recorded_at": "2026-01-04T12:00:00Z", "scope": "job"},
+    {"label": "different_valve", "body": "Valve QZ-732 uses a rubber seal.", "recorded_at": "2026-01-05T12:00:00Z", "scope": "job"},
+    {"label": "rota_noise", "body": "The cupboard hinge inspection rota changes every Tuesday.", "recorded_at": "2026-01-06T12:00:00Z", "scope": "job"},
+    {"label": "sibling_thermal", "body": "Elevated temperature activates the sprinkler in the sibling job.", "recorded_at": "2026-01-07T12:00:00Z", "scope": "sibling"}
+  ],
+  "corrections": [
+    {"source": "old_route", "replacement": "new_route", "reason": "The synthetic routing decision changed from west to east.", "recorded_at": "2026-01-01T12:01:00Z"}
+  ],
+  "queries": [
+    {"name": "paraphrase_heat", "split": "development", "query": "What spins when things get hot?", "relevant": ["thermal_response"], "top_k": 3, "minimum_recall": 1.0, "require_top_one": "thermal_response", "zero_literal_overlap": true},
+    {"name": "paraphrase_entry", "split": "development", "query": "How many authorisations let someone enter storage?", "relevant": ["entry_approval"], "top_k": 3, "minimum_recall": 1.0, "require_top_one": "entry_approval", "zero_literal_overlap": true},
+    {"name": "paraphrase_retention", "split": "held-out", "query": "How long are backups retained?", "relevant": ["archive_lifetime"], "top_k": 3, "minimum_recall": 1.0, "require_top_one": "archive_lifetime", "zero_literal_overlap": true},
+    {"name": "held_out_heat", "split": "held-out", "query": "Which mechanism responds to overheating?", "relevant": ["thermal_response"], "top_k": 3, "minimum_recall": 1.0, "require_top_one": "thermal_response", "zero_literal_overlap": true},
+    {"name": "literal_id", "split": "development", "query": "QZ-731", "relevant": ["literal_identifier"], "top_k": 3, "minimum_recall": 1.0, "require_top_one": "literal_identifier", "zero_literal_overlap": false},
+    {"name": "specific_old_fact", "split": "development", "query": "warehouse entrance separate approvals", "relevant": ["entry_approval"], "top_k": 3, "minimum_recall": 1.0, "require_top_one": "entry_approval", "zero_literal_overlap": false},
+    {"name": "corrected_current_route", "split": "development", "query": "Synthetic recovery traffic tunnel", "relevant": ["new_route"], "forbidden": ["old_route"], "top_k": 3, "minimum_recall": 1.0, "require_top_one": "new_route", "zero_literal_overlap": false},
+    {"name": "unrelated_query", "split": "held-out", "query": "How do jellyfish reproduce?", "relevant": [], "top_k": 3, "maximum_irrelevant": 0, "zero_literal_overlap": false}
+  ],
+  "invariants": {
+    "forbidden_scope": "sibling",
+    "trust": "candidate",
+    "current_only": true,
+    "projection_must_complete": true,
+    "report_precision_and_recall_for_each_query": true,
+    "no_corpus_specific_synonyms_or_expected_labels_in_provider_queries": true
+  }
+}

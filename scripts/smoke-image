@@ -1,0 +1,928 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${IMAGE:?IMAGE is required}"
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+smoke_root="$(mktemp -d)"
+container_suffix="${smoke_root##*/}"
+check_one_container="cairn-smoke-${container_suffix}-check-one"
+check_two_container="cairn-smoke-${container_suffix}-check-two"
+service_container="cairn-smoke-${container_suffix}-service"
+contender_container="cairn-smoke-${container_suffix}-contender"
+bootstrap_container="cairn-smoke-${container_suffix}-bootstrap"
+bootstrap_conflict_container="cairn-smoke-${container_suffix}-bootstrap-conflict"
+recovery_container="cairn-smoke-${container_suffix}-recovery"
+secret_scan_container="cairn-smoke-${container_suffix}-secret-scan"
+
+docker_bounded() {
+	local duration="$1"
+	shift
+
+	timeout --signal=TERM --kill-after=2s "$duration" docker "$@"
+}
+
+cleanup() {
+	for container in \
+		"$check_one_container" \
+		"$check_two_container" \
+		"$service_container" \
+		"$contender_container" \
+		"$bootstrap_container" \
+		"$bootstrap_conflict_container" \
+		"$recovery_container" \
+		"$secret_scan_container"
+	do
+		docker_bounded 5s container rm --force "$container" \
+			>/dev/null 2>&1 || true
+	done
+	for credentials_path in "${credentials_one:-}"
+	do
+		if [[ -n "$credentials_path" && -d "$credentials_path" ]]; then
+			chmod u+w "$credentials_path" || true
+		fi
+	done
+	if [[ -n "${smoke_root:-}" && -d "$smoke_root" ]]; then
+		rm -rf -- "$smoke_root"
+	fi
+}
+trap cleanup EXIT
+
+fail() {
+	printf 'image smoke failed: %s\n' "$*" >&2
+	exit 1
+}
+
+require_source_revision() {
+	local revision
+
+	revision="$(
+		docker_bounded 5s image inspect \
+			--format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+			"$IMAGE"
+	)"
+	[[ "$revision" =~ ^[0-9a-f]{40}$ ]] ||
+		fail "image has no full Git source revision label"
+}
+
+write_config() {
+	local config_path="$1"
+	local instance_id="$2"
+
+	{
+		printf '%s\n' \
+			"schema_version: cairn.config/v1" \
+			"instance_id: ${instance_id}" \
+			"mode: test" \
+			"http:" \
+			"  host: 0.0.0.0" \
+			"  port: 8000" \
+			"paths:" \
+			"  data: /var/lib/cairn" \
+			"  credentials: /var/run/secrets/cairn" \
+			"graphiti:" \
+			"  enabled: true" \
+			"delivery:" \
+			"  interval_seconds: 1"
+	} >"$config_path"
+}
+
+run_catalogue_command() {
+	local user="$1"
+	local container="$2"
+	local config_path="$3"
+	local data_path="$4"
+	local credentials_path="$5"
+	local command="$6"
+
+	docker_bounded 15s run \
+		--pull=never \
+		--name "$container" \
+		--rm \
+		--user "$user" \
+		--read-only \
+		--tmpfs /tmp:rw,noexec,nosuid \
+		--mount "type=bind,src=${config_path},dst=/etc/cairn/config.yaml,readonly" \
+		--mount "type=bind,src=${credentials_path},dst=/var/run/secrets/cairn,readonly" \
+		--mount "type=bind,src=${data_path},dst=/var/lib/cairn" \
+		"$IMAGE" \
+		"$command" --config /etc/cairn/config.yaml
+}
+
+run_administration_command() {
+	local user="$1"
+	local container="$2"
+	local config_path="$3"
+	local data_path="$4"
+	local credentials_path="$5"
+	local command="$6"
+	shift 6
+
+	docker_bounded 15s run \
+		--pull=never \
+		--name "$container" \
+		--rm \
+		--user "$user" \
+		--read-only \
+		--tmpfs /tmp:rw,noexec,nosuid \
+		--mount "type=bind,src=${config_path},dst=/etc/cairn/config.yaml,readonly" \
+		--mount "type=bind,src=${credentials_path},dst=/var/run/secrets/cairn,readonly" \
+		--mount "type=bind,src=${data_path},dst=/var/lib/cairn" \
+		"$IMAGE" \
+		"$command" --config /etc/cairn/config.yaml "$@"
+}
+
+require_i62_token() {
+	local token="$1"
+
+	[[ "$token" =~ ^cairn1\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$ ]] ||
+		fail "token did not match the I-62 credential format"
+}
+
+require_secret_absent_from_data() {
+	local data_path="$1"
+	local component="$2"
+	local status
+
+	# Runs as container root, not the host user: administration commands
+	# leave catalogue files at mode 660 owned by the in-container UID, which
+	# the host process cannot read. Scans every file under the data
+	# directory, not just the catalogue proper, but this only covers
+	# post-exit residue: by the time this runs the container has exited and
+	# SQLite has already checkpointed and removed the -wal file on last-
+	# connection close, so there is no live -wal content left to scan here.
+	# Live-WAL coverage — catching a secret while a writer still holds the
+	# -wal file open mid-transaction — is exercised separately, in
+	# tests/runtime/test_bootstrap_cli.py's commit-hook capture.
+	if docker_bounded 15s run \
+		--pull=never \
+		--name "$secret_scan_container" \
+		--rm \
+		--user 0:0 \
+		--read-only \
+		--tmpfs /tmp:rw,noexec,nosuid \
+		--entrypoint grep \
+		--mount "type=bind,src=${data_path},dst=/var/lib/cairn,readonly" \
+		"$IMAGE" \
+		-rqaF -- "$component" /var/lib/cairn
+	then
+		status=0
+	else
+		status=$?
+	fi
+
+	case "$status" in
+		0) fail "secret component was found in on-disk catalogue state" ;;
+		1) ;;
+		*) fail "secret scan failed with exit status ${status}" ;;
+	esac
+}
+
+poll_health() {
+	local base_url="$1"
+	local endpoint="$2"
+	local expected_body="$3"
+	local response
+	local status
+	local body
+
+	for ((attempt = 1; attempt <= 120; attempt++)); do
+		if response="$(
+			curl \
+				--silent \
+				--show-error \
+				--connect-timeout 1 \
+				--max-time 1 \
+				--write-out $'\n%{http_code}' \
+				"${base_url}${endpoint}" 2>/dev/null
+		)"; then
+			status="${response##*$'\n'}"
+			body="${response%$'\n'*}"
+			if [[ "$status" == "200" && "$body" == "$expected_body" ]]; then
+				return
+			fi
+		fi
+		sleep 0.25
+	done
+
+	docker_bounded 5s inspect \
+		--format 'service state: {{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}' \
+		"$service_container" >&2 || true
+	docker_bounded 5s logs "$service_container" >&2 || true
+	fail "${endpoint} did not return HTTP 200 with ${expected_body}"
+}
+
+container_base_url() {
+	local port_mapping
+	local host_port
+
+	port_mapping="$(docker_bounded 5s port "$service_container" 8000/tcp)"
+	[[ "$port_mapping" == 127.0.0.1:* ]] ||
+		fail "container port is not published on loopback"
+	host_port="${port_mapping##*:}"
+	[[ "$host_port" =~ ^[0-9]+$ ]] ||
+		fail "Docker did not assign a random host port"
+	printf 'http://127.0.0.1:%s\n' "$host_port"
+}
+
+stop_service() {
+	if ! docker_bounded 15s stop --time 10 "$service_container" >/dev/null
+	then
+		fail "service did not stop within its shutdown bound"
+	fi
+}
+
+start_service() {
+	local user="$1"
+
+	docker_bounded 15s run \
+		--pull=never \
+		--name "$service_container" \
+		--detach \
+		--user "$user" \
+		--read-only \
+		--tmpfs /tmp:rw,noexec,nosuid \
+		--publish 127.0.0.1::8000 \
+		--mount "type=bind,src=${config_one},dst=/etc/cairn/config.yaml,readonly" \
+		--mount "type=bind,src=${credentials_one},dst=/var/run/secrets/cairn,readonly" \
+		--mount "type=bind,src=${data_one},dst=/var/lib/cairn" \
+		"$IMAGE" >/dev/null
+}
+
+require_service_user() {
+	local expected_user="$1"
+	local actual_user
+
+	actual_user="$(
+		docker_bounded 5s inspect \
+			--format '{{.Config.User}}' \
+			"$service_container"
+	)"
+	[[ "$actual_user" == "$expected_user" ]] ||
+		fail "service user was ${actual_user}, expected ${expected_user}"
+}
+
+require_clean_stop() {
+	local expected_shutdown_events="$1"
+	local state
+	local service_logs
+	local shutdown_events
+	local shutdown_evidence
+
+	if ! state="$(
+		docker_bounded 5s inspect \
+			--format '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}' \
+			"$service_container"
+	)"; then
+		fail "could not inspect the stopped service container"
+	fi
+	[[ "$state" == "exited 0 false" ]] ||
+		fail "service did not exit cleanly without OOM (${state})"
+
+	if ! service_logs="$(
+		docker_bounded 5s logs "$service_container" 2>&1
+	)"; then
+		fail "could not read bounded service shutdown evidence"
+	fi
+	shutdown_evidence='"event": "runtime_stopped", "instance_id": "11111111-1111-4111-8111-111111111111"'
+	shutdown_events="$(
+		awk -v evidence="$shutdown_evidence" \
+			'index($0, evidence) { count++ } END { print count + 0 }' \
+			<<<"$service_logs"
+	)"
+	[[ "$shutdown_events" == "$expected_shutdown_events" ]] ||
+		fail "expected ${expected_shutdown_events} safe shutdown event(s), found ${shutdown_events}"
+}
+
+require_portable_data_files() {
+	local unsafe_file
+	local mode
+	local required_file
+
+	unsafe_file="$(
+		find "$data_one" -maxdepth 1 -type f -perm -0002 -print -quit
+	)"
+	[[ -z "$unsafe_file" ]] || fail "catalogue state contains a world-writable file"
+
+	for required_file in catalogue.sqlite3 .cairn-instance.lock; do
+		[[ -f "$data_one/$required_file" ]] ||
+			fail "required catalogue state file ${required_file} is missing"
+		mode="$(stat -c '%a' "$data_one/$required_file")"
+		[[ "$mode" == "660" ]] ||
+			fail "catalogue state file ${required_file} has mode ${mode}, expected 660"
+	done
+}
+
+require_v1_round_trip() {
+	local base_url="$1"
+	local token="$2"
+	local idempotency_key
+	local fact_body
+	local ingest_response
+	local ingest_status
+	local ingest_body
+	local mutation_id
+	local audit_response
+	local audit_status
+	local audit_body
+
+	idempotency_key="$(cat /proc/sys/kernel/random/uuid)"
+	fact_body="cairn image smoke ${container_suffix}"
+
+	if ! ingest_response="$(
+		curl \
+			--silent \
+			--show-error \
+			--connect-timeout 2 \
+			--max-time 5 \
+			--write-out $'\n%{http_code}' \
+			--request POST \
+			--header 'Content-Type: application/json' \
+			--header "Authorization: Bearer ${token}" \
+			--header "Idempotency-Key: ${idempotency_key}" \
+			--data "$(
+				jq -nc --arg body "$fact_body" \
+					'{scope: {realm: "local", segments: []}, classification: "internal", source_type: "human", facts: [{body: $body}]}'
+			)" \
+			"${base_url}/v1/ingest"
+	)"; then
+		fail "/v1/ingest request did not complete"
+	fi
+	ingest_status="${ingest_response##*$'\n'}"
+	ingest_body="${ingest_response%$'\n'*}"
+	[[ "$ingest_status" == "200" ]] ||
+		fail "/v1/ingest returned HTTP ${ingest_status}: ${ingest_body}"
+	mutation_id="$(jq -r '.mutation_receipt.mutation_id // empty' <<<"$ingest_body")"
+	[[ -n "$mutation_id" ]] ||
+		fail "/v1/ingest response carried no mutation_id"
+
+	if ! audit_response="$(
+		curl \
+			--silent \
+			--show-error \
+			--connect-timeout 2 \
+			--max-time 5 \
+			--write-out $'\n%{http_code}' \
+			--request POST \
+			--header 'Content-Type: application/json' \
+			--header "Authorization: Bearer ${token}" \
+			--data '{"realm_id":"local","scope_prefix":[],"after_sequence":0,"limit":500}' \
+			"${base_url}/v1/read-audit-events"
+	)"; then
+		fail "/v1/read-audit-events request did not complete"
+	fi
+	audit_status="${audit_response##*$'\n'}"
+	audit_body="${audit_response%$'\n'*}"
+	[[ "$audit_status" == "200" ]] ||
+		fail "/v1/read-audit-events returned HTTP ${audit_status}: ${audit_body}"
+	jq -e --arg mutation_id "$mutation_id" \
+		'.events | any(.mutation_id == $mutation_id and .action_code == "ingest")' \
+		<<<"$audit_body" >/dev/null ||
+		fail "audit read-back did not contain the ingest's own event"
+
+	printf '%s\n' "$fact_body" >"$smoke_root/last-ingested-body"
+}
+
+# One `tools/call` frame against the mounted MCP endpoint, echoing the
+# whole HTTP answer with its status appended, exactly as the /v1 helpers
+# above do. `Accept: application/json` alone is what P-52's JSON-response
+# posture admits; the credential travels in the same bearer header the
+# REST surface takes, because I-88 puts authentication at the HTTP layer
+# on both surfaces and Cairn implements no part of the MCP authorization
+# specification.
+mcp_call() {
+	local base_url="$1"
+	local token="$2"
+	local tool="$3"
+	local arguments="$4"
+
+	curl \
+		--silent \
+		--show-error \
+		--connect-timeout 2 \
+		--max-time 5 \
+		--write-out $'\n%{http_code}' \
+		--request POST \
+		--header 'Content-Type: application/json' \
+		--header 'Accept: application/json' \
+		--header "Authorization: Bearer ${token}" \
+		--data "$(
+			jq -nc --arg tool "$tool" --argjson arguments "$arguments" \
+				'{jsonrpc: "2.0", id: 1, method: "tools/call", params: {name: $tool, arguments: $arguments}}'
+		)" \
+		"${base_url}/v1/mcp"
+}
+
+# The I-85 success shape, unwrapped and checked as it is unwrapped: a
+# JSON-RPC result rather than an error object, `isError` false, and the
+# structured object the tool declared an output schema for. A failure
+# here is a tool result, not an HTTP status, so the status alone would
+# not catch one.
+mcp_structured() {
+	local response="$1"
+	local what="$2"
+	local status="${response##*$'\n'}"
+	local frame="${response%$'\n'*}"
+
+	[[ "$status" == "200" ]] ||
+		fail "${what} returned HTTP ${status}: ${frame}"
+	jq -e 'has("error") | not' <<<"$frame" >/dev/null ||
+		fail "${what} answered a JSON-RPC error object: ${frame}"
+	jq -e '.result.isError == false' <<<"$frame" >/dev/null ||
+		fail "${what} answered a tool failure: ${frame}"
+	jq -e '.result.structuredContent' <<<"$frame" >/dev/null ||
+		fail "${what} carried no structured content: ${frame}"
+	jq -c '.result.structuredContent' <<<"$frame"
+}
+
+require_mcp_round_trip() {
+	local base_url="$1"
+	local token="$2"
+	local idempotency_key
+	local fact_body
+	local ingest_result
+	local mutation_id
+	local audit_result
+
+	idempotency_key="$(cat /proc/sys/kernel/random/uuid)"
+	fact_body="cairn image smoke mcp ${container_suffix}"
+
+	# I-85: the I-27 key is an argument on a mutation tool, never a
+	# header — the endpoint is one path and a header would address the
+	# frame rather than the operation inside it.
+	ingest_result="$(
+		mcp_structured "$(
+			mcp_call "$base_url" "$token" ingest "$(
+				jq -nc --arg body "$fact_body" --arg key "$idempotency_key" \
+					'{scope: {realm: "local", segments: []}, classification: "internal", source_type: "human", facts: [{body: $body}], idempotency_key: $key}'
+			)"
+		)" "the MCP ingest tool"
+	)"
+	mutation_id="$(jq -r '.mutation_receipt.mutation_id // empty' <<<"$ingest_result")"
+	[[ -n "$mutation_id" ]] ||
+		fail "the MCP ingest tool returned no mutation_id"
+
+	# The three read tools refuse the I-27 key on both surfaces, so the
+	# arguments here are the request body and nothing else.
+	audit_result="$(
+		mcp_structured "$(
+			mcp_call "$base_url" "$token" read-audit-events \
+				'{"realm_id":"local","scope_prefix":[],"after_sequence":0,"limit":500}'
+		)" "the MCP read-audit-events tool"
+	)"
+	jq -e --arg mutation_id "$mutation_id" \
+		'.events | any(.mutation_id == $mutation_id and .action_code == "ingest")' \
+		<<<"$audit_result" >/dev/null ||
+		fail "the MCP audit read-back did not contain the MCP ingest's own event"
+}
+
+# I-89: one process publishes one OpenAPI document and one tool manifest,
+# so `instance` reports both digests whichever surface is asked. Two
+# transports answering two different digests for one running image is the
+# divergence I-90 forbids, and it is exactly what a packaging mistake —
+# one artefact copied into the image and the other stale — would look
+# like from outside.
+require_both_digests_on_both_transports() {
+	local base_url="$1"
+	local token="$2"
+	local rest_response
+	local rest_status
+	local rest_body
+	local mcp_result
+	local digest
+	local mcp_digest
+	local packaged
+
+	if ! rest_response="$(
+		curl \
+			--silent \
+			--show-error \
+			--connect-timeout 2 \
+			--max-time 5 \
+			--write-out $'\n%{http_code}' \
+			--header "Authorization: Bearer ${token}" \
+			"${base_url}/v1/instance"
+	)"; then
+		fail "/v1/instance request did not complete"
+	fi
+	rest_status="${rest_response##*$'\n'}"
+	rest_body="${rest_response%$'\n'*}"
+	[[ "$rest_status" == "200" ]] ||
+		fail "/v1/instance returned HTTP ${rest_status}: ${rest_body}"
+
+	mcp_result="$(
+		mcp_structured "$(
+			mcp_call "$base_url" "$token" instance '{}'
+		)" "the MCP instance tool"
+	)"
+
+	for field in contract_digest mcp_contract_digest; do
+		jq -e --arg field "$field" \
+			'.[$field] | type == "string" and test("^[0-9a-f]{64}$")' \
+			<<<"$rest_body" >/dev/null ||
+			fail "/v1/instance reported no ${field}: ${rest_body}"
+		jq -e --arg field "$field" \
+			'.[$field] | type == "string" and test("^[0-9a-f]{64}$")' \
+			<<<"$mcp_result" >/dev/null ||
+			fail "the MCP instance tool reported no ${field}: ${mcp_result}"
+		[[ "$(jq -r --arg field "$field" '.[$field]' <<<"$rest_body")" == \
+			"$(jq -r --arg field "$field" '.[$field]' <<<"$mcp_result")" ]] ||
+			fail "the two transports disagree on ${field}"
+	done
+
+	# And the manifest digest the image serves is the committed
+	# artefact's, not merely self-consistent: a stale packaged copy would
+	# agree with itself on both transports all day. Read from the script's
+	# own repository rather than the working directory, so the check means
+	# the same thing however the script was invoked.
+	mcp_digest="$(jq -r '.mcp_contract_digest' <<<"$mcp_result")"
+	packaged="$(awk '{print $1}' "$repo_root/contracts/cairn-mcp-tools-v1.json.sha256")"
+	[[ "$mcp_digest" == "$packaged" ]] ||
+		fail "the image serves manifest digest ${mcp_digest}, but the repository publishes ${packaged}"
+	digest="$(jq -r '.contract_digest' <<<"$rest_body")"
+	packaged="$(awk '{print $1}' "$repo_root/contracts/cairn-openapi-v1.json.sha256")"
+	[[ "$digest" == "$packaged" ]] ||
+		fail "the image serves contract digest ${digest}, but the repository publishes ${packaged}"
+}
+
+require_retrieve_round_trip() {
+	local base_url="$1"
+	local token="$2"
+	local fact_body="$3"
+	local retrieve_response
+	local retrieve_status
+	local retrieve_body
+	local attempt
+
+	# The delivery loop projects on its own cadence (1s in this config), so
+	# the first attempts may honestly answer index_pending: I-83 says the
+	# index is behind and a retry will help, and this is exactly that
+	# retry. A hit that never arrives is a failure; a 503 on the way is the
+	# documented behaviour.
+	for ((attempt = 1; attempt <= 40; attempt++)); do
+		if ! retrieve_response="$(
+			curl \
+				--silent \
+				--show-error \
+				--connect-timeout 2 \
+				--max-time 5 \
+				--write-out $'\n%{http_code}' \
+				--request POST \
+				--header 'Content-Type: application/json' \
+				--header "Authorization: Bearer ${token}" \
+				--data "$(
+					jq -nc --arg query "$fact_body" \
+						'{scope: {realm: "local", segments: []}, query: $query, budget: 65536, trust_filters: ["candidate"]}'
+				)" \
+				"${base_url}/v1/retrieve"
+		)"; then
+			fail "/v1/retrieve request did not complete"
+		fi
+		retrieve_status="${retrieve_response##*$'\n'}"
+		retrieve_body="${retrieve_response%$'\n'*}"
+		case "$retrieve_status" in
+			200)
+				if jq -e --arg body "$fact_body" \
+					'.hits | any(.body == $body)' \
+					<<<"$retrieve_body" >/dev/null
+				then
+					printf 'Retrieved the ingested fact after %d attempt(s)\n' \
+						"$attempt"
+					return
+				fi
+				;;
+			503)
+				jq -e '.failure.code == "index_pending"' \
+					<<<"$retrieve_body" >/dev/null ||
+					fail "/v1/retrieve 503 was not index_pending: ${retrieve_body}"
+				;;
+			*)
+				fail "/v1/retrieve returned HTTP ${retrieve_status}: ${retrieve_body}"
+				;;
+		esac
+		sleep 0.25
+	done
+
+	fail "the delivery loop did not make the ingested fact retrievable"
+}
+
+require_active_lease() {
+	local contender_status
+	local contender_state
+	local contender_log="$smoke_root/contender.log"
+
+	if docker_bounded 15s run \
+		--pull=never \
+		--name "$contender_container" \
+		--user "23456:0" \
+		--read-only \
+			--tmpfs /tmp:rw,noexec,nosuid \
+			--mount "type=bind,src=${config_one},dst=/etc/cairn/config.yaml,readonly" \
+		--mount "type=bind,src=${credentials_one},dst=/var/run/secrets/cairn,readonly" \
+			--mount "type=bind,src=${data_one},dst=/var/lib/cairn" \
+			"$IMAGE" >"$contender_log" 2>&1
+	then
+		contender_status=0
+	else
+		contender_status=$?
+	fi
+
+	[[ "$contender_status" -ne 0 ]] ||
+		fail "lease contender exited successfully"
+	[[ "$contender_status" -ne 124 && "$contender_status" -ne 137 ]] ||
+		fail "lease contender timed out instead of failing promptly"
+
+	if ! contender_state="$(
+		docker_bounded 5s inspect \
+			--format '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}' \
+			"$contender_container"
+	)"; then
+		fail "could not inspect the bounded lease contender"
+	fi
+	[[ "$contender_state" =~ ^exited\ [1-9][0-9]*\ false$ ]] ||
+		fail "lease contender did not exit with a bounded non-OOM failure"
+
+	if ! docker_bounded 5s logs "$contender_container" \
+		>"$contender_log" 2>&1
+	then
+		fail "could not read bounded lease contender evidence"
+	fi
+	grep -Fq '"event": "runtime_start_failed"' "$contender_log" ||
+		fail "lease contender did not report safe startup-failure evidence"
+	grep -Fq '"failure_code": "already_locked"' "$contender_log" ||
+		fail "lease contender did not report safe already_locked evidence"
+	if grep -Fq "$secret_sentinel" "$contender_log"; then
+		fail "lease contender log disclosed the known secret sentinel"
+	fi
+
+	if ! docker_bounded 5s container rm "$contender_container" >/dev/null; then
+		fail "could not remove the named lease contender"
+	fi
+}
+
+instance_one="$smoke_root/instance-one"
+data_one="$instance_one/data"
+credentials_one="$instance_one/credentials"
+config_one="$instance_one/config.yaml"
+secret_sentinel="cairn-smoke-secret-sentinel"
+
+mkdir -p "$data_one" "$credentials_one"
+write_config "$config_one" "11111111-1111-4111-8111-111111111111"
+printf '%s\n' "$secret_sentinel" >"$credentials_one/smoke-secret"
+chmod 0777 "$data_one"
+chmod 0555 "$credentials_one"
+chmod 0444 \
+	"$config_one" \
+	"$credentials_one/smoke-secret"
+
+require_source_revision
+
+printf 'Migrating catalogue as 12345:0\n'
+run_catalogue_command \
+	"12345:0" \
+	"$check_one_container" \
+	"$config_one" \
+	"$data_one" \
+	"$credentials_one" \
+	migrate
+
+printf 'Verifying catalogue as 12345:0\n'
+run_catalogue_command \
+	"12345:0" \
+	"$check_two_container" \
+	"$config_one" \
+	"$data_one" \
+	"$credentials_one" \
+	verify
+require_portable_data_files
+
+start_service "12345:0"
+require_service_user "12345:0"
+
+readonly_root="$(
+	docker_bounded 5s inspect \
+		--format '{{.HostConfig.ReadonlyRootfs}}' \
+		"$service_container"
+)"
+[[ "$readonly_root" == "true" ]] || fail "container root filesystem is writable"
+
+base_url="$(container_base_url)"
+
+poll_health "$base_url" "/health/live" '{"status":"live"}'
+poll_health "$base_url" "/health/startup" '{"status":"started"}'
+poll_health "$base_url" "/health/ready" '{"status":"ready"}'
+require_portable_data_files
+
+metrics_status="$(
+	curl \
+		--silent \
+		--show-error \
+		--connect-timeout 2 \
+		--max-time 2 \
+		--dump-header "$smoke_root/metrics.headers" \
+		--output "$smoke_root/metrics.body" \
+		--write-out '%{http_code}' \
+		"${base_url}/metrics"
+)"
+[[ "$metrics_status" == "200" ]] ||
+	fail "/metrics returned HTTP ${metrics_status}, expected 200"
+grep -Eiq \
+	'^content-type:[[:space:]]*text/plain;.*version=[0-9]+\.[0-9]+\.[0-9]+' \
+	"$smoke_root/metrics.headers" ||
+	fail "/metrics did not return the Prometheus content type"
+grep -Eq '^# (HELP|TYPE) cairn_' "$smoke_root/metrics.body" ||
+	fail "/metrics did not return Prometheus text"
+
+stop_service
+require_clean_stop 1
+docker_bounded 5s container rm "$service_container" >/dev/null
+
+printf 'Verifying catalogue after restart as 23456:0\n'
+run_catalogue_command \
+	"23456:0" \
+	"$check_two_container" \
+	"$config_one" \
+	"$data_one" \
+	"$credentials_one" \
+	verify
+require_portable_data_files
+
+start_service "23456:0"
+require_service_user "23456:0"
+base_url="$(container_base_url)"
+poll_health "$base_url" "/health/live" '{"status":"live"}'
+poll_health "$base_url" "/health/startup" '{"status":"started"}'
+poll_health "$base_url" "/health/ready" '{"status":"ready"}'
+require_portable_data_files
+
+lease_owner="$(
+	docker_bounded 5s exec \
+		"$service_container" \
+		cat /var/lib/cairn/.cairn-instance.lock
+)"
+[[ "$lease_owner" == "11111111-1111-4111-8111-111111111111" ]] ||
+	fail "lease file did not contain the expected instance identity after restart"
+
+require_active_lease
+stop_service
+require_clean_stop 1
+require_portable_data_files
+
+printf 'Bootstrapping realm as 12345:0\n'
+bootstrap_output="$(
+	run_administration_command \
+		"12345:0" \
+		"$bootstrap_container" \
+		"$config_one" \
+		"$data_one" \
+		"$credentials_one" \
+		bootstrap --realm local --label operator
+)"
+bootstrap_token="$(jq -r '.token' <<<"$bootstrap_output")"
+require_i62_token "$bootstrap_token"
+bootstrap_secret="${bootstrap_token##*.}"
+
+printf 'Refusing a duplicate bootstrap of the same realm\n'
+if run_administration_command \
+	"12345:0" \
+	"$bootstrap_conflict_container" \
+	"$config_one" \
+	"$data_one" \
+	"$credentials_one" \
+	bootstrap --realm local --label operator \
+	>"$smoke_root/second-bootstrap.out" 2>"$smoke_root/second-bootstrap.err"
+then
+	second_bootstrap_status=0
+else
+	second_bootstrap_status=$?
+fi
+[[ "$second_bootstrap_status" -eq 4 ]] ||
+	fail "duplicate bootstrap exited ${second_bootstrap_status}, expected 4"
+[[ ! -s "$smoke_root/second-bootstrap.out" ]] ||
+	fail "duplicate bootstrap unexpectedly produced stdout"
+grep -Fq '"code": "realm_exists"' "$smoke_root/second-bootstrap.err" ||
+	fail "duplicate bootstrap did not report realm_exists"
+
+printf 'Recovering realm as 23456:0\n'
+recovery_output="$(
+	run_administration_command \
+		"23456:0" \
+		"$recovery_container" \
+		"$config_one" \
+		"$data_one" \
+		"$credentials_one" \
+		recover --realm local --label recovery
+)"
+recovery_token="$(jq -r '.token' <<<"$recovery_output")"
+require_i62_token "$recovery_token"
+recovery_secret="${recovery_token##*.}"
+
+printf 'Verifying authority catalogue counts\n'
+administration_verify_output="$(
+	run_catalogue_command \
+		"23456:0" \
+		"$check_one_container" \
+		"$config_one" \
+		"$data_one" \
+		"$credentials_one" \
+		verify
+)"
+principal_count="$(jq -r '.principal_count' <<<"$administration_verify_output")"
+credential_count="$(jq -r '.credential_count' <<<"$administration_verify_output")"
+grant_count="$(jq -r '.grant_count' <<<"$administration_verify_output")"
+[[ "$principal_count" == "2" ]] ||
+	fail "principal_count was ${principal_count}, expected 2"
+[[ "$credential_count" == "2" ]] ||
+	fail "credential_count was ${credential_count}, expected 2"
+[[ "$grant_count" == "4" ]] ||
+	fail "grant_count was ${grant_count}, expected 4"
+require_portable_data_files
+
+printf 'Checking authority secrets are absent from on-disk catalogue state\n'
+require_secret_absent_from_data "$data_one" "$bootstrap_secret"
+require_secret_absent_from_data "$data_one" "$recovery_secret"
+
+printf 'Checking custody counts are zero after bootstrap and recovery\n'
+for custody_key in \
+	assertion_count \
+	fact_count \
+	invalidation_count \
+	evidence_count \
+	evidence_outbox_depth \
+	projection_outbox_depth
+do
+	custody_value="$(jq -r ".${custody_key}" <<<"$administration_verify_output")"
+	[[ "$custody_value" == "0" ]] ||
+		fail "${custody_key} was ${custody_value}, expected 0 after bootstrap and recovery"
+done
+
+printf 'Starting service after administration to check outbox metrics\n'
+docker_bounded 5s container rm "$service_container" >/dev/null
+start_service "23456:0"
+require_service_user "23456:0"
+base_url="$(container_base_url)"
+poll_health "$base_url" "/health/live" '{"status":"live"}'
+poll_health "$base_url" "/health/startup" '{"status":"started"}'
+poll_health "$base_url" "/health/ready" '{"status":"ready"}'
+require_portable_data_files
+
+metrics_status="$(
+	curl \
+		--silent \
+		--show-error \
+		--connect-timeout 2 \
+		--max-time 2 \
+		--output "$smoke_root/metrics-post-administration.body" \
+		--write-out '%{http_code}' \
+		"${base_url}/metrics"
+)"
+[[ "$metrics_status" == "200" ]] ||
+	fail "post-administration /metrics returned HTTP ${metrics_status}, expected 200"
+
+for outbox_metric_line in \
+	'cairn_outbox_depth{queue="evidence"} 0.0' \
+	'cairn_outbox_depth{queue="projection"} 0.0' \
+	'cairn_outbox_oldest_age_seconds{queue="evidence"} 0.0' \
+	'cairn_outbox_oldest_age_seconds{queue="projection"} 0.0'
+do
+	grep -Fq "$outbox_metric_line" "$smoke_root/metrics-post-administration.body" ||
+		fail "post-administration /metrics did not report: ${outbox_metric_line}"
+done
+
+printf 'Authenticating and round-tripping ingest through /v1\n'
+require_v1_round_trip "$base_url" "$bootstrap_token"
+
+printf 'Authenticating and round-tripping ingest through /v1/mcp\n'
+require_mcp_round_trip "$base_url" "$bootstrap_token"
+
+printf 'Checking both contract digests on both transports\n'
+require_both_digests_on_both_transports "$base_url" "$bootstrap_token"
+
+printf 'Waiting for the delivery loop and retrieving the fact through /v1\n'
+require_retrieve_round_trip \
+	"$base_url" \
+	"$bootstrap_token" \
+	"$(cat "$smoke_root/last-ingested-body")"
+
+printf 'Checking the projection outbox drained\n'
+metrics_status="$(
+	curl \
+		--silent \
+		--show-error \
+		--connect-timeout 2 \
+		--max-time 2 \
+		--output "$smoke_root/metrics-post-retrieve.body" \
+		--write-out '%{http_code}' \
+		"${base_url}/metrics"
+)"
+[[ "$metrics_status" == "200" ]] ||
+	fail "post-retrieve /metrics returned HTTP ${metrics_status}, expected 200"
+grep -Fq 'cairn_stale_index_total 0.0' "$smoke_root/metrics-post-retrieve.body" ||
+	fail "post-retrieve /metrics did not report a zero stale-index counter"
+
+stop_service
+require_clean_stop 1
+docker_bounded 5s container rm "$service_container" >/dev/null
+
+printf 'Image smoke passed for %s\n' "$IMAGE"

@@ -1,0 +1,7 @@
+{
+  "source_commit": "c27939ae4931b8b475599fe84683605f995f8b2a",
+  "instance_id": "5c1f8a2b-7d43-4e96-8b1a-2f3c4d5e6a7b",
+  "manifest_sha256": "a85d422333e7e86797404b66e2123006196cf2fabe9c79ecaf6767f94453f15a",
+  "sqlite_version": "3.45.1",
+  "fixture_sha256": "363e528c63617d69acfb2acd0b1ca7874e91902741bb1cbcd320b26fb36c0937"
+}

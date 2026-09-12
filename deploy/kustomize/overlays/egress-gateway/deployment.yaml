@@ -1,0 +1,89 @@
+# A Deployment and not a StatefulSet: the gateway holds no state, has no
+# claim and no identity worth being stable. One replica, because I-93
+# says one per cluster and a second would double the surface without
+# removing the single point of failure that matters — an instance whose
+# gateway is down cannot reach a provider either way, and Cairn's own
+# operation does not depend on it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cairn-egress-gateway
+  namespace: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cairn-egress-gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # The image declares no USER, so a UID has to be named here; 13
+        # is the `proxy` account it already ships. Unlike Cairn's
+        # workload this fixes one, because a gateway is cluster material
+        # that an operator deploys knowingly, not a portable artefact
+        # that has to survive an OpenShift namespace's assigned range —
+        # and on a cluster that assigns one, this is the line to remove.
+        runAsUser: 13
+        runAsGroup: 13
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: squid
+          image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+          # The image's own default command, written out rather than
+          # inherited: what a container runs should be readable in the
+          # manifest and not only in the image it was built from. -N runs
+          # in the foreground, -Y starts faster on reconfigure, -C leaves
+          # core dumps to the platform.
+          args:
+            - -f
+            - /etc/squid/squid.conf
+            - -NYC
+          ports:
+            - name: proxy
+              containerPort: 3128
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # Mounted over the image's own configuration path with a
+            # subPath, so that the entrypoint's cache-initialisation run
+            # — which reads that path and takes no -f — sees this
+            # configuration too. Mounting elsewhere leaves that run on
+            # Ubuntu's default config, which then errors against the
+            # read-only filesystem for no reason an operator can act on.
+            # A subPath mount does not track ConfigMap updates; a change
+            # here is a redeploy, which is what changing an allow-list
+            # should be.
+            - name: config
+              mountPath: /etc/squid/squid.conf
+              subPath: squid.conf
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: egress-gateway-config

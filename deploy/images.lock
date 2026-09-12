@@ -1,0 +1,42 @@
+# Every infrastructure pin Cairn's deployment artefacts and acceptance
+# tiers depend on, in one place (P-61). KEY=value, read by the render
+# gate, the kind acceptance harness and the Compose project, so a version
+# can never be changed in one consumer and forgotten in another.
+#
+# The disposable kind tier and reference profile share explicit, reviewed
+# dependency pins so version skew cannot hide a behavioural difference.
+
+# The Cairn image the base renders. NOT yet digest-pinned, and
+# deliberately so: nothing is published to a registry, the package
+# version is VCS-derived (0.1.0.dev*), and pinning a locally built digest
+# would rewrite every committed render on every rebuild — the render gate
+# would then fail for changes that have nothing to do with deployment.
+# The tag names the version this slice builds toward. Slice 9 owns the
+# release, and digest-pinning this line is part of it.
+CAIRN_IMAGE=cairn:v0.1.0
+
+# P-63: the per-instance FalkorDB workload, included by choice (I-91).
+FALKORDB_IMAGE=falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62
+
+# P-64: the cluster egress gateway realising I-93.
+EGRESS_PROXY_IMAGE=ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+
+# The disposable kind acceptance tier (P-68), and the renderer (P-61):
+# one kubectl pin serves both, so what renders the artefacts is what
+# applies them.
+KIND_VERSION=v0.31.0
+# The released linux/amd64 binary's published checksum.
+KIND_LINUX_AMD64_SHA256=eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
+KIND_NODE_IMAGE=kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+KUBECTL_VERSION=v1.35.0
+KUBECTL_LINUX_AMD64_SHA256=a2e984a18a0c063279d692533031c1eff93a262afcc0afdc517375432d060989
+CALICO_MANIFEST_URL=https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/calico.yaml
+CALICO_MANIFEST_SHA256=bccabc607685551db918f66da724893eca3e69a50c5a3e3077029b02dbab8d35
+
+# Reference target profile. Host identity, namespaces and baseline evidence
+# are supplied explicitly to the acceptance harness; these are dependency pins.
+TARGET_KUBERNETES_VERSION=v1.35.0
+TARGET_CILIUM_VERSION=v1.19.6
+TARGET_CILIUM_AGENT_IMAGE=quay.io/cilium/cilium:v1.19.6@sha256:0df5b2750b64c49843aba1d649e9eaf61467cb0645ad3171db6f6962c095ac92
+TARGET_CILIUM_OPERATOR_IMAGE=quay.io/cilium/operator-generic:v1.19.6@sha256:0db4ca4e06969d8904ee036617795d0e9c3228cf7b8d902ba74fc2bb98d2d665
+TARGET_CILIUM_ENVOY_IMAGE=quay.io/cilium/cilium-envoy:v1.36.9-1782267392-edeb3f2af56c37c407efa1f63f0b32f595399bbc@sha256:767101fb8a5e38f055778cb43b7aa8eed80450b37f8121effac3d9de9e06dc99

@@ -1,0 +1,1356 @@
+#!/usr/bin/env bash
+# Target posture evidence for an explicitly configured reference host. It is
+# deliberately separate from the baseline harness and never adopts its resources.
+set -euo pipefail
+set +x
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+umask 077
+
+mode=${1:-run}
+[[ "$mode" == preflight || "$mode" == run ]] || {
+  printf 'usage: %s [preflight|run]\n' "$0" >&2
+  exit 2
+}
+
+: "${IMAGE:?IMAGE is required}"
+: "${REFERENCE_POSTURE_RUN_ID:?REFERENCE_POSTURE_RUN_ID is required}"
+: "${REFERENCE_POSTURE_REPORT:?REFERENCE_POSTURE_REPORT is required}"
+: "${REFERENCE_POSTURE_OPENAI_API_KEY_FILE:?Secret source path is required}"
+: "${REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE:?Secret source path is required}"
+: "${REFERENCE_POSTURE_TASK11_CILIUM_REPORT:?accepted Task 11 Cilium report path is required}"
+: "${REFERENCE_POSTURE_TASK11_PRIMARY_REPORT:?accepted baseline primary report path is required}"
+: "${REFERENCE_EXPECTED_HOST:?REFERENCE_EXPECTED_HOST is required}"
+: "${REFERENCE_NODE_NAME:?REFERENCE_NODE_NAME is required}"
+: "${REFERENCE_BASELINE_NAMESPACE:?REFERENCE_BASELINE_NAMESPACE is required}"
+: "${REFERENCE_GATEWAY_NAMESPACE:?REFERENCE_GATEWAY_NAMESPACE is required}"
+: "${REFERENCE_STORAGE_CLASS:?REFERENCE_STORAGE_CLASS is required}"
+: "${REFERENCE_BASELINE_REVISION:?REFERENCE_BASELINE_REVISION is required}"
+: "${REFERENCE_BASELINE_RUN_ID:?REFERENCE_BASELINE_RUN_ID is required}"
+: "${REFERENCE_BASELINE_PRIMARY_SHA256:?REFERENCE_BASELINE_PRIMARY_SHA256 is required}"
+: "${REFERENCE_BASELINE_CILIUM_SHA256:?REFERENCE_BASELINE_CILIUM_SHA256 is required}"
+run_id=$REFERENCE_POSTURE_RUN_ID
+namespace="cairn-${run_id}"
+gateway_namespace=$REFERENCE_GATEWAY_NAMESPACE
+owner=task11a
+kubectl=${KUBECTL:-build/tools/kubectl}
+host_python="$PWD/.venv/bin/python"
+state=scripts/reference_posture_state.py
+report_path=$REFERENCE_POSTURE_REPORT
+failed_report_path=${report_path%.json}.failed.json
+outcome_report_path=${report_path%.json}.outcome
+progress_path=${REFERENCE_POSTURE_PROGRESS:-${report_path%.json}.progress.jsonl}
+task11_primary_report=$REFERENCE_POSTURE_TASK11_PRIMARY_REPORT
+task11_cilium_report=$REFERENCE_POSTURE_TASK11_CILIUM_REPORT
+temporary=$(mktemp -d)
+checks_file="$temporary/checks.jsonl"
+network_file="$temporary/network.jsonl"
+pv_file="$temporary/pvs.json"
+preflight_file="$temporary/preflight.json"
+label_file="$temporary/labels.json"
+runtime_file="$temporary/runtime.json"
+gateway_pre_file="$temporary/gateway-pre.json"
+gateway_post_file="$temporary/gateway-post.json"
+cleanup_file="$temporary/cleanup.jsonl"
+mutation_started=false
+run_succeeded=false
+temporary_cleanup_complete=false
+phase=preflight
+node_listener_active=false
+node_listener_pid=
+node_firewall_active=false
+node_firewall_rule=
+node_firewall_zone=
+node_interface=
+progress_started=false
+step_open=false
+
+(set -o noclobber; : >"$checks_file")
+(set -o noclobber; : >"$network_file")
+(set -o noclobber; : >"$cleanup_file")
+
+fail() {
+  printf 'reference posture acceptance failed: %s\n' "$*" >&2
+  exit 1
+}
+
+bounded() {
+  timeout --signal=TERM --kill-after=2s "$@"
+}
+
+append_progress() {
+  local step=$1 status=$2 exit_code=$3 timestamp
+  TZ=UTC printf -v timestamp '%(%Y-%m-%dT%H:%M:%SZ)T' -1
+  jq -nc --arg timestamp "$timestamp" --arg revision "$repository_revision" \
+    --arg run_id "$run_id" --arg step "$step" --arg status "$status" \
+    --argjson exit_code "$exit_code" \
+    '{timestamp:$timestamp,revision:$revision,run_id:$run_id,step:$step,
+      status:$status,exit_code:$exit_code}' >>"$progress_path"
+}
+
+start_progress() {
+  mkdir -p "$(dirname "$progress_path")"
+  (set -o noclobber; : >"$progress_path")
+  progress_started=true
+}
+
+begin_step() {
+  [[ "$step_open" == false ]] || fail 'a posture evidence step is already active'
+  phase=$1
+  append_progress "$phase" started 0
+  step_open=true
+}
+
+complete_step() {
+  [[ "$step_open" == true ]] || fail 'no posture evidence step is active'
+  append_progress "$phase" passed 0
+  step_open=false
+}
+
+lock_value() {
+  local key=$1
+  awk -F= -v key="$key" \
+    '$1 == key {sub(/^[^=]*=/, ""); print; found=1; exit}
+     END {if (!found) exit 1}' deploy/images.lock
+}
+
+record() {
+  local name=$1 expected=$2 observed=$3 outcome=failed
+  [[ "$expected" == "$observed" ]] && outcome=passed
+  jq -nc --arg name "$name" --arg expected "$expected" \
+    --arg observed "$observed" --arg outcome "$outcome" \
+    '{name:$name,expected:{result:$expected},observed:{result:$observed},outcome:$outcome}' \
+    >>"$checks_file"
+  [[ "$outcome" == passed ]] || fail "$name: expected $expected, observed $observed"
+}
+
+network_record_positive() {
+  local name=$1 source=$2 destination=$3 port=$4 expected=$5 observed=$6
+  jq -nc --arg name "$name" --arg source "$source" --arg destination "$destination" \
+    --argjson port "$port" --arg expected "$expected" --arg observed "$observed" \
+    '{name:$name,source:$source,destination:$destination,port:$port,
+      expected:$expected,observed:$observed,positive_control:null}' >>"$network_file"
+}
+
+network_record_denial() {
+  local name=$1 source=$2 destination=$3 control_source=$4 control_destination=$5
+  local control=$6 observed=$7
+  jq -nc --arg name "$name" --arg source "$source" --arg destination "$destination" \
+    --arg control_source "$control_source" --arg control_destination "$control_destination" \
+    --arg control "$control" --arg observed "$observed" '
+      {name:$name,source:$source,destination:$destination,port:443,
+       expected:"blocked",observed:$observed,
+       positive_control:{source:$control_source,destination:$control_destination,port:443,
+         expected:"connected",observed:$control}}' >>"$network_file"
+}
+
+stop_node_listener() {
+  [[ "$node_listener_active" == true && -n "$node_listener_pid" ]] || return 0
+  kill -TERM -- "-$node_listener_pid" 2>/dev/null || true
+  for _ in 1 2 3 4; do
+    kill -0 -- "-$node_listener_pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL -- "-$node_listener_pid" 2>/dev/null || true
+  wait "$node_listener_pid" 2>/dev/null || true
+  if kill -0 -- "-$node_listener_pid" 2>/dev/null; then
+    return 1
+  fi
+  node_listener_active=false
+}
+
+add_node_firewall_rule() {
+  [[ "$node_firewall_active" == false && -n "$node_firewall_zone" &&
+    -n "$node_firewall_rule" ]] || return 1
+  if firewall-cmd --zone="$node_firewall_zone" \
+    --query-rich-rule="$node_firewall_rule" >/dev/null; then
+    return 1
+  fi
+  firewall-cmd --zone="$node_firewall_zone" \
+    --add-rich-rule="$node_firewall_rule" --timeout=300 >/dev/null || return 1
+  node_firewall_active=true
+  firewall-cmd --zone="$node_firewall_zone" \
+    --query-rich-rule="$node_firewall_rule" >/dev/null
+}
+
+remove_node_firewall_rule() {
+  [[ "$node_firewall_active" == true ]] || return 0
+  if firewall-cmd --zone="$node_firewall_zone" \
+    --query-rich-rule="$node_firewall_rule" >/dev/null; then
+    firewall-cmd --zone="$node_firewall_zone" \
+      --remove-rich-rule="$node_firewall_rule" >/dev/null || return 1
+  fi
+  if firewall-cmd --zone="$node_firewall_zone" \
+    --query-rich-rule="$node_firewall_rule" >/dev/null; then
+    return 1
+  fi
+  node_firewall_active=false
+}
+
+cleanup_resource() {
+  local kind=$1 resource=$2 object_namespace=$3 name=$4 result=failed present remaining
+  if ! present=$(bounded 20s "$kubectl" get "$resource" -n "$object_namespace" "$name" \
+    --ignore-not-found -o name 2>/dev/null); then
+    :
+  elif [[ -z "$present" ]]; then
+    result=absent
+  elif ! bounded 120s "$kubectl" delete "$resource" -n "$object_namespace" "$name" \
+    --ignore-not-found --wait=true >/dev/null; then
+    :
+  elif ! remaining=$(bounded 20s "$kubectl" get "$resource" -n "$object_namespace" "$name" \
+    --ignore-not-found -o name 2>/dev/null); then
+    :
+  elif [[ -z "$remaining" ]]; then
+    result=removed
+  fi
+  jq -nc --arg kind "$kind" --arg namespace "$object_namespace" \
+    --arg name "$name" --arg result "$result" \
+    '{kind:$kind,namespace:$namespace,name:$name,result:$result}' >>"$cleanup_file"
+  [[ "$result" != failed ]]
+}
+
+cleanup_temporary_resources() {
+  local failed=false
+  remove_node_firewall_rule || failed=true
+  stop_node_listener || failed=true
+  cleanup_resource Pod pod "$namespace" task11a-bootstrap || failed=true
+  cleanup_resource Pod pod "$gateway_namespace" task11a-probe || failed=true
+  cleanup_resource Pod pod "$namespace" task11a-control || failed=true
+  cleanup_resource NetworkPolicy networkpolicy "$namespace" task11a-control-to-cairn || failed=true
+  cleanup_resource Pod pod "$namespace" task11a-listener || failed=true
+  cleanup_resource Service service "$namespace" task11a-listener || failed=true
+  [[ "$failed" == false ]]
+}
+
+collect_recovery_namespace() {
+  local value='' query_succeeded=false exists=null
+  if value=$(bounded 20s "$kubectl" get namespace "$namespace" \
+    --ignore-not-found -o json 2>/dev/null); then
+    if [[ -z "$value" ]]; then
+      query_succeeded=true
+      exists=false
+    elif jq -e --arg name "$namespace" '.metadata.name == $name' \
+      <<<"$value" >/dev/null 2>&1; then
+      query_succeeded=true
+      exists=true
+    fi
+  fi
+  jq -nc --argjson query_succeeded "$query_succeeded" \
+    --arg name "$namespace" --argjson exists "$exists" \
+    '{query_succeeded:$query_succeeded,name:$name,exists:$exists}'
+}
+
+collect_recovery_pvs() {
+  local value='' items='[]' query_succeeded=false
+  if value=$(bounded 20s "$kubectl" get pv -o json 2>/dev/null) &&
+    items=$(jq -ce '
+      [.items[] |
+       select(.metadata.name == "cairn-local-pv3" or
+              .metadata.name == "cairn-local-pv4") |
+       {name:.metadata.name,path:.spec.local.path,phase:.status.phase,
+        claim_namespace:(.spec.claimRef.namespace // null),
+        claim_name:(.spec.claimRef.name // null)}] | sort_by(.name)' \
+      <<<"$value" 2>/dev/null); then
+    query_succeeded=true
+  else
+    items='[]'
+  fi
+  jq -nc --argjson query_succeeded "$query_succeeded" --argjson items "$items" \
+    '{query_succeeded:$query_succeeded,items:$items}'
+}
+
+collect_recovery_gateway() {
+  local value='' items='[]' query_succeeded=false
+  if value=$(bounded 20s "$kubectl" get \
+    deployment,service,configmap,networkpolicy,ciliumnetworkpolicy \
+    -n "$gateway_namespace" -o json 2>/dev/null) &&
+    items=$(jq -ce '
+      def gateway_object:
+        (.kind == "ConfigMap" and .metadata.name == "egress-gateway-config") or
+        (.kind == "Service" and .metadata.name == "cairn-egress-gateway") or
+        (.kind == "Deployment" and .metadata.name == "cairn-egress-gateway") or
+        (.kind == "NetworkPolicy" and
+          (.metadata.name == "egress-gateway-allow-cairn-ingress" or
+           .metadata.name == "egress-gateway-allow-egress" or
+           .metadata.name == "egress-gateway-default-deny")) or
+      (.kind == "CiliumNetworkPolicy" and
+        .metadata.name == "egress-gateway-deny-cluster-https");
+      def posture_owned:
+        (.metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11" or
+         .metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11a");
+      def kubernetes_root_ca:
+        .kind == "ConfigMap" and .metadata.name == "kube-root-ca.crt";
+      [.items[] | select(gateway_object or (posture_owned and (kubernetes_root_ca | not))) |
+       {kind:.kind,name:.metadata.name,namespace:.metadata.namespace,
+        owner:.metadata.labels["cairn.example.invalid/acceptance-owner"],
+        run_id:.metadata.labels["cairn.example.invalid/acceptance-run"],
+        revision:.metadata.labels["cairn.example.invalid/acceptance-revision"]}] |
+      if all(.[]; all(.[]; type == "string" and length > 0))
+      then sort_by(.kind,.name) else error("malformed gateway observation") end' \
+      <<<"$value" 2>/dev/null); then
+    query_succeeded=true
+  else
+    items='[]'
+  fi
+  jq -nc --argjson query_succeeded "$query_succeeded" --argjson items "$items" \
+    '{query_succeeded:$query_succeeded,items:$items}'
+}
+
+write_failed_report() {
+  local recovery input namespace_recovery pvs_recovery gateway_recovery
+  [[ -s "$preflight_file" ]] || return 1
+  recovery="$temporary/recovery.json"
+  input="$temporary/failed-report-input.json"
+  namespace_recovery=$(collect_recovery_namespace) || return 1
+  pvs_recovery=$(collect_recovery_pvs) || return 1
+  gateway_recovery=$(collect_recovery_gateway) || return 1
+  jq -nc --argjson namespace "$namespace_recovery" \
+    --argjson selected_pvs "$pvs_recovery" \
+    --argjson gateway "$gateway_recovery" '
+      {namespace:$namespace,selected_pvs:$selected_pvs,gateway_inventory:$gateway}' \
+    >"$recovery" || return 1
+  jq -nc --arg revision "$repository_revision" --arg run_id "$run_id" \
+    --arg phase "$phase" --slurpfile preflight "$preflight_file" \
+    --slurpfile cleanup "$cleanup_file" --slurpfile recovery "$recovery" '
+      {revision:$revision,run_id:$run_id,phase:$phase,preflight:$preflight[0],
+       cleanup:{attempted:true,results:$cleanup},recovery_inventory:$recovery[0]}' \
+    >"$input" || return 1
+  bounded 30s "$host_python" "$state" build-failed-report <"$input" |
+    bounded 30s "$host_python" "$state" write-report "$report_path" >/dev/null
+}
+
+cleanup() {
+  local code=$?
+  set +e
+  if [[ $code -ne 0 && "$progress_started" == true && "$step_open" == true ]]; then
+    append_progress "$phase" failed "$code" ||
+      printf 'reference posture acceptance could not append failed progress\n' >&2
+    step_open=false
+  fi
+  if [[ "$mutation_started" == true && "$temporary_cleanup_complete" == false ]]; then
+    cleanup_temporary_resources || \
+      printf 'reference posture acceptance could not verify temporary cleanup\n' >&2
+    temporary_cleanup_complete=true
+  fi
+  if [[ $code -ne 0 && "$mutation_started" == true && "$run_succeeded" == false ]]; then
+    write_failed_report ||
+      printf 'reference posture acceptance could not write immutable failed report\n' >&2
+  fi
+  rm -rf -- "$temporary"
+  return "$code"
+}
+trap cleanup EXIT
+
+require_clean_source() {
+  git diff --quiet || fail 'repository has unstaged tracked changes'
+  git diff --cached --quiet || fail 'repository has staged changes'
+  [[ -z $(git status --porcelain=v1 --untracked-files=normal) ]] ||
+    fail 'repository has untracked or modified source'
+}
+
+require_locked_python() {
+  [[ -x "$host_python" ]] || fail 'locked repository Python is absent'
+  "$host_python" -I -B -c 'import cairn, yaml' ||
+    fail 'locked repository Python cannot import Cairn and PyYAML'
+}
+
+require_secret_file() {
+  local path=$1
+  [[ -f "$path" && ! -L "$path" && -s "$path" ]] ||
+    fail 'a required credential source is absent, empty or a symlink'
+  [[ $(stat -c '%a %U:%G' "$path") == '600 root:root' ]] ||
+    fail 'credential sources must be mode 0600 and root-owned'
+}
+
+collect_gateway_inventory() {
+  local expected_state=${1:-any} namespace_json inventory
+  namespace_json=$(bounded 20s "$kubectl" get namespace "$gateway_namespace" -o json) ||
+    fail 'the shared gateway namespace is absent'
+  jq -e --arg run "$REFERENCE_BASELINE_RUN_ID" \
+    --arg revision "$REFERENCE_BASELINE_REVISION" '
+      .metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11" and
+      .metadata.labels["cairn.example.invalid/acceptance-run"] == $run and
+      .metadata.labels["cairn.example.invalid/acceptance-revision"] == $revision' \
+    <<<"$namespace_json" >/dev/null ||
+    fail 'shared gateway namespace is not the accepted Task 11 identity'
+  inventory=$(bounded 20s "$kubectl" get deployment,service,configmap,networkpolicy,ciliumnetworkpolicy \
+    -n "$gateway_namespace" -o json) || fail 'shared gateway inventory is unreadable'
+  inventory=$(jq -ce '
+    def gateway_object:
+      (.kind == "ConfigMap" and .metadata.name == "egress-gateway-config") or
+      (.kind == "Service" and .metadata.name == "cairn-egress-gateway") or
+      (.kind == "Deployment" and .metadata.name == "cairn-egress-gateway") or
+      (.kind == "NetworkPolicy" and
+        (.metadata.name == "egress-gateway-allow-cairn-ingress" or
+         .metadata.name == "egress-gateway-allow-egress" or
+         .metadata.name == "egress-gateway-default-deny")) or
+      (.kind == "CiliumNetworkPolicy" and
+        .metadata.name == "egress-gateway-deny-cluster-https");
+    def posture_owned:
+      (.metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11" or
+       .metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11a");
+    def kubernetes_root_ca:
+      .kind == "ConfigMap" and .metadata.name == "kube-root-ca.crt";
+    {items:[.items[] | select(gateway_object or (posture_owned and (kubernetes_root_ca | not)))]}' <<<"$inventory") ||
+    fail 'shared gateway inventory has malformed target objects'
+  local generic='[
+      ["ConfigMap", "egress-gateway-config"],
+      ["Service", "cairn-egress-gateway"],
+      ["Deployment", "cairn-egress-gateway"],
+      ["NetworkPolicy", "egress-gateway-allow-cairn-ingress"],
+      ["NetworkPolicy", "egress-gateway-allow-egress"],
+      ["NetworkPolicy", "egress-gateway-default-deny"]
+    ]'
+  if [[ "$expected_state" == pre ]]; then
+    jq -e --argjson generic "$generic" --arg run "$REFERENCE_BASELINE_RUN_ID" \
+      --arg revision "$REFERENCE_BASELINE_REVISION" --arg gateway_namespace "$gateway_namespace" '
+        ([.items[] | [.kind,.metadata.name]] | sort) == ($generic | sort) and
+        all(.items[];
+          .metadata.namespace == $gateway_namespace and
+          .metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11" and
+          .metadata.labels["cairn.example.invalid/acceptance-run"] == $run and
+          .metadata.labels["cairn.example.invalid/acceptance-revision"] == $revision)' \
+      <<<"$inventory" >/dev/null ||
+      fail 'shared gateway pre-state is not the exact six Task 11-owned objects'
+  elif [[ "$expected_state" == post ]]; then
+    jq -e --argjson generic "$generic" --arg run "$run_id" \
+      --arg revision "$repository_revision" --arg task11_run "$REFERENCE_BASELINE_RUN_ID" \
+      --arg task11_revision "$REFERENCE_BASELINE_REVISION" --arg gateway_namespace "$gateway_namespace" '
+        ([.items[] | [.kind,.metadata.name]] | sort) ==
+          (($generic + [["CiliumNetworkPolicy","egress-gateway-deny-cluster-https"]]) | sort) and
+        all(.items[];
+          .metadata.namespace == $gateway_namespace and
+          if (.kind == "CiliumNetworkPolicy" or
+              (.kind == "NetworkPolicy" and
+               .metadata.name == "egress-gateway-allow-egress")) then
+            .metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11a" and
+            .metadata.labels["cairn.example.invalid/acceptance-run"] == $run and
+            .metadata.labels["cairn.example.invalid/acceptance-revision"] == $revision
+          else
+            .metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11" and
+            .metadata.labels["cairn.example.invalid/acceptance-run"] == $task11_run and
+            .metadata.labels["cairn.example.invalid/acceptance-revision"] == $task11_revision
+          end)' <<<"$inventory" >/dev/null ||
+      fail 'shared gateway post-state is not the exact owned seven-object set'
+  fi
+  jq -c --arg task11_run "$REFERENCE_BASELINE_RUN_ID" \
+    --arg task11_revision "$REFERENCE_BASELINE_REVISION" \
+    --arg run "$run_id" --arg revision "$repository_revision" '
+      . as $root |
+      def item($kind;$name): $root.items[] | select(.kind == $kind and .metadata.name == $name) |
+        {kind:.kind,name:.metadata.name,namespace:.metadata.namespace,
+         owner:.metadata.labels["cairn.example.invalid/acceptance-owner"],
+         run_id:.metadata.labels["cairn.example.invalid/acceptance-run"],
+         revision:.metadata.labels["cairn.example.invalid/acceptance-revision"]};
+      [item("ConfigMap";"egress-gateway-config"),
+       item("Service";"cairn-egress-gateway"),
+       item("Deployment";"cairn-egress-gateway"),
+       item("NetworkPolicy";"egress-gateway-allow-cairn-ingress"),
+       item("NetworkPolicy";"egress-gateway-allow-egress"),
+       item("NetworkPolicy";"egress-gateway-default-deny")] +
+      [item("CiliumNetworkPolicy";"egress-gateway-deny-cluster-https")]' \
+    <<<"$inventory"
+}
+
+canonical_fs_identity() {
+  local path=$1 canonical identity
+  canonical=$(realpath -e -- "$path") || fail 'a local-PV host path is not resolvable'
+  identity=$(stat -Lc '%d:%i' -- "$path") || fail 'a local-PV host path is unreadable'
+  printf 'realpath:%s\ninode:%s\n' "$canonical" "$identity"
+}
+
+apply_gateway() {
+  local output="$temporary/egress-gateway-reference-owned.yaml"
+  bounded 30s "$host_python" - \
+    deploy/kustomize/rendered/egress-gateway-reference.yaml "$run_id" \
+    "$repository_revision" "$REFERENCE_BASELINE_RUN_ID" \
+    "$REFERENCE_BASELINE_REVISION" >"$output" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+source, run_id, revision, baseline_run_id, baseline_revision = sys.argv[1:]
+documents = [item for item in yaml.safe_load_all(Path(source).read_text()) if item]
+objects = [item for item in documents if item.get("kind") != "Namespace"]
+expected = {
+    ("ConfigMap", "egress-gateway-config"),
+    ("Service", "cairn-egress-gateway"),
+    ("Deployment", "cairn-egress-gateway"),
+    ("NetworkPolicy", "egress-gateway-allow-cairn-ingress"),
+    ("NetworkPolicy", "egress-gateway-allow-egress"),
+    ("NetworkPolicy", "egress-gateway-default-deny"),
+    ("CiliumNetworkPolicy", "egress-gateway-deny-cluster-https"),
+}
+if {(item["kind"], item["metadata"]["name"]) for item in objects} != expected:
+    raise SystemExit("target gateway render lacks the exact seven objects")
+for item in objects:
+    labels = item["metadata"].setdefault("labels", {})
+    if item["kind"] == "CiliumNetworkPolicy" or (
+        item["kind"], item["metadata"]["name"]
+    ) == ("NetworkPolicy", "egress-gateway-allow-egress"):
+        labels.update({
+            "cairn.example.invalid/acceptance-owner": "task11a",
+            "cairn.example.invalid/acceptance-run": run_id,
+            "cairn.example.invalid/acceptance-revision": revision,
+        })
+    else:
+        labels.update({
+            "cairn.example.invalid/acceptance-owner": "task11",
+            "cairn.example.invalid/acceptance-run": baseline_run_id,
+            "cairn.example.invalid/acceptance-revision": baseline_revision,
+        })
+yaml.safe_dump_all(objects, sys.stdout, explicit_start=True, sort_keys=False)
+PY
+  bounded 30s "$kubectl" apply -f "$output" >/dev/null
+}
+
+preflight() {
+  require_locked_python
+  [[ $(id -u) -eq 0 ]] || fail 'run as root on the configured reference host'
+  [[ $(hostname -s) == "$REFERENCE_EXPECTED_HOST" ]] || fail 'wrong reference host'
+  require_clean_source
+  [[ "$run_id" =~ ^task11a-[0-9a-f]{7,12}-[0-9]{2}$ ]] || fail 'invalid Task 11a run ID'
+  repository_revision=$(git rev-parse HEAD)
+  [[ "$repository_revision" =~ ^[0-9a-f]{40}$ ]] || fail 'repository revision is not a full lowercase SHA-1'
+  [[ "$run_id" == task11a-${repository_revision:0:${#run_id}-11}-* ]] ||
+    fail 'run ID does not identify this revision'
+  [[ "$report_path" == *.json && "$report_path" != *.failed.json ]] ||
+    fail 'success report path must be a .json path'
+  [[ ! -e "$report_path" && ! -e "$failed_report_path" && ! -e "$outcome_report_path" &&
+    ! -e "$progress_path" ]] ||
+    fail 'immutable success, failed, outcome or progress evidence already exists for this run'
+  bounded 20s "$kubectl" get namespace "$namespace" -o json >/dev/null 2>&1 &&
+    fail 'Task 11a namespace already exists'
+
+  require_secret_file "$REFERENCE_POSTURE_OPENAI_API_KEY_FILE"
+  require_secret_file "$REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE"
+  [[ -f "$task11_primary_report" && ! -L "$task11_primary_report" ]] ||
+    fail 'accepted Task 11 primary report is absent or a symlink'
+  [[ -f "$task11_cilium_report" && ! -L "$task11_cilium_report" ]] ||
+    fail 'accepted Task 11 Cilium report is absent or a symlink'
+  [[ $(sha256sum "$task11_primary_report" | awk '{print $1}') == \
+    "$REFERENCE_BASELINE_PRIMARY_SHA256" ]] ||
+    fail 'accepted Task 11 primary report hash drifted'
+  [[ $(sha256sum "$task11_cilium_report" | awk '{print $1}') == \
+    "$REFERENCE_BASELINE_CILIUM_SHA256" ]] ||
+    fail 'accepted Task 11 Cilium report hash drifted'
+
+  local tools_json='[]' tool tool_path
+  for tool in awk cat ctr dirname docker firewall-cmd getenforce git grep helm ip jq kubectl \
+    mkdir mktemp realpath rm sed seq setsid sha256sum sleep socat sort ss stat tail timeout wc; do
+    if [[ "$tool" == kubectl ]]; then
+      tool_path=$(realpath -e "$kubectl") || fail 'configured kubectl is absent'
+    else
+      tool_path=$(command -v "$tool") || fail "required tool is absent: $tool"
+    fi
+    [[ "$tool_path" == /* && -x "$tool_path" ]] ||
+      fail "required tool is not an absolute executable: $tool"
+    tools_json=$(jq -c --arg name "$tool" --arg path "$tool_path" \
+      '. + [{name:$name,path:$path}]' <<<"$tools_json")
+  done
+  tools_json=$(jq -c --arg path "$host_python" \
+    '. + [{name:"posture-python",path:$path}]' <<<"$tools_json")
+
+  local kubectl_version kubectl_digest target_kubernetes target_cilium chart versions
+  kubectl_version=$(lock_value KUBECTL_VERSION)
+  kubectl_digest=$(lock_value KUBECTL_LINUX_AMD64_SHA256)
+  target_kubernetes=$(lock_value TARGET_KUBERNETES_VERSION)
+  target_cilium=$(lock_value TARGET_CILIUM_VERSION)
+  [[ $(sha256sum "$kubectl" | awk '{print $1}') == "$kubectl_digest" ]] ||
+    fail 'kubectl digest differs from deploy/images.lock'
+  versions=$(bounded 20s "$kubectl" version -o json)
+  [[ $(jq -r '.clientVersion.gitVersion' <<<"$versions") == "$kubectl_version" ]] ||
+    fail 'kubectl client version differs from its pin'
+  [[ $(jq -r '.serverVersion.gitVersion' <<<"$versions") == "$target_kubernetes" ]] ||
+    fail 'Kubernetes server version differs from its pin'
+  chart=$(bounded 20s helm list -n kube-system -o json |
+    jq -r '.[] | select(.name == "cilium") | .chart')
+  [[ "$chart" == "cilium-${target_cilium#v}" ]] || fail 'Cilium chart differs from its pin'
+  local cilium_images
+  PATH="$(dirname "$kubectl"):$PATH" bounded 30s "$host_python" \
+    scripts/reference_acceptance_state.py collect-cilium-images >"$temporary/cilium.json" ||
+    fail 'current ready controller-owned Cilium workloads do not match their pins'
+  cilium_images=$(<"$temporary/cilium.json")
+  local retrieval_sha gateway_sha
+  retrieval_sha=$(sha256sum deploy/kustomize/rendered/kubernetes-retrieval.yaml | awk '{print $1}')
+  gateway_sha=$(sha256sum deploy/kustomize/rendered/egress-gateway-reference.yaml | awk '{print $1}')
+  [[ $(awk '{print $1}' deploy/kustomize/rendered/kubernetes-retrieval.yaml.sha256) == \
+    "$retrieval_sha" ]] || fail 'retrieval render digest drifted'
+  [[ $(awk '{print $1}' deploy/kustomize/rendered/egress-gateway-reference.yaml.sha256) == \
+    "$gateway_sha" ]] || fail 'gateway render digest drifted'
+
+  local image_revision local_image_id provenance
+  cairn_image_reference=$(bounded 20s "$host_python" \
+    scripts/reference_acceptance_state.py canonical-image-reference "$IMAGE") ||
+    fail 'Cairn image reference is malformed'
+  [[ "$cairn_image_reference" != *:latest && "$cairn_image_reference" != *:latest@* ]] ||
+    fail 'Cairn image reference must not use latest'
+  [[ "$cairn_image_reference" != *@* ]] ||
+    fail 'Cairn image reference must be a named tag until digest rendering is supported'
+  docker image inspect "$IMAGE" >/dev/null || fail 'Cairn image is absent locally'
+  local_image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+  image_revision=$(docker image inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")
+  [[ "$image_revision" == "$repository_revision" ]] || fail 'Cairn image revision drifted'
+  provenance=$(PATH="$(dirname "$kubectl"):$PATH" bounded 30s "$host_python" \
+    scripts/reference_acceptance_state.py resolve-oci-provenance "$IMAGE") ||
+    fail 'imported Cairn image lacks verified OCI provenance'
+  [[ $(jq -r .reference <<<"$provenance") == "$cairn_image_reference" ]] ||
+    fail 'local and imported Cairn image references differ'
+
+  local distribution selinux storage node_runtime storage_json
+  distribution=$(awk -F= '
+    $1=="NAME" {gsub(/^"|"$/, "", $2); name=$2}
+    $1=="VERSION_ID" {gsub(/^"|"$/, "", $2); version=$2}
+    END {print name " " version}' /etc/os-release)
+  selinux=$(getenforce)
+  storage_json=$(bounded 20s "$kubectl" get storageclass "$REFERENCE_STORAGE_CLASS" -o json)
+  storage=$(jq -r '.metadata.name' <<<"$storage_json")
+
+  local protected_namespace protected_pvcs pvs node kubeadm pod_cidr configured_pod_cidr service_cidr node_ip
+  local node_listeners
+  protected_namespace=$(bounded 20s "$kubectl" get namespace "$REFERENCE_BASELINE_NAMESPACE" -o json) ||
+    fail 'accepted Task 11 namespace is absent'
+  jq -e --arg baseline_run "$REFERENCE_BASELINE_RUN_ID" \
+    --arg baseline_revision "$REFERENCE_BASELINE_REVISION" '
+    .metadata.labels["cairn.example.invalid/acceptance-owner"] == "task11" and
+    .metadata.labels["cairn.example.invalid/acceptance-run"] == $baseline_run and
+    .metadata.labels["cairn.example.invalid/acceptance-revision"] == $baseline_revision' \
+    <<<"$protected_namespace" >/dev/null || fail 'accepted Task 11 namespace ownership drifted'
+  pvs=$(bounded 20s "$kubectl" get pv -o json)
+  protected_pvcs=$(bounded 20s "$kubectl" get pvc -n "$REFERENCE_BASELINE_NAMESPACE" -o json) ||
+    fail 'accepted Task 11 PVC inventory is unreadable'
+  jq -e --argjson pvs "$pvs" --arg baseline_namespace "$REFERENCE_BASELINE_NAMESPACE" '
+    [.items[] | select(.metadata.name == "data-cairn-0" or .metadata.name == "data-falkordb-0")] as $claims |
+    ($claims | length == 2) and all($claims[];
+      (.metadata.uid | type == "string" and length > 0)) and
+    all($claims[]; .status.phase == "Bound") and
+    all($claims[]; . as $claim |
+      [$pvs.items[] | select(
+        .metadata.name == $claim.spec.volumeName and
+        (.metadata.name == "cairn-local-pv1" or .metadata.name == "cairn-local-pv2") and
+        .status.phase == "Bound" and
+        .spec.claimRef.namespace == $baseline_namespace and
+        .spec.claimRef.name == $claim.metadata.name and
+        .spec.claimRef.uid == $claim.metadata.uid)] | length == 1)' \
+    <<<"$protected_pvcs" >/dev/null || fail 'accepted Task 11 PV/PVC binding state drifted'
+  node=$(bounded 20s "$kubectl" get node "$REFERENCE_NODE_NAME" -o json)
+  [[ $(jq -r '.status.conditions[] | select(.type == "Ready") | .status' <<<"$node") == True ]] ||
+    fail 'configured reference node is not Ready'
+  kubeadm=$(bounded 20s "$kubectl" get configmap kubeadm-config -n kube-system -o json)
+  configured_pod_cidr=$(jq -r '.data.ClusterConfiguration' <<<"$kubeadm" |
+    awk '$1 == "podSubnet:" {print $2; exit}')
+  service_cidr=$(jq -r '.data.ClusterConfiguration' <<<"$kubeadm" |
+    awk '$1 == "serviceSubnet:" {print $2; exit}')
+  pod_cidr=$(jq -r '.spec.podCIDR' <<<"$node")
+  bounded 10s "$host_python" - "$pod_cidr" "$configured_pod_cidr" <<'PY' ||
+import ipaddress
+import sys
+
+node = ipaddress.ip_network(sys.argv[1], strict=True)
+cluster = ipaddress.ip_network(sys.argv[2], strict=True)
+raise SystemExit(0 if node.version == 4 and node.subnet_of(cluster) else 1)
+PY
+    fail 'node Pod CIDR is not contained by the kubeadm cluster Pod subnet'
+  node_ip=$(jq -r '.status.addresses[] | select(.type == "InternalIP") | .address' <<<"$node")
+  node_runtime=$(jq -r '.status.nodeInfo.containerRuntimeVersion' <<<"$node")
+  [[ -n "$node_ip" && "$node_ip" != null ]] || fail 'configured reference node has no InternalIP'
+  node_listeners=$(bounded 10s ss -H -ltn 'sport = :443') ||
+    fail 'reference node TCP/443 listener inventory is unreadable'
+  if awk -v target="${node_ip}:443" \
+    '$4 == target || $4 == "0.0.0.0:443" || $4 == "*:443" || $4 == "[::]:443" {found=1} END {exit !found}' \
+    <<<"$node_listeners"; then
+    fail 'reference node InternalIP TCP/443 is already in use'
+  fi
+  [[ $(firewall-cmd --state) == running ]] || fail 'firewalld is not running'
+  node_interface=$(ip -j -4 address show | jq -er --arg node "$node_ip" '
+    [.[] | select(any(.addr_info[]?; .family == "inet" and .local == $node)) | .ifname] |
+    if length == 1 then .[0] else empty end') ||
+    fail 'reference node InternalIP does not identify one host interface'
+  node_firewall_zone=$(firewall-cmd --get-zone-of-interface="$node_interface") ||
+    fail 'reference node interface has no firewalld zone'
+  [[ -n "$node_firewall_zone" && "$node_firewall_zone" != 'no zone' ]] ||
+    fail 'reference node interface has no firewalld zone'
+  node_firewall_rule=$(printf 'rule family="ipv4" source address="%s" destination address="%s/32" port port="443" protocol="tcp" accept' \
+    "$configured_pod_cidr" "$node_ip")
+  if firewall-cmd --zone="$node_firewall_zone" \
+    --query-rich-rule="$node_firewall_rule" >/dev/null; then
+    fail 'Task 11a node-probe firewalld rule already exists'
+  fi
+  bounded 20s "$kubectl" get crd ciliumnetworkpolicies.cilium.io -o json >/dev/null ||
+    fail 'CiliumNetworkPolicy CRD is absent'
+  collect_gateway_inventory pre >"$gateway_pre_file"
+
+  local runtime_expectations
+  runtime_expectations=$(bounded 30s "$host_python" "$state" runtime-expectations \
+    Dockerfile deploy/kustomize/rendered/kubernetes-retrieval.yaml \
+    "$cairn_image_reference" | jq -c .runtime_expectations) ||
+    fail 'runtime expectations could not be derived from committed material'
+
+  local credentials_json
+  credentials_json=$(jq -nc \
+    --arg openai "$REFERENCE_POSTURE_OPENAI_API_KEY_FILE" \
+    --arg falkordb "$REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE" '
+      [{name:"openai-api-key",path:$openai,mode:"600",owner:"root",group:"root",non_empty:true},
+       {name:"falkordb-password",path:$falkordb,mode:"600",owner:"root",group:"root",non_empty:true}]')
+
+  (set -o noclobber; jq -nc --arg revision "$repository_revision" --arg namespace "$namespace" \
+    --arg owner "$owner" --arg run_id "$run_id" --argjson pvs "$pvs" \
+    --arg pod "$pod_cidr" --arg service "$service_cidr" --arg node "${node_ip}/32" \
+    --arg distribution "$distribution" --arg selinux "$selinux" \
+    --arg server "$target_kubernetes" --arg runtime "$node_runtime" --arg chart "$chart" \
+    --arg storage "$storage" --arg provisioner "$(jq -r .provisioner <<<"$storage_json")" \
+    --arg binding "$(jq -r .volumeBindingMode <<<"$storage_json")" \
+    --arg retrieval_sha "$retrieval_sha" --arg gateway_sha "$gateway_sha" \
+    --arg image "$cairn_image_reference" --arg image_revision "$image_revision" \
+    --arg local_image_id "$local_image_id" --argjson provenance "$provenance" \
+    --arg primary_report "$task11_primary_report" --arg cilium_report "$task11_cilium_report" \
+    --arg expected_host "$REFERENCE_EXPECTED_HOST" --arg node_name "$REFERENCE_NODE_NAME" \
+    --arg primary_sha "$REFERENCE_BASELINE_PRIMARY_SHA256" \
+    --arg cilium_sha "$REFERENCE_BASELINE_CILIUM_SHA256" \
+    --argjson cilium_images "$cilium_images" --argjson credentials "$credentials_json" \
+    --argjson tools "$tools_json" --argjson runtime_expectations "$runtime_expectations" \
+    --slurpfile gateway "$gateway_pre_file" '
+      {revision:$revision,namespace:$namespace,owner:$owner,run_id:$run_id,
+       protected_pvs:[$pvs.items[] | select(.metadata.name == "cairn-local-pv1" or .metadata.name == "cairn-local-pv2")],
+       available_pvs:[$pvs.items[] | select(.metadata.name != "cairn-local-pv1" and .metadata.name != "cairn-local-pv2")],
+       cluster_cidrs:{pod:$pod,service:$service,node:$node},cilium_crd_present:true,
+       target_identity:{host:{hostname:$expected_host,distribution:$distribution,selinux:$selinux},
+         kubernetes:{server_version:$server,node:$node_name,node_ready:true,container_runtime:$runtime},
+         cilium:{chart:$chart,images:$cilium_images}},
+       storage_identity:{storage_class:$storage,provisioner:$provisioner,volume_binding_mode:$binding},
+       render_identities:[
+         {name:"kubernetes-retrieval",path:"deploy/kustomize/rendered/kubernetes-retrieval.yaml",sha256:$retrieval_sha},
+         {name:"egress-gateway-reference",path:"deploy/kustomize/rendered/egress-gateway-reference.yaml",sha256:$gateway_sha}],
+       image_identity:{reference:$image,source_revision:$image_revision,local_image_id:$local_image_id,
+         target_digest:$provenance.target_digest,platform_manifest_digest:$provenance.platform_manifest_digest,
+         config_digest:$provenance.config_digest,expected_runtime_digest:$provenance.config_digest},
+       accepted_task11_reports:[
+         {name:"primary",path:$primary_report,sha256:$primary_sha},
+         {name:"cilium-supplement",path:$cilium_report,sha256:$cilium_sha}],
+       credential_sources:$credentials,tool_inventory:$tools,
+       runtime_expectations:$runtime_expectations,gateway_inventory:$gateway[0]}' |
+    bounded 30s "$host_python" "$state" validate-preflight >"$preflight_file") ||
+    fail 'Task 11a safety state refused target inventory'
+  jq -e '.selected_pvs == ["cairn-local-pv3", "cairn-local-pv4"]' \
+    "$preflight_file" >/dev/null || fail 'only PV3 and PV4 may be selected'
+  local protected_identity_file candidate_identity_file
+  protected_identity_file="$temporary/protected-identities"
+  candidate_identity_file="$temporary/candidate-identities"
+  (set -o noclobber; : >"$protected_identity_file")
+  (set -o noclobber; : >"$candidate_identity_file")
+  while IFS= read -r path; do
+    canonical_fs_identity "$path" >>"$protected_identity_file"
+  done < <(jq -r '.items[] | select(.metadata.name == "cairn-local-pv1" or
+    .metadata.name == "cairn-local-pv2") | .spec.local.path' <<<"$pvs")
+  while IFS= read -r path; do
+    [[ $(stat -c '%a %U:%G' "$path") == '755 root:root' ]] ||
+      fail 'selected PV path is not root:root 0755 before handoff'
+    canonical_fs_identity "$path" >>"$candidate_identity_file"
+  done < <(jq -r '.selected_pv_paths[]' "$preflight_file")
+  [[ $(sort -u "$candidate_identity_file" | wc -l) -eq 4 ]] ||
+    fail 'selected PV host paths alias one another'
+  ! grep -Fxf "$protected_identity_file" "$candidate_identity_file" >/dev/null ||
+    fail 'selected PV host path aliases protected Task 11 storage'
+}
+
+apply_namespace() {
+  jq -nc --arg namespace "$namespace" --arg run "$run_id" \
+    --arg revision "$repository_revision" '{apiVersion:"v1",kind:"Namespace",metadata:{name:$namespace,labels:{
+      "cairn.example.invalid/instance":$namespace,
+      "cairn.example.invalid/posture-owner":"task11a",
+      "cairn.example.invalid/posture-run":$run,
+      "cairn.example.invalid/posture-revision":$revision,
+      "pod-security.kubernetes.io/enforce":"restricted"}}}' |
+    bounded 20s "$kubectl" apply -f - >/dev/null
+}
+
+apply_secrets() {
+  set +x
+  bounded 30s "$host_python" - "$namespace" "$REFERENCE_POSTURE_OPENAI_API_KEY_FILE" \
+    "$REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE" <<'PY' |
+import base64
+import json
+import sys
+
+namespace, key_path, password_path = sys.argv[1:]
+key = open(key_path, "rb").read().rstrip(b"\n")
+password = open(password_path, "rb").read().rstrip(b"\n")
+data = {
+    "openai-api-key": base64.b64encode(key).decode("ascii"),
+    "falkordb-password": base64.b64encode(password).decode("ascii"),
+    "falkordb.conf": base64.b64encode(b"requirepass " + password + b"\n").decode("ascii"),
+}
+print(json.dumps({
+    "apiVersion": "v1", "kind": "Secret",
+    "metadata": {"name": "cairn-credentials", "namespace": namespace,
+                 "labels": {"cairn.example.invalid/posture-owner": "task11a"}},
+    "type": "Opaque", "data": data,
+}, separators=(",", ":")))
+PY
+    bounded 20s "$kubectl" apply -f - >/dev/null
+}
+
+render_and_apply_instance() {
+  local render_dir="$temporary/render" instance_id image_name image_tag
+  mkdir -m 0700 "$render_dir"
+  instance_id=$($host_python - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)
+  image_name=${cairn_image_reference%:*}
+  image_tag=${cairn_image_reference##*:}
+  (set -o noclobber; cat >"$render_dir/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${namespace}
+resources:
+  - $(pwd)/deploy/kustomize/rendered/kubernetes-retrieval.yaml
+labels:
+  - pairs:
+      cairn.example.invalid/posture-owner: task11a
+      cairn.example.invalid/posture-run: ${run_id}
+      cairn.example.invalid/posture-revision: ${repository_revision}
+images:
+  - name: cairn
+    newName: ${image_name}
+    newTag: ${image_tag}
+patches:
+  - target: {group: apps, version: v1, kind: StatefulSet, name: cairn}
+    patch: |-
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/volumeName
+        value: cairn-local-pv3
+  - target: {group: apps, version: v1, kind: StatefulSet, name: falkordb}
+    patch: |-
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/volumeName
+        value: cairn-local-pv4
+EOF
+  )
+  bounded 30s "$kubectl" kustomize --load-restrictor LoadRestrictionsNone "$render_dir" |
+    sed "s/instance_id: REPLACE_WITH_PER_INSTANCE_UUID/instance_id: ${instance_id}/" |
+    bounded 30s "$kubectl" apply -f - >/dev/null
+}
+
+bootstrap_instance() {
+  local bootstrap_manifest="$temporary/bootstrap.yaml"
+  begin_step bootstrap-scale-down
+  bounded 30s "$kubectl" scale -n "$namespace" statefulset/cairn --replicas=0 >/dev/null
+  complete_step
+  begin_step bootstrap-cairn-stop
+  bounded 200s "$kubectl" wait -n "$namespace" --for=delete pod/cairn-0 --timeout=180s >/dev/null
+  complete_step
+  (set -o noclobber; cat >"$bootstrap_manifest" <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: task11a-bootstrap
+  namespace: ${namespace}
+  labels:
+    cairn.example.invalid/posture-owner: task11a
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    fsGroup: 65532
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: bootstrap
+      image: ${IMAGE}
+      command: [sleep, infinity]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: data, mountPath: /var/lib/cairn}
+        - {name: config, mountPath: /etc/cairn, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: data-cairn-0}
+    - name: config
+      configMap: {name: cairn-config}
+    - name: tmp
+      emptyDir: {medium: Memory, sizeLimit: 64Mi}
+EOF
+  )
+  begin_step bootstrap-pod-apply
+  bounded 30s "$kubectl" apply -f "$bootstrap_manifest" >/dev/null
+  complete_step
+  begin_step bootstrap-pod-ready
+  bounded 200s "$kubectl" wait -n "$namespace" --for=condition=Ready \
+    pod/task11a-bootstrap --timeout=180s >/dev/null
+  complete_step
+  begin_step bootstrap-catalogue-migrate
+  bounded 120s "$kubectl" exec -n "$namespace" task11a-bootstrap -- \
+    cairn migrate --config /etc/cairn/config.yaml |
+    jq -e '.status == "ok" and .operation == "migrate"' >/dev/null
+  complete_step
+  set +x
+  begin_step bootstrap-command-exec
+  bounded 120s "$kubectl" exec -n "$namespace" task11a-bootstrap -- \
+    cairn bootstrap --config /etc/cairn/config.yaml --realm local --label task11a |
+    jq -er '.token' |
+    bounded 20s "$kubectl" create secret generic task11a-client -n "$namespace" \
+      --from-file=token=/dev/stdin --dry-run=client -o json |
+    jq '.metadata.labels = {"cairn.example.invalid/posture-owner":"task11a"}' |
+    bounded 20s "$kubectl" apply -f - >/dev/null
+  complete_step
+  begin_step bootstrap-pod-delete
+  bounded 120s "$kubectl" delete pod -n "$namespace" task11a-bootstrap --wait=true >/dev/null
+  complete_step
+  begin_step bootstrap-scale-up
+  bounded 30s "$kubectl" scale -n "$namespace" statefulset/cairn --replicas=1 >/dev/null
+  complete_step
+  begin_step bootstrap-cairn-rollout
+  bounded 420s "$kubectl" rollout status -n "$namespace" statefulset/cairn --timeout=400s >/dev/null
+  complete_step
+}
+
+observe() {
+  local name=$1 expected=$2 pod=$3 container=$4 command=$5 observed
+  observed=$(bounded 30s "$kubectl" exec -n "$namespace" "$pod" -c "$container" -- \
+    sh -eu -c "$command" "task11a-observe:${name}")
+  record "$name" "$expected" "$observed"
+}
+
+network_probe() {
+  local expected=$1 source_namespace=$2 source_pod=$3 target=$4 marker=$5 observed status=0
+  observed=$(bounded 20s "$kubectl" exec -i -n "$source_namespace" "$source_pod" -c probe -- \
+    python - "$target" 443 5 "$marker" <<'PY'
+import socket
+import sys
+
+host, port, timeout, _ = sys.argv[1:]
+try:
+    socket.create_connection((host, int(port)), float(timeout)).close()
+except socket.gaierror:
+    print("resolution-failed")
+    raise SystemExit(2)
+except OSError:
+    print("blocked")
+else:
+    print("connected")
+PY
+  ) || status=$?
+  [[ $status -eq 0 && "$observed" == "$expected" ]] ||
+    fail "network probe for $target expected $expected"
+  printf '%s\n' "$observed"
+}
+
+proxy_probe() {
+  local expected=$1 target=$2 marker=$3 observed status=0
+  observed=$(bounded 20s "$kubectl" exec -i -n "$namespace" cairn-0 -c cairn -- \
+    python - "$target" "$marker" <<'PY'
+import socket
+import sys
+
+target, _ = sys.argv[1:]
+connection = socket.create_connection(
+    ("cairn-egress-gateway.cairn-egress.svc.cluster.local", 3128), 10
+)
+connection.sendall(
+    f"CONNECT {target}:443 HTTP/1.1\r\nHost: {target}:443\r\n\r\n".encode("ascii")
+)
+status = connection.recv(256).split(b"\r\n", 1)[0]
+connection.close()
+print("connected" if b" 200 " in status else "blocked")
+PY
+  ) || status=$?
+  [[ $status -eq 0 && "$observed" == "$expected" ]] ||
+    fail "Squid probe for $target expected $expected"
+  printf '%s\n' "$observed"
+}
+
+full_stream_has_exact_line() {
+  local expected=$1 line found=false
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" != "$expected" ]] || found=true
+  done
+  [[ "$found" == true ]]
+}
+
+projection_completed_marker_present() {
+  local marker=$1 graph
+  graph=$(bounded 20s "$kubectl" exec -n "$namespace" cairn-0 -c cairn -- \
+    python -c 'from cairn.projection.partition import canonical_partition, derive_group_id; print(derive_group_id(canonical_partition("local", "[]")))') ||
+    return 1
+  # The single-quoted script must expand only inside the target container.
+  # shellcheck disable=SC2016
+  bounded 20s "$kubectl" exec -n "$namespace" falkordb-0 -c falkordb -- \
+    sh -eu -c '
+      auth=$(awk '\''
+        /^requirepass/ {
+          count++
+          if ($0 !~ /^requirepass [^[:space:]]+$/) invalid=1
+          else { line=$0; sub(/^requirepass /, "AUTH ", line) }
+        }
+        END {
+          if (count != 1 || invalid) exit 1
+          printf "%s", line
+        }
+      '\'' "$1")
+      query="GRAPH.RO_QUERY $2 \"MATCH (e:Episodic) WHERE e.source_description = '\''cairn.fact.projected'\'' RETURN e.content\""
+      { printf "%s\n" "$auth"; printf "%s\n" "$query"; } | redis-cli -e --raw
+    ' sh /etc/falkordb/cairn.conf "$graph" |
+    sed '/^OK$/d' | full_stream_has_exact_line "$marker"
+}
+
+projection_outbox_high_water() {
+  bounded 20s "$kubectl" exec -n "$namespace" cairn-0 -c cairn -- \
+    python -c 'import sqlite3; db=sqlite3.connect("file:/var/lib/cairn/catalogue.sqlite3?mode=ro", uri=True); print(db.execute("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='\''projection_outbox'\''), 0)").fetchone()[0])'
+}
+
+prove_posture() {
+  local gateway_public_https
+  begin_step posture-rollout
+  bounded 420s "$kubectl" rollout status -n "$namespace" statefulset/falkordb --timeout=400s >/dev/null
+  bounded 420s "$kubectl" rollout status -n "$namespace" statefulset/cairn --timeout=400s >/dev/null
+  complete_step
+  local observed cairn_runtime falkordb_runtime cairn_pod falkordb_pod
+  local cairn_pv_mode falkordb_pv_mode
+  begin_step pv-handoff
+  cairn_pv_mode=$(bounded 30s "$kubectl" exec -n "$namespace" cairn-0 -c cairn -- \
+    sh -eu -c 'test -w /var/lib/cairn; stat -c "%a %u:%g" /var/lib/cairn')
+  [[ "$cairn_pv_mode" =~ ^[0-7]{3,4}\ 0:65532$ ]] ||
+    fail 'Cairn PV ownership handoff is wrong'
+  [[ "${cairn_pv_mode%% *}" =~ [2367][0-7]$ ]] ||
+    fail 'Cairn PV effective group lacks POSIX write permission'
+  falkordb_pv_mode=$(bounded 30s "$kubectl" exec -n "$namespace" falkordb-0 -c falkordb -- \
+    sh -eu -c 'test -w /var/lib/falkordb/data; stat -c "%a %u:%g" /var/lib/falkordb/data')
+  [[ "$falkordb_pv_mode" =~ ^[0-7]{3,4}\ 0:10001$ ]] ||
+    fail 'FalkorDB PV ownership handoff is wrong'
+  [[ "${falkordb_pv_mode%% *}" =~ [2367][0-7]$ ]] ||
+    fail 'FalkorDB PV effective group lacks POSIX write permission'
+  record pv-handoff group-writable group-writable
+  (set -o noclobber; jq -nc --arg cairn "$cairn_pv_mode" \
+    --arg falkordb "$falkordb_pv_mode" '
+      def mounted($workload;$pv;$host;$mount;$value):
+        ($value | capture("^(?<mode>[0-7]{3,4}) (?<uid>[0-9]+):(?<gid>[0-9]+)$")) as $state |
+        {workload:$workload,pv_name:$pv,host_path:$host,mount_path:$mount,
+         pre_mount:{uid:0,gid:0,mode:"0755"},
+         post_mount:{uid:($state.uid|tonumber),gid:($state.gid|tonumber),mode:$state.mode,
+                     effective_group_writable:true}};
+      [mounted("cairn";"cairn-local-pv3";"/mnt/cairn-local/pv3";"/var/lib/cairn";$cairn),
+       mounted("falkordb";"cairn-local-pv4";"/mnt/cairn-local/pv4";"/var/lib/falkordb/data";$falkordb)]' \
+    >"$pv_file")
+  complete_step
+  begin_step cairn-runtime
+  # These expressions are evaluated by the remote shell inside the Pod.
+  # shellcheck disable=SC2016
+  cairn_runtime=$(bounded 30s "$kubectl" exec -n "$namespace" cairn-0 -c cairn -- \
+    sh -eu -c 'printf "%s:%s:%s" "$(id -u)" "$(id -g)" "$(id -G)"' \
+    task11a-observe:cairn-runtime)
+  record cairn-runtime '65532:0:0 65532' "$cairn_runtime"
+  complete_step
+  begin_step cairn-catalogue
+  cairn_pod=$(bounded 20s "$kubectl" get pod -n "$namespace" cairn-0 -o json)
+  observe cairn-wal wal cairn-0 cairn 'python - <<"PY"
+import sqlite3
+db=sqlite3.connect("file:/var/lib/cairn/catalogue.sqlite3?mode=ro", uri=True)
+print(db.execute("PRAGMA journal_mode").fetchone()[0])
+PY'
+  observe cairn-lease locked cairn-0 cairn 'if timeout --signal=TERM --kill-after=2s 10s cairn serve --config /etc/cairn/config.yaml >/tmp/lease.out 2>&1; then exit 1; fi; grep -qi locked /tmp/lease.out; printf locked'
+  complete_step
+  begin_step cairn-restart
+  local old_uid new_uid
+  old_uid=$(bounded 20s "$kubectl" get pod -n "$namespace" cairn-0 \
+    -o jsonpath='{.metadata.uid}')
+  bounded 120s "$kubectl" delete pod -n "$namespace" cairn-0 --wait=true >/dev/null
+  bounded 420s "$kubectl" rollout status -n "$namespace" statefulset/cairn --timeout=400s >/dev/null
+  new_uid=$(bounded 20s "$kubectl" get pod -n "$namespace" cairn-0 \
+    -o jsonpath='{.metadata.uid}')
+  [[ -n "$old_uid" && -n "$new_uid" && "$old_uid" != "$new_uid" ]] ||
+    fail 'Cairn Pod identity did not change across restart'
+  observe cairn-restart replaced cairn-0 cairn 'test -s /var/lib/cairn/catalogue.sqlite3; printf replaced'
+  observe cairn-integrity ok cairn-0 cairn 'python - <<"PY"
+import sqlite3
+db=sqlite3.connect("file:/var/lib/cairn/catalogue.sqlite3?mode=ro", uri=True)
+print(db.execute("PRAGMA integrity_check").fetchone()[0])
+PY'
+  complete_step
+  begin_step falkordb-runtime
+  # shellcheck disable=SC2016
+  falkordb_runtime=$(bounded 30s "$kubectl" exec -n "$namespace" falkordb-0 -c falkordb -- \
+    sh -eu -c 'printf "%s:%s:%s" "$(id -u)" "$(id -g)" "$(id -G)"' \
+    task11a-observe:falkordb-runtime)
+  record falkordb-runtime '10001:0:0 10001' "$falkordb_runtime"
+  falkordb_pod=$(bounded 20s "$kubectl" get pod -n "$namespace" falkordb-0 -o json)
+  (set -o noclobber; jq -nc --argjson cairn "$cairn_pod" \
+    --argjson falkordb "$falkordb_pod" --arg cairn_runtime "$cairn_runtime" \
+    --arg falkordb_runtime "$falkordb_runtime" '
+      def runtime($value):
+        ($value | capture("^(?<uid>[0-9]+):(?<gid>[0-9]+):(?<groups>[0-9 ]+)$")) as $identity |
+        {uid:($identity.uid|tonumber),primary_gid:($identity.gid|tonumber),
+         supplementary_gids:($identity.groups|split(" ")|map(tonumber)|
+           map(select(. != ($identity.gid|tonumber))))};
+      def item($pod;$workload;$value):
+        ($pod.spec.containers[] | select(.name == $workload)) as $container |
+        ($pod.status.containerStatuses[] | select(.name == $workload)) as $status |
+        {workload:$workload,pod:($workload + "-0"),container:$workload,
+         admitted:{run_as_non_root:$pod.spec.securityContext.runAsNonRoot,
+           run_as_user:($pod.spec.securityContext.runAsUser // null),
+           run_as_group:($pod.spec.securityContext.runAsGroup // null),
+           fs_group:$pod.spec.securityContext.fsGroup,
+           fs_group_change_policy:$pod.spec.securityContext.fsGroupChangePolicy},
+         runtime:runtime($value),spec_image:$container.image,
+         runtime_image_id:$status.imageID,
+         runtime_digest:($status.imageID | capture("(?<digest>sha256:[0-9a-f]{64})$").digest)};
+      [item($cairn;"cairn";$cairn_runtime),item($falkordb;"falkordb";$falkordb_runtime)]' \
+    >"$runtime_file")
+  complete_step
+  begin_step falkordb-auth
+  # shellcheck disable=SC2016
+  observe falkordb-auth noauth-refused-then-authenticated falkordb-0 falkordb 'unauth=$(redis-cli --raw PING 2>&1 || true); test "$unauth" = "NOAUTH Authentication required."; auth=$(awk '\''/^requirepass / {print "AUTH " $2}'\'' /etc/falkordb/cairn.conf); result=$({ printf "%s\n" "$auth"; printf "PING\nSET task11a-restart persisted\n"; } | redis-cli -e --raw); test "$result" = "OK
+PONG
+OK"; printf noauth-refused-then-authenticated'
+  complete_step
+  begin_step falkordb-restart
+  old_uid=$(bounded 20s "$kubectl" get pod -n "$namespace" falkordb-0 \
+    -o jsonpath='{.metadata.uid}')
+  bounded 120s "$kubectl" delete pod -n "$namespace" falkordb-0 --wait=true >/dev/null
+  bounded 420s "$kubectl" rollout status -n "$namespace" statefulset/falkordb --timeout=400s >/dev/null
+  new_uid=$(bounded 20s "$kubectl" get pod -n "$namespace" falkordb-0 \
+    -o jsonpath='{.metadata.uid}')
+  [[ -n "$old_uid" && -n "$new_uid" && "$old_uid" != "$new_uid" ]] ||
+    fail 'FalkorDB Pod identity did not change across restart'
+  # shellcheck disable=SC2016
+  observe falkordb-restart persisted falkordb-0 falkordb 'auth=$(awk '\''/^requirepass / {print "AUTH " $2}'\'' /etc/falkordb/cairn.conf); { printf "%s\n" "$auth"; printf "GET task11a-restart\n"; } | redis-cli -e --raw | grep -qx persisted; printf persisted'
+  complete_step
+  begin_step retrieval-composition
+  # shellcheck disable=SC2016
+  observe retrieval-composition enabled cairn-0 cairn 'python - <<"PY"
+import os
+import yaml
+
+with open("/etc/cairn/config.yaml", encoding="utf-8") as stream:
+    config = yaml.safe_load(stream)
+graphiti = config.get("graphiti")
+assert graphiti == {"enabled": True, "host": "falkordb", "port": 6379}
+assert os.environ.get("HTTPS_PROXY")
+print("enabled")
+PY'
+  complete_step
+
+  begin_step probe-apply
+  sed -e "s/REPLACE_TASK11A_NAMESPACE/${namespace}/g" \
+    -e "s|image: cairn:v0.1.0|image: ${cairn_image_reference}|" \
+    tests/acceptance/reference/task11a-listener-pod.yaml |
+    bounded 30s "$kubectl" apply -f - >/dev/null
+  bounded 120s "$kubectl" wait -n "$namespace" --for=condition=Ready pod/task11a-listener --timeout=100s >/dev/null
+  sed -e "s|image: cairn:v0.1.0|image: ${cairn_image_reference}|" \
+    -e "s/REPLACE_TASK11A_NAMESPACE/${namespace}/" \
+    tests/acceptance/reference/task11a-probe-pod.yaml |
+    bounded 30s "$kubectl" apply -f - >/dev/null
+  bounded 120s "$kubectl" wait -n "$gateway_namespace" \
+    --for=jsonpath='{.status.phase}'=Running \
+    pod/task11a-probe --timeout=100s >/dev/null
+  bounded 120s "$kubectl" wait -n "$namespace" --for=condition=Ready \
+    pod/task11a-control --timeout=100s >/dev/null
+  gateway_public_https=$(network_probe connected "$gateway_namespace" task11a-probe \
+    api.openai.com task11a-network-positive)
+  complete_step
+
+  begin_step provider-delivery
+  local provider_marker provider_output projection_before projection_after
+  provider_marker="task11a-provider-${repository_revision}"
+  projection_before=$(projection_outbox_high_water) ||
+    fail 'projection outbox high-water could not be read before provider ingest'
+  [[ "$projection_before" =~ ^[0-9]+$ ]] ||
+    fail 'projection outbox high-water before provider ingest is malformed'
+  provider_output=$(bounded 30s "$kubectl" exec -i -n "$namespace" \
+    task11a-control -c probe -- python - ingest http://cairn:8000 \
+    "$provider_marker" /var/run/secrets/task11a/token \
+    <tests/acceptance/kind/client.py)
+  [[ "$provider_output" == ok\ * ]] || fail 'live provider operation failed'
+  for _ in $(seq 1 120); do
+    observed=$(bounded 20s "$kubectl" exec -n "$namespace" cairn-0 -c cairn -- \
+      python -c 'import sqlite3; db=sqlite3.connect("file:/var/lib/cairn/catalogue.sqlite3?mode=ro", uri=True); print(db.execute("SELECT COUNT(*) FROM projection_outbox").fetchone()[0])')
+    [[ "$observed" == 0 ]] && break
+    sleep 1
+  done
+  [[ "$observed" == 0 ]] || fail 'provider delivery did not drain the projection outbox'
+  projection_after=$(projection_outbox_high_water) ||
+    fail 'projection outbox high-water could not be read after provider ingest'
+  [[ "$projection_after" =~ ^[0-9]+$ && "$projection_after" -gt "$projection_before" ]] ||
+    fail 'provider ingest did not enqueue projection work'
+  projection_completed_marker_present "$provider_marker" ||
+    fail 'provider projection completed marker is absent from FalkorDB'
+  record provider-delivery delivered delivered
+  network_record_positive provider-delivery "$namespace/cairn-0" \
+    api.openai.com-via-cairn-egress 443 delivered delivered
+  complete_step
+
+  begin_step network-posture
+  local pod_ip node_ip positive negative
+  pod_ip=$(bounded 20s "$kubectl" get pod -n "$namespace" task11a-listener \
+    -o jsonpath='{.status.podIP}')
+  node_ip=$(jq -r '.cluster_cidrs.node | sub("/32$"; "")' "$preflight_file")
+  observed=$(bounded 20s "$kubectl" exec -n "$gateway_namespace" task11a-probe -c probe -- \
+    python -c 'import socket; socket.getaddrinfo("api.openai.com", 443); print("resolved")')
+  record dns resolved "$observed"
+  network_record_positive dns "$gateway_namespace/task11a-probe" api.openai.com \
+    53 resolved "$observed"
+  positive=$gateway_public_https
+  record external-https connected "$positive"
+  network_record_positive external-https "$gateway_namespace/task11a-probe" \
+    api.openai.com 443 connected "$positive"
+  positive=$(network_probe connected "$namespace" task11a-control \
+    "$pod_ip" task11a-network-positive)
+  negative=$(network_probe blocked "$gateway_namespace" task11a-probe \
+    "$pod_ip" task11a-network-negative)
+  network_record_denial pod-https-denied "$gateway_namespace/task11a-probe" \
+    "$pod_ip" "$namespace/task11a-control" "$pod_ip" "$positive" "$negative"
+  record pod-https-denied blocked "$negative"
+  positive=$(network_probe connected "$namespace" task11a-control \
+    kubernetes.default.svc task11a-network-positive)
+  negative=$(network_probe blocked "$gateway_namespace" task11a-probe \
+    kubernetes.default.svc task11a-network-negative)
+  network_record_denial service-https-denied "$gateway_namespace/task11a-probe" \
+    kubernetes.default.svc "$namespace/task11a-control" kubernetes.default.svc \
+    "$positive" "$negative"
+  record service-https-denied blocked "$negative"
+  setsid timeout --signal=TERM --kill-after=2s 180s \
+    socat "TCP-LISTEN:443,bind=${node_ip},reuseaddr,fork" EXEC:/bin/true &
+  node_listener_pid=$!
+  node_listener_active=true
+  sleep 0.2
+  kill -0 -- "-$node_listener_pid" 2>/dev/null ||
+    fail 'Task 11a node listener did not remain bound'
+  add_node_firewall_rule || fail 'Task 11a node-probe firewalld rule could not be installed'
+  positive=$(network_probe connected "$namespace" task11a-control \
+    "$node_ip" task11a-network-positive)
+  firewall-cmd --zone="$node_firewall_zone" \
+    --query-rich-rule="$node_firewall_rule" >/dev/null ||
+    fail 'Task 11a node-probe firewalld rule expired before the denial probe'
+  kill -0 -- "-$node_listener_pid" 2>/dev/null ||
+    fail 'Task 11a node listener stopped before the denial probe'
+  negative=$(network_probe blocked "$gateway_namespace" task11a-probe \
+    "$node_ip" task11a-network-negative)
+  firewall-cmd --zone="$node_firewall_zone" \
+    --query-rich-rule="$node_firewall_rule" >/dev/null ||
+    fail 'Task 11a node-probe firewalld rule expired during the denial probe'
+  kill -0 -- "-$node_listener_pid" 2>/dev/null ||
+    fail 'Task 11a node listener stopped during the denial probe'
+  network_record_denial node-https-denied "$gateway_namespace/task11a-probe" \
+    "$node_ip" "$namespace/task11a-control" "$node_ip" "$positive" "$negative"
+  record node-https-denied blocked "$negative"
+  remove_node_firewall_rule || fail 'Task 11a node-probe firewalld rule could not be removed'
+  stop_node_listener || fail 'Task 11a node listener could not be stopped'
+  positive=$(proxy_probe connected api.openai.com task11a-network-positive)
+  negative=$(proxy_probe blocked blocked.example.invalid task11a-network-negative)
+  network_record_denial squid-denied "$namespace/cairn-0" \
+    blocked.example.invalid "$namespace/cairn-0" api.openai.com \
+    "$positive" "$negative"
+  record squid-denied blocked "$negative"
+  complete_step
+  begin_step label-inventory
+  local labels
+  labels=$(bounded 20s "$kubectl" get namespaces -o json)
+  jq -e --arg namespace "$namespace" --arg baseline "$REFERENCE_BASELINE_NAMESPACE" '[.items[] |
+      select(.metadata.labels["cairn.example.invalid/instance"] != null) |
+      .metadata.name] | sort == ([$baseline,$namespace] | sort)' \
+    <<<"$labels" >/dev/null ||
+    fail 'Task 11a namespace label inventory is incomplete'
+  (set -o noclobber; jq -c '[.items[] |
+      select(.metadata.labels["cairn.example.invalid/instance"] != null) |
+      {namespace:.metadata.name,
+       instance_label:.metadata.labels["cairn.example.invalid/instance"],
+       owner:(.metadata.labels["cairn.example.invalid/acceptance-owner"] //
+         .metadata.labels["cairn.example.invalid/posture-owner"]),
+       status:"administrative"}] | sort_by(.namespace)' \
+    <<<"$labels" >"$label_file")
+  record label-inventory complete complete
+  complete_step
+}
+
+prove_secret_exclusion() {
+  bounded 30s "$host_python" - "$REFERENCE_POSTURE_OPENAI_API_KEY_FILE" \
+    "$REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE" "$preflight_file" "$checks_file" \
+    "$pv_file" "$runtime_file" "$network_file" "$label_file" \
+    "$gateway_pre_file" "$gateway_post_file" <<'PY'
+import sys
+
+secret_paths = sys.argv[1:3]
+evidence_paths = sys.argv[3:]
+secrets = [open(path, "rb").read().rstrip(b"\n") for path in secret_paths]
+if any(not value for value in secrets):
+    raise SystemExit("empty Secret source")
+for path in evidence_paths:
+    payload = open(path, "rb").read()
+    if any(value in payload for value in secrets):
+        raise SystemExit("Secret value reached evidence material")
+PY
+}
+
+write_report() {
+  local report_input="$temporary/report-input.json"
+  (set -o noclobber; jq -nc --arg revision "$repository_revision" --arg run_id "$run_id" \
+    --slurpfile preflight "$preflight_file" --slurpfile checks "$checks_file" \
+    --slurpfile pvs "$pv_file" --slurpfile network "$network_file" \
+    --slurpfile runtime "$runtime_file" --slurpfile labels "$label_file" \
+    --slurpfile gateway_pre "$gateway_pre_file" --slurpfile gateway_post "$gateway_post_file" \
+    '{revision:$revision,run_id:$run_id,
+      preflight:$preflight[0],checks:$checks,
+      pv_observations:$pvs[0],runtime_observations:$runtime[0],
+      network_observations:$network,label_inventory:$labels[0],
+      gateway_observations:{pre:$gateway_pre[0],post:$gateway_post[0]}}' >"$report_input")
+  bounded 30s "$host_python" "$state" build-report <"$report_input" |
+    bounded 30s "$host_python" "$state" write-report "$report_path"
+}
+
+preflight
+if [[ "$mode" == preflight ]]; then
+  printf 'reference Task 11a posture preflight passed; no mutation occurred\n'
+  exit 0
+fi
+
+start_progress
+begin_step gateway-prestate-recheck
+collect_gateway_inventory pre >"$temporary/gateway-recheck.json"
+jq -e --slurpfile expected "$gateway_pre_file" '. == $expected[0]' \
+  "$temporary/gateway-recheck.json" >/dev/null ||
+  fail 'gateway pre-state drifted after preflight'
+record preflight validated validated
+complete_step
+mutation_started=true
+begin_step gateway-apply
+apply_gateway
+complete_step
+begin_step gateway-poststate
+collect_gateway_inventory post >"$gateway_post_file"
+complete_step
+begin_step namespace-apply
+apply_namespace
+complete_step
+begin_step secret-apply
+apply_secrets
+complete_step
+begin_step instance-apply
+render_and_apply_instance
+complete_step
+bootstrap_instance
+prove_posture
+begin_step temporary-cleanup
+if ! cleanup_temporary_resources; then
+  temporary_cleanup_complete=true
+  fail 'temporary helper cleanup could not be verified'
+fi
+temporary_cleanup_complete=true
+record probe-cleanup complete complete
+complete_step
+begin_step secret-screen
+prove_secret_exclusion
+record secret-scan clean clean
+complete_step
+begin_step success-report
+write_report
+run_succeeded=true
+complete_step
+printf 'reference Task 11a posture evidence written to %s\n' "$report_path"

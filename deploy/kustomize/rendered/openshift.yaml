@@ -1,0 +1,228 @@
+apiVersion: v1
+automountServiceAccountToken: false
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    schema_version: cairn.config/v1
+    # REPLACE PER INSTANCE, and deliberately not a valid UUID so that
+    # forgetting to is a refusal rather than a diff a reviewer might miss.
+    # A well-formed placeholder loads silently, and two instances sharing
+    # an identity would accept each other's backup bundles — the I-41
+    # guard compares exactly this value, so a shared one disarms it. This
+    # fails configuration loading at startup, naming the field.
+    instance_id: REPLACE_WITH_PER_INSTANCE_UUID
+    mode: production
+    http:
+      # In-cluster only: the Service is the boundary, not the bind
+      # address (I-12). Both values are already permitted.
+      host: 0.0.0.0
+      port: 8000
+    paths:
+      data: /var/lib/cairn
+      # I-92's adapter-credential directory, and the mount point of the
+      # Secret below. With graphiti disabled nothing reads it.
+      credentials: /var/run/secrets/cairn
+    attic:
+      enabled: true
+    graphiti:
+      # Off in the base: the FalkorDB workload is included by choice
+      # (I-91), and the component and overlays that add it turn this on.
+      # An instance with this false opens no index connection and needs
+      # no adapter credentials at all.
+      enabled: false
+    delivery:
+      interval_seconds: 5
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn
+spec:
+  ports:
+  - name: http
+    port: 8000
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  serviceName: cairn
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: cairn
+        app.kubernetes.io/name: cairn
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - serve
+        - --config
+        - /etc/cairn/config.yaml
+        image: cairn:v0.1.0
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: http
+          periodSeconds: 20
+        name: cairn
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: http
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /health/startup
+            port: http
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /var/lib/cairn
+          name: data
+        - mountPath: /etc/cairn
+          name: config
+          readOnly: true
+        - mountPath: /var/run/secrets/cairn
+          name: credentials
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      initContainers:
+      - args:
+        - migrate
+        - --config
+        - /etc/cairn/config.yaml
+        image: cairn:v0.1.0
+        name: migrate
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /var/lib/cairn
+          name: data
+        - mountPath: /etc/cairn
+          name: config
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: cairn
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - configMap:
+          name: cairn-config
+        name: config
+      - name: credentials
+        secret:
+          defaultMode: 288
+          optional: true
+          secretName: cairn-credentials
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 256Mi
+        name: tmp
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        app.kubernetes.io/instance: cairn
+        app.kubernetes.io/name: cairn
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOncePod
+      resources:
+        requests:
+          storage: 10Gi
+      volumeMode: Filesystem
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-allow-dns-egress
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  policyTypes:
+  - Ingress
+  - Egress

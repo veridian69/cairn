@@ -1,0 +1,35 @@
+.venv/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.env
+*.db
+*.db-shm
+*.db-wal
+# The catalogue is named catalogue.sqlite3, so SQLite's WAL sidecars are
+# *.sqlite3-shm/-wal and the *.db-* patterns above never matched them.
+# Opening a WAL database creates both, read-only connections included, so
+# merely inspecting a committed fixture in place leaves two untracked files
+# beside an artefact that is meant to be immutable.
+*.sqlite3-shm
+*.sqlite3-wal
+# P-69: an operator's own copies inside the Compose project. `.env` is
+# already covered above; these are the files and directories the
+# first-boot procedure creates beside it, and two of them hold
+# credentials — `falkordb.conf` carries the index's `requirepass` line.
+deploy/compose/config.yaml
+deploy/compose/falkordb.conf
+deploy/compose/credentials/
+deploy/compose/backups/
+
+# Repository-local linked worktrees.
+.worktree/
+.claude/worktrees/

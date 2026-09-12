@@ -1,0 +1,41 @@
+# The instance's `cairn.config/v1` document, bind-mounted read-only at
+# /etc/cairn/config.yaml. Copy it to `config.yaml` (which `.gitignore`
+# ignores) and give it a real `instance_id`.
+#
+# Every key is written explicitly rather than left to a schema default:
+# this file is an operator artefact, and a value that is only visible by
+# reading the Python is a value nobody audits. It is the same document
+# the Kustomize base's ConfigMap carries, and a test holds the two in
+# step — a Compose instance and a Kubernetes one load the same
+# configuration or the suite fails.
+schema_version: cairn.config/v1
+# REPLACE PER INSTANCE, and deliberately not a valid UUID so that
+# forgetting to is a refusal rather than a diff a reviewer might miss. A
+# well-formed placeholder loads silently, and two instances sharing an
+# identity would accept each other's backup bundles — the I-41 guard
+# compares exactly this value, so a shared one disarms it. This fails
+# configuration loading at startup, naming the field.
+instance_id: REPLACE_WITH_PER_INSTANCE_UUID
+mode: production
+http:
+  # The container's own address, not the host's: the published port is
+  # the boundary, and it is bound to 127.0.0.1 (I-12). Both values are
+  # already permitted.
+  host: 0.0.0.0
+  port: 8000
+paths:
+  data: /var/lib/cairn
+  # I-92's adapter-credential directory, and the mount point of the
+  # read-only bind below. With retrieval disabled nothing reads it.
+  credentials: /var/run/secrets/cairn
+attic:
+  enabled: true
+graphiti:
+  # Off, as in the base: the FalkorDB service is included by choice
+  # (I-91), and `compose.graphiti.yaml` is that choice. An instance with
+  # this false opens no index connection and needs no adapter credentials
+  # at all. Turning it on means three keys here and the overlay file —
+  # README.md's retrieval section has both halves.
+  enabled: false
+delivery:
+  interval_seconds: 5

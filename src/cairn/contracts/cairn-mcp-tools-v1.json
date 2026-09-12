@@ -1,0 +1,2472 @@
+{
+  "failureCodes": [
+    "invalid_request",
+    "authentication_failed",
+    "authorisation_denied",
+    "secret_rejected",
+    "not_found",
+    "idempotency_conflict",
+    "index_pending",
+    "stale_index",
+    "dependency_unavailable",
+    "instance_mismatch",
+    "internal_error"
+  ],
+  "protocolVersion": "2025-11-25",
+  "tools": [
+    {
+      "description": "Ingest an assertion into a scope as candidate memory.",
+      "inputSchema": {
+        "$defs": {
+          "FactBody": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "title": "Body",
+                "type": "string"
+              },
+              "valid_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid From"
+              },
+              "valid_to": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid To"
+              }
+            },
+            "required": [
+              "body"
+            ],
+            "title": "FactBody",
+            "type": "object"
+          },
+          "ScopeBody": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "title": "Realm",
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/SegmentBody"
+                },
+                "title": "Segments",
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "title": "ScopeBody",
+            "type": "object"
+          },
+          "SegmentBody": {
+            "additionalProperties": false,
+            "properties": {
+              "identifier": {
+                "title": "Identifier",
+                "type": "string"
+              },
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier"
+            ],
+            "title": "SegmentBody",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "classification": {
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "title": "Classification",
+            "type": "string"
+          },
+          "evidence_payload": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Payload"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/$defs/FactBody"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Observed At"
+          },
+          "requested_trust": {
+            "default": "candidate",
+            "enum": [
+              "candidate",
+              "validated",
+              "failed-approach"
+            ],
+            "title": "Requested Trust",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/$defs/ScopeBody"
+          },
+          "source_type": {
+            "enum": [
+              "agent-claim",
+              "verified-check",
+              "human"
+            ],
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "classification",
+          "source_type",
+          "facts",
+          "idempotency_key"
+        ],
+        "title": "IngestRequest",
+        "type": "object"
+      },
+      "name": "ingest",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "IngestResult": {
+            "additionalProperties": false,
+            "properties": {
+              "assertion_id": {
+                "title": "Assertion Id",
+                "type": "string"
+              },
+              "evidence_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Evidence Id"
+              },
+              "fact_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Fact Ids",
+                "type": "array"
+              }
+            },
+            "required": [
+              "assertion_id",
+              "fact_ids",
+              "evidence_id"
+            ],
+            "title": "IngestResult",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/IngestResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[IngestResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Promote facts to validated trust against an evidence reference.",
+      "inputSchema": {
+        "$defs": {
+          "EvidenceIdBody": {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_id": {
+                "title": "Evidence Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "evidence_id"
+            ],
+            "title": "EvidenceIdBody",
+            "type": "object"
+          },
+          "ExternalEvidenceBody": {
+            "additionalProperties": false,
+            "properties": {
+              "external_uri": {
+                "title": "External Uri",
+                "type": "string"
+              },
+              "payload_digest": {
+                "title": "Payload Digest",
+                "type": "string"
+              }
+            },
+            "required": [
+              "external_uri",
+              "payload_digest"
+            ],
+            "title": "ExternalEvidenceBody",
+            "type": "object"
+          },
+          "ScopeBody": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "title": "Realm",
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/SegmentBody"
+                },
+                "title": "Segments",
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "title": "ScopeBody",
+            "type": "object"
+          },
+          "SegmentBody": {
+            "additionalProperties": false,
+            "properties": {
+              "identifier": {
+                "title": "Identifier",
+                "type": "string"
+              },
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier"
+            ],
+            "title": "SegmentBody",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EvidenceIdBody"
+              },
+              {
+                "$ref": "#/$defs/ExternalEvidenceBody"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          },
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "target_classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "title": "Target Classification"
+          },
+          "target_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScopeBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "fact_ids",
+          "evidence",
+          "reason",
+          "idempotency_key"
+        ],
+        "title": "PromoteRequest",
+        "type": "object"
+      },
+      "name": "promote",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "PromoteResult": {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_id": {
+                "title": "Evidence Id",
+                "type": "string"
+              },
+              "promotions": {
+                "items": {
+                  "$ref": "#/$defs/PromotionPairBody"
+                },
+                "title": "Promotions",
+                "type": "array"
+              }
+            },
+            "required": [
+              "promotions",
+              "evidence_id"
+            ],
+            "title": "PromoteResult",
+            "type": "object"
+          },
+          "PromotionPairBody": {
+            "additionalProperties": false,
+            "properties": {
+              "derived_fact_id": {
+                "title": "Derived Fact Id",
+                "type": "string"
+              },
+              "source_fact_id": {
+                "title": "Source Fact Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_fact_id",
+              "derived_fact_id"
+            ],
+            "title": "PromotionPairBody",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/PromoteResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[PromoteResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Invalidate facts, optionally naming what supersedes them.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          },
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Superseded By"
+          }
+        },
+        "required": [
+          "fact_ids",
+          "reason",
+          "idempotency_key"
+        ],
+        "title": "InvalidateRequest",
+        "type": "object"
+      },
+      "name": "invalidate",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "InvalidateResult": {
+            "additionalProperties": false,
+            "properties": {
+              "fact_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Fact Ids",
+                "type": "array"
+              },
+              "invalidated_at": {
+                "title": "Invalidated At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "fact_ids",
+              "invalidated_at"
+            ],
+            "title": "InvalidateResult",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/InvalidateResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[InvalidateResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Create a principal in a realm.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "human",
+              "workload"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "kind",
+          "label",
+          "idempotency_key"
+        ],
+        "title": "CreatePrincipalRequest",
+        "type": "object"
+      },
+      "name": "create-principal",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "CreatePrincipalResult": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at": {
+                "title": "Created At",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "human",
+                  "workload"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "principal_id": {
+                "title": "Principal Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "principal_id",
+              "kind",
+              "label",
+              "created_at"
+            ],
+            "title": "CreatePrincipalResult",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/CreatePrincipalResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[CreatePrincipalResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Issue a credential, returning its plaintext exactly once.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "principal_id",
+          "idempotency_key"
+        ],
+        "title": "IssueCredentialRequest",
+        "type": "object"
+      },
+      "name": "issue-credential",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "IssueCredentialResult": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at": {
+                "title": "Created At",
+                "type": "string"
+              },
+              "credential_id": {
+                "title": "Credential Id",
+                "type": "string"
+              },
+              "expires_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Expires At"
+              },
+              "plaintext": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Plaintext"
+              },
+              "principal_id": {
+                "title": "Principal Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "credential_id",
+              "principal_id",
+              "expires_at",
+              "created_at",
+              "plaintext"
+            ],
+            "title": "IssueCredentialResult",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/IssueCredentialResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[IssueCredentialResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Revoke a credential.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "title": "Credential Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "credential_id",
+          "reason_code",
+          "idempotency_key"
+        ],
+        "title": "RevokeCredentialRequest",
+        "type": "object"
+      },
+      "name": "revoke-credential",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "RevokeCredentialResult": {
+            "additionalProperties": false,
+            "properties": {
+              "credential_id": {
+                "title": "Credential Id",
+                "type": "string"
+              },
+              "revoked_at": {
+                "title": "Revoked At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "credential_id",
+              "revoked_at"
+            ],
+            "title": "RevokeCredentialResult",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/RevokeCredentialResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[RevokeCredentialResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Create a grant over a scope prefix.",
+      "inputSchema": {
+        "$defs": {
+          "GrantBody": {
+            "additionalProperties": false,
+            "properties": {
+              "expires_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Expires At"
+              },
+              "operations": {
+                "items": {
+                  "enum": [
+                    "retrieve",
+                    "ingest",
+                    "promote",
+                    "invalidate",
+                    "audit-read",
+                    "grant-manage"
+                  ],
+                  "type": "string"
+                },
+                "title": "Operations",
+                "type": "array"
+              },
+              "principal_id": {
+                "title": "Principal Id",
+                "type": "string"
+              },
+              "read_clearance": {
+                "enum": [
+                  "public",
+                  "internal",
+                  "restricted"
+                ],
+                "title": "Read Clearance",
+                "type": "string"
+              },
+              "realm_id": {
+                "title": "Realm Id",
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/SegmentBody"
+                },
+                "title": "Segments",
+                "type": "array"
+              },
+              "write_classifications": {
+                "items": {
+                  "enum": [
+                    "public",
+                    "internal",
+                    "restricted"
+                  ],
+                  "type": "string"
+                },
+                "title": "Write Classifications",
+                "type": "array"
+              }
+            },
+            "required": [
+              "principal_id",
+              "realm_id",
+              "segments",
+              "operations",
+              "read_clearance",
+              "write_classifications"
+            ],
+            "title": "GrantBody",
+            "type": "object"
+          },
+          "SegmentBody": {
+            "additionalProperties": false,
+            "properties": {
+              "identifier": {
+                "title": "Identifier",
+                "type": "string"
+              },
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier"
+            ],
+            "title": "SegmentBody",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "$ref": "#/$defs/GrantBody"
+          },
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "grant",
+          "idempotency_key"
+        ],
+        "title": "CreateGrantRequest",
+        "type": "object"
+      },
+      "name": "create-grant",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "CreateGrantResult": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at": {
+                "title": "Created At",
+                "type": "string"
+              },
+              "grant_id": {
+                "title": "Grant Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "grant_id",
+              "created_at"
+            ],
+            "title": "CreateGrantResult",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/CreateGrantResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[CreateGrantResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Revoke a grant, including a self-issuer grant.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "grant_id",
+          "reason_code",
+          "idempotency_key"
+        ],
+        "title": "RevokeGrantRequest",
+        "type": "object"
+      },
+      "name": "revoke-grant",
+      "outputSchema": {
+        "$defs": {
+          "AuditReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "chain_identity": {
+                "title": "Chain Identity",
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "title": "Chain Kind",
+                "type": "string"
+              },
+              "event_hash": {
+                "title": "Event Hash",
+                "type": "string"
+              },
+              "event_id": {
+                "title": "Event Id",
+                "type": "string"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "sequence": {
+                "title": "Sequence",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "event_id",
+              "chain_kind",
+              "chain_identity",
+              "sequence",
+              "recorded_at",
+              "event_hash"
+            ],
+            "title": "AuditReceiptBody",
+            "type": "object"
+          },
+          "MutationReceiptBody": {
+            "additionalProperties": false,
+            "properties": {
+              "command_digest": {
+                "title": "Command Digest",
+                "type": "string"
+              },
+              "mutation_id": {
+                "title": "Mutation Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mutation_id",
+              "command_digest"
+            ],
+            "title": "MutationReceiptBody",
+            "type": "object"
+          },
+          "RevokeGrantResult": {
+            "additionalProperties": false,
+            "properties": {
+              "grant_id": {
+                "title": "Grant Id",
+                "type": "string"
+              },
+              "revoked_at": {
+                "title": "Revoked At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "grant_id",
+              "revoked_at"
+            ],
+            "title": "RevokeGrantResult",
+            "type": "object"
+          },
+          "WireOutcome": {
+            "enum": [
+              "committed",
+              "replayed"
+            ],
+            "title": "WireOutcome",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/$defs/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/$defs/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/$defs/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/$defs/RevokeGrantResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[RevokeGrantResult]",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Read audit events under a scope prefix.",
+      "inputSchema": {
+        "$defs": {
+          "SegmentBody": {
+            "additionalProperties": false,
+            "properties": {
+              "identifier": {
+                "title": "Identifier",
+                "type": "string"
+              },
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier"
+            ],
+            "title": "SegmentBody",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "after_sequence": {
+            "default": 0,
+            "title": "After Sequence",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 100,
+            "description": "Between 1 and 500. A limit of 1 cannot make pagination progress: a successful read appends its own audit event to the chain it reads, so next_after_sequence never returns null at that limit.",
+            "title": "Limit",
+            "type": "integer"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "scope_prefix": {
+            "items": {
+              "$ref": "#/$defs/SegmentBody"
+            },
+            "title": "Scope Prefix",
+            "type": "array"
+          }
+        },
+        "required": [
+          "realm_id",
+          "scope_prefix"
+        ],
+        "title": "ReadAuditEventsRequest",
+        "type": "object"
+      },
+      "name": "read-audit-events",
+      "outputSchema": {
+        "$defs": {
+          "AuditEvent": {
+            "additionalProperties": false,
+            "description": "The canonical audit event. Every key is always present; a value that does not apply is null. These are the exact bytes the hash chain covers.",
+            "properties": {
+              "action_code": {
+                "type": "string"
+              },
+              "action_kind": {
+                "enum": [
+                  "data",
+                  "administration",
+                  "system"
+                ],
+                "type": "string"
+              },
+              "affected_assertion_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "affected_evidence_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "affected_fact_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "affected_grant_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "chain_identity": {
+                "type": "string"
+              },
+              "chain_kind": {
+                "enum": [
+                  "instance",
+                  "realm"
+                ],
+                "type": "string"
+              },
+              "classification_transition": {
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "enum": [
+                      "public",
+                      "internal",
+                      "restricted",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "to": {
+                    "enum": [
+                      "public",
+                      "internal",
+                      "restricted"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "command_digest": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "correlation_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "credential_verifier_id": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "event_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "evidence_digest": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "evidence_reference": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "grant_id": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "idempotency_key": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mutation_id": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outcome": {
+                "enum": [
+                  "allow",
+                  "deny",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "previous_hash": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "principal_id": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason_code": {
+                "type": "string"
+              },
+              "recorded_at": {
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$",
+                "type": "string"
+              },
+              "replay_of_mutation_id": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requested_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "realm": {
+                    "type": "string"
+                  },
+                  "segments": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "realm",
+                  "segments"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "safe_request_fingerprint": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "schema": {
+                "const": "cairn.audit/v1",
+                "type": "string"
+              },
+              "sequence": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "source_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "realm": {
+                    "type": "string"
+                  },
+                  "segments": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "realm",
+                  "segments"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "target_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "realm": {
+                    "type": "string"
+                  },
+                  "segments": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "realm",
+                  "segments"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "trust_transition": {
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "enum": [
+                      "candidate",
+                      "validated",
+                      "failed-approach",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "to": {
+                    "enum": [
+                      "candidate",
+                      "validated",
+                      "failed-approach"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "action_code",
+              "action_kind",
+              "affected_assertion_ids",
+              "affected_evidence_ids",
+              "affected_fact_ids",
+              "affected_grant_ids",
+              "chain_identity",
+              "chain_kind",
+              "classification_transition",
+              "command_digest",
+              "correlation_id",
+              "credential_verifier_id",
+              "event_id",
+              "evidence_digest",
+              "evidence_reference",
+              "grant_id",
+              "idempotency_key",
+              "mutation_id",
+              "outcome",
+              "previous_hash",
+              "principal_id",
+              "reason_code",
+              "recorded_at",
+              "replay_of_mutation_id",
+              "requested_scope",
+              "safe_request_fingerprint",
+              "schema",
+              "sequence",
+              "source_scope",
+              "target_scope",
+              "trust_transition"
+            ],
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/$defs/AuditEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_after_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After Sequence"
+          }
+        },
+        "required": [
+          "events",
+          "next_after_sequence"
+        ],
+        "title": "ReadAuditEventsResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Retrieve facts reconciled against the catalogue.",
+      "inputSchema": {
+        "$defs": {
+          "ScopeBody": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "title": "Realm",
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/SegmentBody"
+                },
+                "title": "Segments",
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "title": "ScopeBody",
+            "type": "object"
+          },
+          "SegmentBody": {
+            "additionalProperties": false,
+            "properties": {
+              "identifier": {
+                "title": "Identifier",
+                "type": "string"
+              },
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier"
+            ],
+            "title": "SegmentBody",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "I-71/P-44. ``trust_filters`` empty or absent means the I-80\n``validated`` default; duplicates are rejected by strict parsing rather\nthan silently collapsed. No classification ceiling field exists — it is\nderived from the caller's grants server-side and a caller may not ask\nfor one it does not hold.",
+        "properties": {
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "As Of"
+          },
+          "budget": {
+            "description": "Disclosure budget in bytes of fact body, 1 to 1048576. Whole facts are appended until the next would not fit.",
+            "title": "Budget",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Opaque UTF-8, 1 byte to 8 KiB after encoding. Cairn owns no query syntax and passes this to the index unparsed.",
+            "title": "Query",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/$defs/ScopeBody"
+          },
+          "trust_filters": {
+            "items": {
+              "enum": [
+                "candidate",
+                "validated",
+                "failed-approach"
+              ],
+              "type": "string"
+            },
+            "title": "Trust Filters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "query",
+          "budget"
+        ],
+        "title": "RetrieveRequest",
+        "type": "object"
+      },
+      "name": "retrieve",
+      "outputSchema": {
+        "$defs": {
+          "RetrievedFactBody": {
+            "additionalProperties": false,
+            "description": "I-77: exactly the I-67 stored fields, nothing invented for the wire.\n\nThe provenance columns appear in their two lawful forms — ``assertion_id``\nfor an ingested fact, or ``derived_from``/``promoted_by``/``evidence_id``\nfor a promoted one — so the shape mirrors the catalogue's own\n``ck_facts_provenance_form`` rather than flattening the distinction.\n``invalidated_at`` carries an invalidation only where this ``as_of``\ncan see it (P-42), which in v0.1 means it is always null: I-79 withholds\nthe fact entirely once its invalidation is visible, so any hit's\ninvalidation necessarily lies in the caller's future. The field remains\npart of the closed I-77 hit shape regardless.",
+            "properties": {
+              "assertion_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Assertion Id"
+              },
+              "body": {
+                "title": "Body",
+                "type": "string"
+              },
+              "classification": {
+                "enum": [
+                  "public",
+                  "internal",
+                  "restricted"
+                ],
+                "title": "Classification",
+                "type": "string"
+              },
+              "derived_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Derived From"
+              },
+              "evidence_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Evidence Id"
+              },
+              "fact_id": {
+                "title": "Fact Id",
+                "type": "string"
+              },
+              "invalidated_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Invalidated At"
+              },
+              "promoted_by": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Promoted By"
+              },
+              "recorded_at": {
+                "title": "Recorded At",
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/$defs/ScopeBody"
+              },
+              "trust": {
+                "enum": [
+                  "candidate",
+                  "validated",
+                  "failed-approach"
+                ],
+                "title": "Trust",
+                "type": "string"
+              },
+              "valid_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid From"
+              },
+              "valid_to": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Valid To"
+              }
+            },
+            "required": [
+              "fact_id",
+              "body",
+              "scope",
+              "classification",
+              "trust",
+              "recorded_at"
+            ],
+            "title": "RetrievedFactBody",
+            "type": "object"
+          },
+          "ScopeBody": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "title": "Realm",
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/SegmentBody"
+                },
+                "title": "Segments",
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "title": "ScopeBody",
+            "type": "object"
+          },
+          "SegmentBody": {
+            "additionalProperties": false,
+            "properties": {
+              "identifier": {
+                "title": "Identifier",
+                "type": "string"
+              },
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier"
+            ],
+            "title": "SegmentBody",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "I-77's bare result: a read returns no mutation envelope, as on the\nother two read routes. ``budget_exhausted`` distinguishes \"that is\neverything\" from \"there was more\" (I-82).",
+        "properties": {
+          "budget_consumed": {
+            "title": "Budget Consumed",
+            "type": "integer"
+          },
+          "budget_exhausted": {
+            "title": "Budget Exhausted",
+            "type": "boolean"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/$defs/RetrievedFactBody"
+            },
+            "title": "Hits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hits",
+          "budget_consumed",
+          "budget_exhausted"
+        ],
+        "title": "RetrieveResult",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Report the contract identity, product version and contract digest.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "instance",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_digest": {
+            "title": "Contract Digest",
+            "type": "string"
+          },
+          "contract_identity": {
+            "title": "Contract Identity",
+            "type": "string"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "mcp_contract_digest": {
+            "title": "Mcp Contract Digest",
+            "type": "string"
+          },
+          "product_version": {
+            "title": "Product Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "product_version",
+          "contract_identity",
+          "contract_digest"
+        ],
+        "title": "InstanceResult",
+        "type": "object"
+      }
+    }
+  ]
+}

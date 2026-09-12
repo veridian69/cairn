@@ -1,0 +1,36 @@
+# The instance's half of I-93's gateway path: Cairn may open a connection
+# to the gateway's proxy port in `cairn-egress`, and to nothing else
+# outside its own namespace. Direct egress to a provider endpoint stays
+# denied by the base's default-deny, which is the property the acceptance
+# matrix proves by attempting it (P-68 stage 2).
+#
+# It lives in this overlay rather than in the component because the
+# gateway is one per cluster, deployed from
+# `../egress-gateway`, and an instance on a cluster without
+# one should not carry a rule pointing at a namespace that does not
+# exist.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cairn-allow-gateway-egress
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: cairn
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cairn-egress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cairn-egress-gateway
+      ports:
+        - protocol: TCP
+          port: 3128

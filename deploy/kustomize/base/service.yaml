@@ -1,0 +1,24 @@
+# I-12: a ClusterIP Service and nothing else. No Ingress and no Route
+# live in the base, and none is added by the Kubernetes or OpenShift
+# overlays of v0.1 — publishing an instance externally is explicit
+# operator work, not a default.
+#
+# It also governs the StatefulSet, which is why the name is referenced by
+# spec.serviceName there.
+apiVersion: v1
+kind: Service
+metadata:
+  name: cairn
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: http

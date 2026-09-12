@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Fetch the pinned kubectl into build/tools, verified against
+# deploy/images.lock (P-61).
+#
+# Separate from `make render` on purpose. P-61 has the render target fail
+# with an instruction when the binary is absent rather than fetch it,
+# because `make render` runs inside `make check`: a gate that silently
+# reaches the network is a gate that can pass for reasons unrelated to
+# the change under test. Fetching is therefore an explicit act — an
+# operator runs this once, and CI runs it as its own step.
+#
+# The download and verification are the Drystane foundation's
+# scripts/kind-acceptance block, unchanged: same binary, same pin, same
+# proven mechanics.
+set -euo pipefail
+
+lock_value() {
+  local key=$1
+  awk -F= -v key="$key" \
+    '$1 == key {sub(/^[^=]*=/, ""); print; found=1; exit}
+     END {if (!found) exit 1}' \
+    deploy/images.lock
+}
+
+kubectl_version=$(lock_value KUBECTL_VERSION)
+kubectl_sha256=$(lock_value KUBECTL_LINUX_AMD64_SHA256)
+
+if [[ ! "$kubectl_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'download checksum is invalid\n' >&2
+  exit 1
+fi
+
+mkdir -p build/tools
+kubectl=build/tools/kubectl
+if [[ ! -x "$kubectl" ]] ||
+  [[ "$(sha256sum "$kubectl" | awk '{print $1}')" != "$kubectl_sha256" ]]; then
+  kubectl_download=$(mktemp)
+  curl -fsSLo "$kubectl_download" \
+    "https://dl.k8s.io/release/${kubectl_version}/bin/linux/amd64/kubectl"
+  printf '%s  %s\n' "$kubectl_sha256" "$kubectl_download" |
+    sha256sum -c - >/dev/null
+  install -m 0755 "$kubectl_download" "$kubectl"
+  rm -f -- "$kubectl_download"
+fi
+
+client_version=$(
+  "$kubectl" version --client --output=json |
+    sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' |
+    head -n 1
+)
+if [[ "$client_version" != "$kubectl_version" ]]; then
+  printf 'kubectl version mismatch\n' >&2
+  exit 1
+fi
+
+printf 'kubectl %s ready at %s\n' "$client_version" "$kubectl"

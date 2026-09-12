@@ -1,0 +1,83 @@
+# I-93's closed posture around the one workload in the cluster that is
+# allowed to leave it. The gateway is the only route out, so its policies
+# are the last place where a mistake stays inside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-gateway-default-deny
+  namespace: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Who may ask for a tunnel: Cairn pods, in namespaces that carry the
+# instance label, and nothing else on the cluster. Both halves of the
+# selector matter — the namespace label is applied by whoever creates an
+# instance's namespace, and the pod label by the base — so an unrelated
+# workload cannot borrow the cluster's one route to the internet by
+# naming itself `cairn`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-gateway-allow-cairn-ingress
+  namespace: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: cairn.example.invalid/instance
+                operator: Exists
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cairn
+      ports:
+        - protocol: TCP
+          port: 3128
+---
+# Where it may go: DNS, so it can resolve an allow-listed name, and 443,
+# because a CONNECT tunnel is the only thing it does. The allow-list
+# itself is squid's job — a NetworkPolicy cannot express an FQDN, which
+# is the whole reason I-93 puts a proxy here rather than a policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-gateway-allow-egress
+  namespace: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443

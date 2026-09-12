@@ -1,0 +1,13 @@
+# The target's freshly provisioned root-owned data volume needs Cairn's image
+# group as its supplementary filesystem group. This is intentionally outside
+# the portable base and OpenShift overlay.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cairn
+spec:
+  template:
+    spec:
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch

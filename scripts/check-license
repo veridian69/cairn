@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+expected_license=c10095c069d6fbcbeb5680e57f0f2714224ead62be325a19d79c894dbdb2334a
+expected_full_license=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+actual_license=$(sha256sum LICENSE.md | cut -d' ' -f1)
+actual_full_license=$(sha256sum LICENSE-Apache-2.0.txt | cut -d' ' -f1)
+test "$actual_license" = "$expected_license"
+test "$actual_full_license" = "$expected_full_license"
+python3 ./scripts/check-release-inventory \
+  uv.lock docs/evidence/release/v0.1.0-inventory.md
+test -s NOTICE.md
+# git grep, deliberately: it is guaranteed present (checkout just ran), so
+# there is no binary whose absence could silently pass this check - CI ran
+# for months with rg missing, exit 127 falling through the if as "no match
+# found". It also searches tracked files only, which is the right scope for
+# a licence tripwire: only committed content can merge and ship, and it can
+# never wander into .venv and trip on a dependency that merely mentions the
+# licence. An untracked local file is not caught until added; it also cannot
+# merge until added.
+if git grep -nIiE 'a[g]pl|gnu[[:space:]-]+affero' -- . ':!uv.lock'; then
+  exit 1
+fi

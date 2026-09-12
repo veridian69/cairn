@@ -1,0 +1,15 @@
+# FalkorDB's pinned image has no declared USER. UID 10001 is the measured
+# unnamed image UID; primary group 0 retains read-only Secret access, while
+# fsGroup owns the writable derived-index volume. This is a target-only patch.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: falkordb
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 0
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch

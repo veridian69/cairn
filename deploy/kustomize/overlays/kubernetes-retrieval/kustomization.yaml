@@ -1,0 +1,25 @@
+# The measured vanilla-Kubernetes production choice with retrieval enabled.
+#
+# This composes the ordinary Kubernetes overlay rather than repeating its
+# storage policy, then makes the complete retrieval choice explicit: index,
+# configuration, gateway path and the target-only ownership patches. The base
+# and OpenShift overlays remain portable and index-free.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../kubernetes
+  - networkpolicy-gateway-egress.yaml
+
+components:
+  - ../../components/falkordb
+
+patches:
+  - path: configmap.yaml
+  - path: patch-cairn-proxy.yaml
+  - path: patch-cairn-security.yaml
+  - path: patch-falkordb-security.yaml
+  - path: patch-falkordb-storage.yaml
+    target:
+      kind: StatefulSet
+      name: falkordb

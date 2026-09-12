@@ -1,0 +1,1535 @@
+#!/usr/bin/env bash
+# Target-sensitive acceptance for an explicitly configured reference host.
+# It deliberately preserves the original PVC and candidate on failure; use the
+# Kubernetes recovery runbook for rollback and cleanup decisions.
+set -euo pipefail
+set +x
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+host_python=$(command -v python3 2>/dev/null || true)
+[[ -n "$host_python" && -x "$host_python" ]] || {
+  printf 'reference acceptance requires host python3 on PATH\n' >&2
+  exit 2
+}
+
+: "${IMAGE:?IMAGE is required and must name the locally built Cairn image}"
+if ! cairn_image_reference=$("$host_python" \
+  scripts/reference_acceptance_state.py canonical-image-reference "$IMAGE"); then
+  exit 2
+fi
+[[ "$cairn_image_reference" != *:latest && "$cairn_image_reference" != *:latest@* ]] || {
+  printf 'IMAGE must not use the latest tag\n' >&2
+  exit 2
+}
+mode=${1:-run}
+[[ "$mode" == run || "$mode" == preflight ]] || { printf 'usage: %s [run|preflight]\n' "$0" >&2; exit 2; }
+: "${REFERENCE_ACCEPTANCE_RUN_ID:?REFERENCE_ACCEPTANCE_RUN_ID is required}"
+: "${REFERENCE_ACCEPTANCE_REPORT:?REFERENCE_ACCEPTANCE_REPORT is required}"
+: "${REFERENCE_EXPECTED_HOST:?REFERENCE_EXPECTED_HOST is required}"
+: "${REFERENCE_NODE_NAME:?REFERENCE_NODE_NAME is required}"
+: "${REFERENCE_EXPECTED_DISTRIBUTION:?REFERENCE_EXPECTED_DISTRIBUTION is required}"
+: "${REFERENCE_EXPECTED_SELINUX:?REFERENCE_EXPECTED_SELINUX is required}"
+: "${REFERENCE_PROVIDER_SECRET_FILE:?REFERENCE_PROVIDER_SECRET_FILE is required}"
+: "${REFERENCE_ACCEPTANCE_NAMESPACE:?REFERENCE_ACCEPTANCE_NAMESPACE is required}"
+: "${REFERENCE_GATEWAY_NAMESPACE:?REFERENCE_GATEWAY_NAMESPACE is required}"
+: "${REFERENCE_FOREIGN_NAMESPACE:?REFERENCE_FOREIGN_NAMESPACE is required}"
+: "${REFERENCE_ENFORCEMENT_NAMESPACE:?REFERENCE_ENFORCEMENT_NAMESPACE is required}"
+: "${REFERENCE_SHAPES_NAMESPACE:?REFERENCE_SHAPES_NAMESPACE is required}"
+run_id=$REFERENCE_ACCEPTANCE_RUN_ID
+[[ "$run_id" =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || { printf 'invalid REFERENCE_ACCEPTANCE_RUN_ID\n' >&2; exit 2; }
+namespace=$REFERENCE_ACCEPTANCE_NAMESPACE
+gateway_namespace=$REFERENCE_GATEWAY_NAMESPACE
+foreign_namespace=$REFERENCE_FOREIGN_NAMESPACE
+enforcement_namespace=$REFERENCE_ENFORCEMENT_NAMESPACE
+shapes_namespace=$REFERENCE_SHAPES_NAMESPACE
+temporary=$(mktemp -d)
+checks_file="$temporary/checks.jsonl"
+: >"$checks_file"
+status=failed
+completed_stage=preflight
+evidence_active=false
+
+lock_value() {
+  local key=$1
+  awk -F= -v key="$key" \
+    '$1 == key {sub(/^[^=]*=/, ""); print; found=1; exit}
+     END {if (!found) exit 1}' deploy/images.lock
+}
+
+target_kubernetes_version=$(lock_value TARGET_KUBERNETES_VERSION)
+target_cilium_version=$(lock_value TARGET_CILIUM_VERSION)
+target_cilium_agent_image=$(lock_value TARGET_CILIUM_AGENT_IMAGE)
+target_cilium_operator_image=$(lock_value TARGET_CILIUM_OPERATOR_IMAGE)
+target_cilium_envoy_image=$(lock_value TARGET_CILIUM_ENVOY_IMAGE)
+kubectl_version=$(lock_value KUBECTL_VERSION)
+kubectl_sha256=$(lock_value KUBECTL_LINUX_AMD64_SHA256)
+falkordb_image=$(lock_value FALKORDB_IMAGE)
+egress_proxy_image=$(lock_value EGRESS_PROXY_IMAGE)
+cairn_lock_image=$(lock_value CAIRN_IMAGE)
+repository_revision=$(git rev-parse HEAD)
+report_path=$REFERENCE_ACCEPTANCE_REPORT
+[[ "$report_path" == build/reference-acceptance/* ]] || {
+  printf 'REFERENCE_ACCEPTANCE_REPORT must stay under build/reference-acceptance/\n' >&2
+  exit 2
+}
+i95_gaps='no cross-node policy on one node, and OpenShift unclaimed until its suite passes on a real cluster.'
+mutable_namespaced_resources=$("$host_python" scripts/reference_acceptance_state.py mutable-resources)
+
+fail() {
+  printf 'reference acceptance failed: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ "$egress_proxy_image" =~ @sha256:[0-9a-f]{64}$ ]] || fail 'egress proxy image pin is not a digest'
+
+record() {
+  local name=$1 stage=$2 expected=$3 observed=$4 outcome=passed
+  [[ "$expected" == "$observed" ]] || outcome=failed
+  jq -e -s --arg name "$name" --arg stage "$stage" \
+    'map(select(.name == $name and .stage == $stage)) | length == 0' \
+    "$checks_file" >/dev/null || fail "duplicate check $stage/$name"
+  jq -nc --arg name "$name" --arg stage "$stage" \
+    --arg expected "$expected" --arg observed "$observed" --arg outcome "$outcome" \
+    '{name:$name,stage:$stage,expected:$expected,observed:$observed,outcome:$outcome}' \
+    >>"$checks_file"
+  [[ "$outcome" == passed ]] || fail "$name: expected $expected, observed $observed"
+  printf '  %-42s %s\n' "$name" "$observed"
+}
+
+json_array_or_empty() {
+  jq -s '.' 2>/dev/null || printf '[]\n'
+}
+
+emit_report() {
+  local render_json image_json cilium_json
+  render_json=$(for file in deploy/kustomize/rendered/*.yaml "$temporary"/target.yaml; do
+    [[ -f "$file" ]] || continue
+    jq -nc --arg file "${file#./}" --arg sha256 "$(sha256sum "$file" | awk '{print $1}')" \
+      '{file:$file,sha256:$sha256}'
+  done | json_array_or_empty)
+  image_json=$(kubectl get pods -A -l 'app.kubernetes.io/name in (cairn,falkordb)' \
+    -o json 2>/dev/null | jq '[.items[] | .status.containerStatuses[]? |
+      {image:.image,image_id:.imageID}] | unique' 2>/dev/null || printf '[]')
+  if ! cilium_json=$("$host_python" \
+    scripts/reference_acceptance_state.py collect-cilium-images); then
+    cilium_json='[]'
+  fi
+  jq -n \
+    --arg status "$status" --arg stage "$completed_stage" \
+    --arg repository_revision "$repository_revision" \
+    --arg distribution "$distribution" --arg kubernetes_version "$kubernetes_version" \
+    --arg container_runtime "$container_runtime" --arg storage_class "$storage_class" \
+    --arg cni "$cni" --arg cilium_chart "$cilium_chart" \
+    --arg run_id "$run_id" --arg image_revision "${image_revision:-}" \
+    --arg cairn_image "$cairn_image_reference" --arg image_digest "${cairn_image_digest:-}" \
+    --arg cairn_local_image_id "${cairn_local_image_id:-}" \
+    --arg cairn_target_digest "${cairn_target_digest:-}" \
+    --arg cairn_platform_manifest_digest "${cairn_platform_manifest_digest:-}" \
+    --arg cairn_config_digest "${cairn_config_digest:-}" \
+    --arg cairn_runtime_image_id "${cairn_runtime_image_id:-}" \
+    --argjson backup_barrier_ms "${backup_barrier_ms:-null}" \
+    --argjson backup_command_started_ns "${backup_command_started_ns:-null}" \
+    --argjson backup_mutation_completed_ns "${backup_mutation_completed_ns:-null}" \
+    --argjson backup_child_pid "${backup_child_pid:-null}" \
+    --arg backup_child_start_ticks "${backup_child_start_ticks:-}" \
+    --argjson backup_child_alive_observed_ns "${backup_child_alive_observed_ns:-null}" \
+    --argjson backup_command_finished_ns "${backup_command_finished_ns:-null}" \
+    --arg gap "$i95_gaps" --argjson rendered_manifest_digests "$render_json" \
+    --argjson workload_images "$image_json" --argjson cilium_images "$cilium_json" \
+    --slurpfile checks "$checks_file" \
+    '{status:$status,stage:$stage,run_id:$run_id,repository_revision:$repository_revision,
+      image_revision:$image_revision,
+      preflight:{distribution:$distribution,kubernetes_version:$kubernetes_version,
+        container_runtime:$container_runtime,storage_class:$storage_class,cni:$cni,
+        cilium_chart:$cilium_chart},cilium_images:$cilium_images,
+      rendered_manifest_digests:$rendered_manifest_digests,
+      workload_images:$workload_images,cairn_image:$cairn_image,
+      image_digest:$image_digest,cairn_local_image_id:$cairn_local_image_id,
+      cairn_target_digest:$cairn_target_digest,
+      cairn_platform_manifest_digest:$cairn_platform_manifest_digest,
+      cairn_config_digest:$cairn_config_digest,
+      cairn_runtime_image_id:$cairn_runtime_image_id,
+      backup_barrier_ms:$backup_barrier_ms,
+      backup_command_started_ns:$backup_command_started_ns,
+      backup_mutation_completed_ns:$backup_mutation_completed_ns,
+      backup_child_pid:$backup_child_pid,
+      backup_child_start_ticks:$backup_child_start_ticks,
+      backup_child_alive_observed_ns:$backup_child_alive_observed_ns,
+      backup_command_finished_ns:$backup_command_finished_ns,
+      checks:$checks,gaps:[$gap]}' |
+    "$host_python" scripts/reference_acceptance_state.py build-report |
+    "$host_python" scripts/reference_acceptance_state.py write-report "$report_path"
+  printf 'report written to %s\n' "$report_path"
+}
+
+cleanup() {
+  local code=$? report_code=0
+  if [[ "$evidence_active" == true ]]; then
+    if emit_report; then
+      :
+    else
+      report_code=$?
+    fi
+  fi
+  rm -rf -- "$temporary"
+  if [[ "$code" -eq 0 && "$report_code" -ne 0 ]]; then
+    return "$report_code"
+  fi
+  return "$code"
+}
+trap cleanup EXIT
+
+validate_mutable_inventory() {
+  local inventory="$temporary/mutable-inventory.jsonl" target
+  : >"$inventory"
+  for target in "$namespace" "$gateway_namespace" "$foreign_namespace" \
+    "$enforcement_namespace" "$shapes_namespace"; do
+    if kubectl get namespace "$target" -o json >"$temporary/namespace.json" 2>/dev/null; then
+      jq -c '.' "$temporary/namespace.json" >>"$inventory"
+      kubectl get "$mutable_namespaced_resources" \
+        -n "$target" -o json 2>/dev/null | jq -c '.items[]' >>"$inventory"
+    fi
+  done
+  jq -s '.' "$inventory" |
+    "$host_python" scripts/reference_acceptance_state.py validate-ownership "$run_id" "$repository_revision" ||
+    fail 'unexpected mutable inventory exists; use the labelled recovery/cleanup route'
+}
+
+stamp_namespace_resources() {
+  local target=$1 resource
+  kubectl label namespace "$target" --overwrite \
+    cairn.example.invalid/acceptance-owner=task11 \
+    "cairn.example.invalid/acceptance-run=$run_id" \
+    "cairn.example.invalid/acceptance-revision=$repository_revision" >/dev/null
+  for resource in ${mutable_namespaced_resources//,/ }; do
+    if [[ -n $(kubectl get -n "$target" "$resource" -o name 2>/dev/null) ]]; then
+      kubectl label -n "$target" --overwrite "$resource" --all \
+        cairn.example.invalid/acceptance-owner=task11 \
+        "cairn.example.invalid/acceptance-run=$run_id" \
+        "cairn.example.invalid/acceptance-revision=$repository_revision" >/dev/null
+    fi
+  done
+}
+
+ensure_owned_namespace() {
+  local target=$1
+  kubectl create namespace "$target" --dry-run=client -o json |
+    jq --arg run "$run_id" --arg revision "$repository_revision" \
+      '.metadata.labels = ((.metadata.labels // {}) + {
+        "cairn.example.invalid/acceptance":"task11",
+        "cairn.example.invalid/acceptance-owner":"task11",
+        "cairn.example.invalid/acceptance-run":$run,
+        "cairn.example.invalid/acceptance-revision":$revision})' |
+    kubectl apply -f - >/dev/null
+}
+
+update_phase() {
+  local requested=$1 current
+  current=$(kubectl get configmap -n "$namespace" acceptance-state \
+    -o jsonpath='{.data.phase}')
+  "$host_python" scripts/reference_acceptance_state.py transition "$current" "$requested" >/dev/null ||
+    fail "unsafe phase transition $current -> $requested"
+  kubectl patch configmap -n "$namespace" acceptance-state --type=merge \
+    -p "{\"data\":{\"phase\":\"$requested\"}}" >/dev/null
+}
+
+preflight() {
+  [[ $(id -u) -eq 0 ]] || fail 'run as root on the configured reference host'
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    fail 'repository worktree has tracked changes'
+  fi
+  local unexpected_source
+  unexpected_source=$(git ls-files --others --exclude-standard |
+    awk '$0 !~ /^build\/reference-acceptance\// {print; exit}')
+  [[ -z "$unexpected_source" ]] || fail "repository worktree has untracked source: $unexpected_source"
+  record target-host preflight "$REFERENCE_EXPECTED_HOST" "$(hostname -s)"
+  distribution=$(awk -F= '
+    $1=="NAME" {gsub(/^"|"$/, "", $2); name=$2}
+    $1=="VERSION_ID" {gsub(/^"|"$/, "", $2); version=$2}
+    END {print name " " version}' /etc/os-release)
+  record distribution preflight "$REFERENCE_EXPECTED_DISTRIBUTION" "$distribution"
+  record selinux preflight "$REFERENCE_EXPECTED_SELINUX" "$(getenforce)"
+
+  local env_mode
+  env_mode=$(stat -c '%a %U:%G' "$REFERENCE_PROVIDER_SECRET_FILE" 2>/dev/null || true)
+  record provider-secret-source preflight '600 root:root' "$env_mode"
+
+  kubernetes_version=$(kubectl version -o json | jq -r '.serverVersion.gitVersion')
+  record kubernetes-version preflight "$target_kubernetes_version" "$kubernetes_version"
+  local client_version client_sha256
+  client_version=$(kubectl version --client -o json | jq -r '.clientVersion.gitVersion')
+  record kubectl-version preflight "$kubectl_version" "$client_version"
+  client_sha256=$(sha256sum "$(command -v kubectl)" | awk '{print $1}')
+  record kubectl-sha256 preflight "$kubectl_sha256" "$client_sha256"
+  container_runtime=$(kubectl get node "$REFERENCE_NODE_NAME" -o jsonpath='{.status.nodeInfo.containerRuntimeVersion}')
+  cni=Cilium
+  record node-ready preflight True \
+    "$(kubectl get node "$REFERENCE_NODE_NAME" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')"
+
+  cilium_chart=$(helm list -n kube-system -o json | jq -r \
+    '.[] | select(.name=="cilium") | .chart')
+  record cilium-chart preflight "cilium-${target_cilium_version#v}" "$cilium_chart"
+  local installed_images
+  installed_images=$(kubectl get pods -n kube-system -o json |
+    jq -r '[.items[] | .spec.containers[].image] | unique[]')
+  for expected in "$target_cilium_agent_image" "$target_cilium_operator_image" \
+    "$target_cilium_envoy_image"; do
+    grep -qxF "$expected" <<<"$installed_images" || fail "approved Cilium image absent: ${expected%%@*}"
+  done
+  local replacement
+  replacement=$(kubectl -n kube-system exec ds/cilium -- cilium-dbg status 2>/dev/null |
+    awk '$1 == "KubeProxyReplacement:" {print $2; exit}')
+  record kube-proxy-replacement preflight False "$replacement"
+
+  storage_class=cairn-local
+  record storage-provisioner preflight kubernetes.io/no-provisioner \
+    "$(kubectl get storageclass "$storage_class" -o jsonpath='{.provisioner}')"
+  record storage-binding-mode preflight WaitForFirstConsumer \
+    "$(kubectl get storageclass "$storage_class" -o jsonpath='{.volumeBindingMode}')"
+  local pv_count pv_modes pv_labels mount_json pv_json number letter path source fstype size
+  mount_json='[]'
+  number=0
+  for letter in b c d e; do
+    number=$((number + 1))
+    path="/mnt/cairn-local/pv${number}"
+    source=$(findmnt -n -o SOURCE --target "$path")
+    fstype=$(findmnt -n -o FSTYPE --target "$path")
+    size=$(blockdev --getsize64 "/dev/sd${letter}")
+    mount_json=$(jq -c --arg source "$source" --arg target "$path" --arg fstype "$fstype" \
+      --argjson size_bytes "$size" '. + [{source:$source,target:$target,fstype:$fstype,size_bytes:$size_bytes}]' \
+      <<<"$mount_json")
+  done
+  pv_json=$(kubectl get pv -o json | jq '[.items[] | select(.spec.storageClassName=="cairn-local")]')
+  jq -nc --argjson mounts "$mount_json" --argjson pvs "$pv_json" '{mounts:$mounts,pvs:$pvs}' |
+    "$host_python" scripts/reference_acceptance_state.py validate-storage || fail 'real-disc storage inventory refused'
+  pv_count=$(jq 'length' <<<"$pv_json")
+  record local-pv-count preflight 4 "$pv_count"
+  pv_modes=$(jq -r '[.[].spec.accessModes[]] | unique | join(",")' <<<"$pv_json")
+  record local-pv-access-mode preflight ReadWriteOncePod "$pv_modes"
+  pv_labels=$(for path in /mnt/cairn-local/pv{1..4}; do ls -Zd "$path"; done)
+  [[ $(grep -c container_file_t <<<"$pv_labels") -eq 4 ]] || fail 'a PV path lacks container_file_t'
+  validate_mutable_inventory
+  local foreign
+  foreign=$(kubectl get ns -o json | jq -r --arg own "$namespace" \
+    '[.items[] | select(.metadata.name != $own) |
+      select(.metadata.labels["cairn.example.invalid/instance"] != null) |
+      .metadata.name] | join(" ")')
+  [[ -z "$foreign" ]] || fail 'no Cairn namespace, workload or bound claim: foreign namespace present'
+  foreign=$(kubectl get statefulset,deployment -A -o json | jq -r --arg own "$namespace" \
+    '[.items[] | select(.metadata.namespace != $own) |
+      select(.metadata.labels["app.kubernetes.io/name"]=="cairn") |
+      (.metadata.namespace + "/" + .metadata.name)] | join(" ")')
+  [[ -z "$foreign" ]] || fail 'no Cairn namespace, workload or bound claim: foreign workload present'
+  local bound
+  bound=$(kubectl get pvc -A -o json | jq -r --arg own "$namespace" \
+    '[.items[] | select(.metadata.namespace != $own) |
+      select(.spec.storageClassName=="cairn-local") | .metadata.name] | join(" ")')
+  [[ -z "$bound" ]] || fail 'no Cairn namespace, workload or bound claim: foreign claim present'
+
+  docker image inspect "$IMAGE" >/dev/null
+  image_revision=$(docker image inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")
+  record cairn-image-revision preflight "$repository_revision" "$image_revision"
+}
+
+prepare_run() {
+  # Only throw-away probe namespaces are reset. The instance and its retained
+  # rollback PVC are never implicit cleanup targets.
+  local owner
+  for probe in "$enforcement_namespace" "$shapes_namespace" "$foreign_namespace"; do
+    if kubectl get namespace "$probe" >/dev/null 2>&1; then
+      owner=$(kubectl get namespace "$probe" \
+        -o jsonpath='{.metadata.labels.cairn\.example\.invalid/acceptance}')
+      [[ "$owner" == task11 ]] || fail "probe namespace $probe lacks the Task 11 acceptance owner label"
+    fi
+    kubectl delete namespace "$probe" --ignore-not-found --wait=true >/dev/null
+  done
+  ensure_owned_namespace "$namespace"
+  kubectl label namespace "$namespace" --overwrite \
+    cairn.example.invalid/acceptance=task11 \
+    pod-security.kubernetes.io/enforce=restricted \
+    pod-security.kubernetes.io/enforce-version=latest \
+    "cairn.example.invalid/instance=$namespace" >/dev/null
+  stamp_namespace_resources "$namespace"
+  kubectl create configmap acceptance-scripts -n "$namespace" \
+    --from-file=tests/acceptance/kind --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  stamp_namespace_resources "$namespace"
+  completed_stage=prepared
+}
+
+prove_enforcement_active() {
+  local probe_namespace=$enforcement_namespace
+  ensure_owned_namespace "$probe_namespace"
+  kubectl label namespace "$probe_namespace" \
+    cairn.example.invalid/acceptance=task11 \
+    pod-security.kubernetes.io/enforce=restricted >/dev/null
+  stamp_namespace_resources "$probe_namespace"
+  kubectl create configmap acceptance-scripts -n "$probe_namespace" \
+    --from-file=tests/acceptance/kind >/dev/null
+  kubectl apply -n "$probe_namespace" -f - >/dev/null <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: deny-listener-denied}
+spec:
+  podSelector:
+    matchLabels: {cairn.example.invalid/acceptance-role: listener-denied}
+  policyTypes: [Ingress]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: listener-denied
+  labels: {cairn.example.invalid/acceptance-role: listener-denied}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: listener
+      image: ${cairn_image_reference}
+      imagePullPolicy: IfNotPresent
+      command: [python, /opt/acceptance/listen.py, "8000"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: scripts, mountPath: /opt/acceptance, readOnly: true}
+  volumes:
+    - name: scripts
+      configMap: {name: acceptance-scripts}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: listener-permitted
+  labels: {cairn.example.invalid/acceptance-role: listener-permitted}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: listener
+      image: ${cairn_image_reference}
+      imagePullPolicy: IfNotPresent
+      command: [python, /opt/acceptance/listen.py, "8000"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: scripts, mountPath: /opt/acceptance, readOnly: true}
+  volumes:
+    - name: scripts
+      configMap: {name: acceptance-scripts}
+EOF
+  stamp_namespace_resources "$probe_namespace"
+  for listener in listener-denied listener-permitted; do
+    for _ in $(seq 1 120); do
+      kubectl logs -n "$probe_namespace" "$listener" 2>/dev/null | grep -q listening && break
+      sleep 0.5
+    done
+    local target_ip
+    target_ip=$(kubectl get pod -n "$probe_namespace" "$listener" -o jsonpath='{.status.podIP}')
+    cat >"$temporary/probe.yaml" <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: probe-${listener}, namespace: ${probe_namespace}}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: probe
+      image: ${cairn_image_reference}
+      imagePullPolicy: IfNotPresent
+      command: [python, /opt/acceptance/probe.py, "${target_ip}", "8000", "5"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: scripts, mountPath: /opt/acceptance, readOnly: true}
+  volumes:
+    - name: scripts
+      configMap: {name: acceptance-scripts}
+EOF
+    kubectl apply -f "$temporary/probe.yaml" >/dev/null
+    stamp_namespace_resources "$probe_namespace"
+    kubectl wait -n "$probe_namespace" --for=jsonpath='{.status.phase}'=Succeeded \
+      "pod/probe-${listener}" --timeout=30s >/dev/null
+    local observed
+    observed=$(kubectl logs -n "$probe_namespace" "probe-${listener}")
+    if [[ "$listener" == listener-denied ]]; then
+      record enforcement-default-deny enforcement blocked "$observed"
+    else
+      record enforcement-permitted-control enforcement connected "$observed"
+    fi
+  done
+  kubectl delete namespace "$probe_namespace" --wait=false >/dev/null
+  completed_stage=enforcement
+}
+
+run_pod() {
+  local pod=$1 manifest=$2
+  kubectl delete pod -n "$namespace" "$pod" --ignore-not-found --wait=true >/dev/null
+  kubectl apply -n "$namespace" -f "$manifest" >/dev/null
+  stamp_namespace_resources "$namespace"
+  for _ in $(seq 1 900); do
+    pod_phase=$(kubectl get pod -n "$namespace" "$pod" \
+      -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    [[ "$pod_phase" == Succeeded || "$pod_phase" == Failed ]] && break
+    sleep 0.5
+  done
+  [[ "$pod_phase" == Succeeded || "$pod_phase" == Failed ]] || fail "$pod did not terminate"
+  pod_logs=$(kubectl logs -n "$namespace" "$pod" 2>&1 || true)
+}
+
+acceptance_pod() {
+  local pod=$1 labels=$2 secret=$3 destination=$4
+  shift 4
+  {
+    cat <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod}
+  namespace: ${namespace}
+  labels:
+    cairn.example.invalid/acceptance-owner: task11
+    cairn.example.invalid/acceptance-run: ${run_id}
+    cairn.example.invalid/acceptance-revision: ${repository_revision}
+${labels}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: acceptance
+      image: ${cairn_image_reference}
+      imagePullPolicy: IfNotPresent
+      command: [python]
+      args:
+EOF
+    local argument
+    for argument in "$@"; do printf '        - %s\n' "$(printf '%s' "$argument" | jq -Rs .)"; done
+    cat <<EOF
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: scripts, mountPath: /opt/acceptance, readOnly: true}
+        - {name: token, mountPath: /var/run/secrets/acceptance, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+  volumes:
+    - name: scripts
+      configMap: {name: acceptance-scripts}
+    - name: token
+      secret: {secretName: ${secret}, optional: true}
+    - name: tmp
+      emptyDir: {medium: Memory, sizeLimit: 64Mi}
+EOF
+  } >"$destination"
+}
+
+prove_restricted_admission() {
+  local observed=accepted
+  kubectl label namespace "$namespace" --overwrite \
+    pod-security.kubernetes.io/enforce=restricted >/dev/null
+  kubectl apply --dry-run=server -n "$namespace" \
+    -f deploy/kustomize/rendered/kubernetes.yaml >/dev/null || observed=rejected
+  record restricted-pss-admission admission accepted "$observed"
+  completed_stage=admission
+}
+
+create_live_provider_secret() {
+  # This block runs only on the target. The value exists in one shell and in
+  # the API request body; it is never written to a file or emitted.
+  if kubectl get secret -n "$namespace" cairn-credentials >/dev/null 2>&1; then
+    return
+  fi
+  set +x
+  # shellcheck disable=SC1091
+  . "$REFERENCE_PROVIDER_SECRET_FILE"
+  : "${OPENAI_API_KEY:?OPENAI_API_KEY is absent}"
+  local index_password
+  index_password=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  {
+    printf 'openai-api-key=%s\n' "$OPENAI_API_KEY"
+    printf 'falkordb-password=%s\n' "$index_password"
+    printf 'falkordb.conf=requirepass %s\n' "$index_password"
+  } | kubectl create secret generic cairn-credentials -n "$namespace" \
+    --from-env-file=/dev/stdin --dry-run=client -o json |
+    jq --arg run "$run_id" --arg revision "$repository_revision" \
+      '.metadata.labels = ((.metadata.labels // {}) + {
+        "cairn.example.invalid/acceptance-owner":"task11",
+        "cairn.example.invalid/acceptance-run":$run,
+        "cairn.example.invalid/acceptance-revision":$revision})' |
+    kubectl apply -f - >/dev/null
+  stamp_namespace_resources "$namespace"
+  unset OPENAI_API_KEY index_password
+}
+
+render_target() {
+  local instance_id
+  instance_id=$(kubectl get configmap acceptance-state -n "$namespace" \
+    -o jsonpath='{.data.instance_id}' 2>/dev/null || true)
+  if [[ -z "$instance_id" ]]; then
+    instance_id=$(cat /proc/sys/kernel/random/uuid)
+    kubectl create configmap acceptance-state -n "$namespace" \
+      --from-literal=instance_id="$instance_id" \
+      --from-literal=repository_revision="$repository_revision" \
+      --from-literal=phase=prepared --dry-run=client -o yaml |
+      kubectl apply -f - >/dev/null
+    stamp_namespace_resources "$namespace"
+  fi
+  kubectl kustomize tests/acceptance/reference |
+    sed -e "s|image: ${cairn_lock_image}$|image: ${cairn_image_reference}|" \
+      -e "s|instance_id: REPLACE_WITH_PER_INSTANCE_UUID$|instance_id: ${instance_id}|" \
+      -e "s|app.kubernetes.io/instance: cairn$|app.kubernetes.io/instance: ${namespace}|" \
+      >"$temporary/target.yaml"
+  grep -q 'storageClassName: cairn-local' "$temporary/target.yaml" || fail 'target render lacks cairn-local'
+  [[ $(grep -c 'ReadWriteOncePod' "$temporary/target.yaml") -eq 2 ]] || fail 'target render lacks both RWOP claims'
+}
+
+load_image() {
+  local resolved reinspected inspected_reference inspected_target
+  local inspected_manifest inspected_config
+  docker image inspect "$IMAGE" >/dev/null
+  cairn_local_image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+  docker save "$IMAGE" | ctr --namespace k8s.io images import - >/dev/null
+  resolved=$("$host_python" scripts/reference_acceptance_state.py \
+    resolve-oci-provenance "$IMAGE") ||
+    fail 'imported image lacks a unique verified linux/amd64 OCI provenance chain'
+  cairn_image_reference=$(jq -r '.reference' <<<"$resolved")
+  cairn_target_digest=$(jq -er '.target_digest' <<<"$resolved")
+  cairn_platform_manifest_digest=$(jq -er '.platform_manifest_digest' <<<"$resolved")
+  cairn_config_digest=$(jq -er '.config_digest' <<<"$resolved")
+  reinspected=$("$host_python" scripts/reference_acceptance_state.py \
+    resolve-oci-provenance "$IMAGE") ||
+    fail 'imported OCI provenance changed during verification'
+  inspected_reference=$(jq -er '.reference' <<<"$reinspected")
+  inspected_target=$(jq -er '.target_digest' <<<"$reinspected")
+  inspected_manifest=$(jq -er '.platform_manifest_digest' <<<"$reinspected")
+  inspected_config=$(jq -er '.config_digest' <<<"$reinspected")
+  record cairn-imported-target-digest bring-up \
+    "$cairn_target_digest" "$inspected_target"
+  record cairn-platform-manifest-digest bring-up \
+    "$cairn_platform_manifest_digest" "$inspected_manifest"
+  record cairn-config-digest bring-up \
+    "$cairn_config_digest" "$inspected_config"
+  record cairn-image-loaded bring-up \
+    "$cairn_image_reference" "$inspected_reference"
+}
+
+deploy_target() {
+  create_live_provider_secret
+  render_target
+  ensure_owned_namespace "$gateway_namespace"
+  kubectl apply -f deploy/kustomize/rendered/egress-gateway.yaml >/dev/null
+  stamp_namespace_resources "$gateway_namespace"
+  kubectl apply -n "$namespace" -f - >/dev/null <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: cairn-allow-acceptance-client-ingress}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: ${namespace}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cairn.example.invalid/acceptance-client: ${namespace}
+      ports: [{protocol: TCP, port: 8000}]
+EOF
+  kubectl apply -n "$namespace" -f "$temporary/target.yaml" >/dev/null
+  stamp_namespace_resources "$namespace"
+  kubectl rollout status -n "$gateway_namespace" deployment/cairn-egress-gateway --timeout=420s
+  kubectl rollout status -n "$namespace" statefulset/falkordb --timeout=420s
+  # The first run intentionally stops here if Task 11a's recorded volume
+  # ownership observation prevents startup. This harness does not smuggle that
+  # security-boundary remediation into Task 11.
+  kubectl rollout status -n "$namespace" statefulset/cairn --timeout=420s
+  stamp_namespace_resources "$gateway_namespace"
+  stamp_namespace_resources "$namespace"
+  cairn_runtime_image_id=$(kubectl get pod -n "$namespace" cairn-0 \
+    -o jsonpath='{.status.containerStatuses[?(@.name=="cairn")].imageID}')
+  cairn_image_digest=$("$host_python" scripts/reference_acceptance_state.py \
+    runtime-config-digest "$cairn_runtime_image_id" "$cairn_config_digest") ||
+    fail 'Cairn runtime image ID does not match the verified OCI config digest'
+  record cairn-runtime-config-digest bring-up "$cairn_config_digest" "$cairn_image_digest"
+  local observed
+  observed=$(kubectl get pod -n "$namespace" cairn-0 \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+  record restricted-workload-rollout bring-up True "$observed"
+  completed_stage=bring-up
+}
+
+bootstrap_target() {
+  if kubectl get secret -n "$namespace" acceptance-client >/dev/null 2>&1; then
+    [[ $(kubectl get configmap -n "$namespace" acceptance-state -o jsonpath='{.data.phase}') == bootstrap-complete ]] ||
+      fail 'acceptance credential exists outside bootstrap-complete; use the recovery runbook'
+    record bootstrap-state bootstrap existing \
+      "$(kubectl get secret -n "$namespace" acceptance-client -o jsonpath='{.metadata.name}' | sed 's/acceptance-client/existing/')"
+    return
+  fi
+  kubectl scale -n "$namespace" statefulset/cairn --replicas=0 >/dev/null
+  kubectl wait -n "$namespace" --for=delete pod/cairn-0 --timeout=180s >/dev/null
+  cat >"$temporary/bootstrap.yaml" <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cairn-bootstrap
+  namespace: ${namespace}
+  labels:
+    cairn.example.invalid/acceptance-owner: task11
+    cairn.example.invalid/acceptance-run: ${run_id}
+    cairn.example.invalid/acceptance-revision: ${repository_revision}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: bootstrap
+      image: ${cairn_image_reference}
+      imagePullPolicy: IfNotPresent
+      command: [sleep, "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: data, mountPath: /var/lib/cairn}
+        - {name: config, mountPath: /etc/cairn, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: data-cairn-0}
+    - name: config
+      configMap: {name: cairn-config}
+    - name: tmp
+      emptyDir: {medium: Memory, sizeLimit: 64Mi}
+EOF
+  kubectl apply -f "$temporary/bootstrap.yaml" >/dev/null
+  stamp_namespace_resources "$namespace"
+  kubectl wait -n "$namespace" --for=condition=Ready pod/cairn-bootstrap --timeout=180s >/dev/null
+  update_phase bootstrap-started
+  # The one-time value is a byte stream between processes only: never a Pod
+  # log, shell variable, argv member, temporary file or report field.
+  kubectl exec -n "$namespace" cairn-bootstrap -- \
+    cairn bootstrap --config /etc/cairn/config.yaml --realm local --label acceptance |
+    "$host_python" scripts/reference_acceptance_state.py extract-bootstrap-token |
+    kubectl create secret generic acceptance-client -n "$namespace" \
+      --from-file=token=/dev/stdin --dry-run=client -o json |
+    jq --arg run "$run_id" --arg revision "$repository_revision" \
+      '.metadata.labels = ((.metadata.labels // {}) + {
+        "cairn.example.invalid/acceptance-owner":"task11",
+        "cairn.example.invalid/acceptance-run":$run,
+        "cairn.example.invalid/acceptance-revision":$revision})' |
+    kubectl apply -f - >/dev/null
+  update_phase bootstrap-complete
+  local bootstrap_secret
+  bootstrap_secret=$(kubectl get secret -n "$namespace" acceptance-client \
+    -o jsonpath='{.metadata.name}')
+  record bootstrap-secret bootstrap acceptance-client "$bootstrap_secret"
+  kubectl delete pod -n "$namespace" cairn-bootstrap --wait=true >/dev/null
+  kubectl scale -n "$namespace" statefulset/cairn --replicas=1 >/dev/null
+  kubectl rollout status -n "$namespace" statefulset/cairn --timeout=420s >/dev/null
+  completed_stage=bootstrap
+}
+
+run_python_stdin_probe() {
+  local probe=$1 pod=$2 container=$3
+  shift 3
+  local output
+  if ! output=$(kubectl exec -i -n "$namespace" "$pod" -c "$container" -- \
+    python - "$@"); then
+    fail "$probe failed"
+  fi
+  [[ -n "$output" ]] || fail "$probe returned empty output"
+  printf '%s\n' "$output"
+}
+
+probe_from_cairn() {
+  local script=$1
+  shift
+  run_python_stdin_probe "$script" cairn-0 cairn "$@" \
+    <"tests/acceptance/kind/$script"
+}
+
+falkordb_read_only_query() {
+  local pod=$1 query=$2
+  # Positional parameters expand in the remote shell, not this one.
+  # shellcheck disable=SC2016
+  kubectl exec -n "$namespace" "$pod" -c falkordb -- sh -eu -c '
+    auth=$(awk '\''
+      /^requirepass/ {
+        count++
+        if ($0 !~ /^requirepass [^[:space:]]+$/) invalid=1
+        else { line=$0; sub(/^requirepass /, "AUTH ", line) }
+      }
+      END {
+        if (count != 1 || invalid) exit 1
+        printf "%s", line
+      }
+    '\'' "$1")
+    { printf "%s\n" "$auth"; printf "%s\n" "$2"; } | redis-cli -e --raw
+  ' sh /etc/falkordb/cairn.conf "$query"
+}
+
+falkordb_completed_marker_present() {
+  local pod=$1 graph=$2 marker=$3
+  falkordb_read_only_query "$pod" \
+    "GRAPH.RO_QUERY ${graph} \"MATCH (e:Episodic) WHERE e.source_description = 'cairn.fact.projected' RETURN e.content\"" |
+    sed '/^OK$/d' | full_stream_has_exact_line "$marker"
+}
+
+full_stream_has_exact_line() {
+  local expected=$1 line found=false
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" != "$expected" ]] || found=true
+  done
+  [[ "$found" == true ]]
+}
+
+current_claim_bindings() {
+  local claims pvs
+  claims=$(kubectl get pvc -n "$namespace" -o json | jq '.items')
+  pvs=$(kubectl get pv -o json | jq '[.items[] | select(.spec.storageClassName=="cairn-local")]')
+  jq -nc --argjson claims "$claims" --argjson pvs "$pvs" '{claims:$claims,pvs:$pvs}' |
+    "$host_python" scripts/reference_acceptance_state.py claim-bindings
+}
+
+duplicate_process_observation() {
+  local output status=0
+  output=$(kubectl exec -n "$namespace" cairn-0 -c cairn -- \
+    timeout --signal=TERM --kill-after=2s 10s \
+    env GRAPHITI_TELEMETRY_ENABLED=false \
+    cairn serve --config /etc/cairn/config.yaml \
+    2>&1) || status=$?
+  if printf '%s\n' "$output" | "$host_python" \
+    scripts/reference_acceptance_state.py duplicate-process-refusal "$status" \
+    2>/dev/null; then
+    return
+  fi
+  printf 'other\n'
+}
+
+prove_storage() {
+  local observed
+  local bindings
+  bindings=$(current_claim_bindings)
+  record original-real-disc-bindings storage 2 "$(jq 'length' <<<"$bindings")"
+  observed=$(run_python_stdin_probe wal-mode cairn-0 cairn <<'PY'
+import sqlite3
+db = sqlite3.connect('file:/var/lib/cairn/catalogue.sqlite3?mode=ro', uri=True)
+print(db.execute('PRAGMA journal_mode').fetchone()[0])
+PY
+)
+  record wal-mode storage wal "$observed"
+
+  # The scheduler gate is separate from Cairn's process lock. Both must refuse.
+  cat >"$temporary/rwop-intruder.yaml" <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: rwop-intruder, namespace: ${namespace}}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: intruder
+      image: ${cairn_image_reference}
+      command: [sleep, infinity]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts: [{name: data, mountPath: /var/lib/cairn}]
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: data-cairn-0}
+EOF
+  kubectl delete pod -n "$namespace" rwop-intruder --ignore-not-found --wait=true >/dev/null
+  kubectl apply -f "$temporary/rwop-intruder.yaml" >/dev/null
+  stamp_namespace_resources "$namespace"
+  observed=other
+  for _ in $(seq 1 60); do
+    kubectl get pod -n "$namespace" rwop-intruder -o json >"$temporary/rwop-pod.json"
+    local current_uid
+    current_uid=$(jq -r '.metadata.uid' "$temporary/rwop-pod.json")
+    kubectl get events -n "$namespace" --field-selector involvedObject.name=rwop-intruder -o json |
+      jq --arg uid "$current_uid" '[.items[] | select(.involvedObject.uid == $uid)]' \
+        >"$temporary/rwop-events.json"
+    if jq -n --slurpfile pod "$temporary/rwop-pod.json" \
+      --slurpfile events "$temporary/rwop-events.json" '{pod:$pod[0],events:$events[0]}' |
+      "$host_python" scripts/reference_acceptance_state.py rwop-current >/dev/null 2>&1; then
+      observed=ReadWriteOncePod
+      break
+    fi
+    sleep 1
+  done
+  record rwop-scheduler-refusal storage ReadWriteOncePod "$observed"
+  kubectl delete pod -n "$namespace" rwop-intruder --wait=true >/dev/null
+
+  observed=$(duplicate_process_observation)
+  record duplicate-process-refusal storage already_locked "$observed"
+
+  local old_uid
+  old_uid=$(kubectl get pod -n "$namespace" cairn-0 -o jsonpath='{.metadata.uid}')
+  kubectl delete pod -n "$namespace" cairn-0 --wait=true >/dev/null
+  kubectl rollout status -n "$namespace" statefulset/cairn --timeout=420s >/dev/null
+  observed=recovered
+  [[ $(kubectl get pod -n "$namespace" cairn-0 -o jsonpath='{.metadata.uid}') != "$old_uid" ]] || observed=stale
+  record forced-restart-recovery storage recovered "$observed"
+  observed=$(run_python_stdin_probe pragma-integrity-check cairn-0 cairn <<'PY'
+import sqlite3
+db = sqlite3.connect('file:/var/lib/cairn/catalogue.sqlite3?mode=ro', uri=True)
+print(db.execute('PRAGMA integrity_check').fetchone()[0])
+PY
+)
+  record pragma-integrity-check storage ok "$observed"
+  completed_stage=storage
+}
+
+prove_connectivity_matrix() {
+  local observed
+  observed=$(probe_from_cairn probe.py falkordb 6379 5)
+  record cairn-to-own-index-allowed connectivity connected "$observed"
+
+  acceptance_pod client-control \
+    "    cairn.example.invalid/acceptance-client: ${namespace}" \
+    acceptance-client "$temporary/client-control.yaml" \
+    /opt/acceptance/probe.py cairn 8000 5
+  run_pod client-control "$temporary/client-control.yaml"
+  record client-to-cairn-allowed connectivity connected "$pod_logs"
+  kubectl delete pod -n "$namespace" client-control --wait=true >/dev/null
+
+  acceptance_pod foreign-client \
+    '    cairn.example.invalid/acceptance-role: foreign' \
+    acceptance-client "$temporary/foreign-client.yaml" \
+    /opt/acceptance/probe.py cairn 8000 5
+  run_pod foreign-client "$temporary/foreign-client.yaml"
+  record foreign-client-to-cairn-refused connectivity blocked "$pod_logs"
+  kubectl delete pod -n "$namespace" foreign-client --wait=true >/dev/null
+
+  acceptance_pod foreign-index \
+    '    cairn.example.invalid/acceptance-role: foreign' \
+    acceptance-client "$temporary/foreign-index.yaml" \
+    /opt/acceptance/probe.py falkordb 6379 5
+  run_pod foreign-index "$temporary/foreign-index.yaml"
+  record foreign-pod-to-index-refused connectivity blocked "$pod_logs"
+  kubectl delete pod -n "$namespace" foreign-index --wait=true >/dev/null
+
+  observed=$(probe_from_cairn probe.py cairn-egress-gateway.cairn-egress.svc.cluster.local 3128 5)
+  record cairn-to-gateway-allowed connectivity connected "$observed"
+  ensure_owned_namespace "$foreign_namespace"
+  kubectl label namespace "$foreign_namespace" \
+    cairn.example.invalid/acceptance=task11 \
+    pod-security.kubernetes.io/enforce=restricted >/dev/null
+  stamp_namespace_resources "$foreign_namespace"
+  kubectl create configmap acceptance-scripts -n "$foreign_namespace" \
+    --from-file=tests/acceptance/kind >/dev/null
+  cat >"$temporary/foreign-gateway.yaml" <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: foreign-gateway
+  namespace: ${foreign_namespace}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: probe
+      image: ${cairn_image_reference}
+      command: [python, /opt/acceptance/probe.py, cairn-egress-gateway.cairn-egress.svc.cluster.local, "3128", "5"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts: [{name: scripts, mountPath: /opt/acceptance, readOnly: true}]
+  volumes:
+    - name: scripts
+      configMap: {name: acceptance-scripts}
+EOF
+  kubectl apply -f "$temporary/foreign-gateway.yaml" >/dev/null
+  stamp_namespace_resources "$foreign_namespace"
+  kubectl wait -n "$foreign_namespace" --for=jsonpath='{.status.phase}'=Succeeded \
+    pod/foreign-gateway --timeout=30s >/dev/null
+  observed=$(kubectl logs -n "$foreign_namespace" foreign-gateway)
+  record foreign-to-gateway-refused connectivity blocked "$observed"
+  kubectl delete namespace "$foreign_namespace" --wait=false >/dev/null
+  observed=$(probe_from_cairn probe.py api.openai.com 443 5)
+  record cairn-direct-provider-refused connectivity blocked "$observed"
+  observed=$(probe_from_cairn connect.py cairn-egress-gateway.cairn-egress.svc.cluster.local \
+    3128 api.openai.com 443 20)
+  record gateway-live-provider-allowed connectivity established "$observed"
+  observed=$(probe_from_cairn connect.py cairn-egress-gateway.cairn-egress.svc.cluster.local \
+    3128 blocked.example.invalid 443 20)
+  record gateway-other-fqdn-refused connectivity forbidden "$observed"
+  # One pre-backup fixture carries both the fact used for the direct provider
+  # projection check and distinct exact evidence used for the direct Attic
+  # check. The FalkorDB check below still queries the index itself, so neither
+  # the Attic nor catalogue can satisfy provider delivery evidence.
+  restore_marker="reference restore ${repository_revision}"
+  acceptance_pod live-provider-round-trip \
+    "    cairn.example.invalid/acceptance-client: ${namespace}" \
+    acceptance-client "$temporary/live-provider-round-trip.yaml" \
+    /opt/acceptance/client.py restore-fixture http://cairn:8000 \
+    "$restore_marker" /var/run/secrets/acceptance/token
+  run_pod live-provider-round-trip "$temporary/live-provider-round-trip.yaml"
+  observed=${pod_logs%% *}
+  restore_mutation=${pod_logs##* }
+  record live-provider-round-trip connectivity ok "$observed"
+  kubectl delete pod -n "$namespace" live-provider-round-trip --wait=true >/dev/null
+  observed=$(run_python_stdin_probe pre-backup-attic-payload cairn-0 cairn \
+    /var/lib/cairn/attic.sqlite3 "attic evidence ${restore_marker}" \
+    <tests/acceptance/kind/attic.py)
+  record pre-backup-attic-payload connectivity present "$observed"
+  local graph provider_delivery=absent
+  graph=$(printf 'cairn.graphiti.partition/v1\000local\n[]' | sha256sum | awk '{print $1}')
+  for _ in $(seq 1 120); do
+    if falkordb_completed_marker_present falkordb-0 "$graph" "$restore_marker"; then
+      provider_delivery=present
+      break
+    fi
+    sleep 1
+  done
+  record provider-index-delivery connectivity present "$provider_delivery"
+  observed=$(kubectl get nodes --no-headers | wc -l | tr -d ' ')
+  record no-cross-node-policy connectivity 1 "$observed"
+  completed_stage=connectivity
+}
+
+prove_backup_restore() {
+  # Each transition is recorded before the next begins. No cleanup removes the
+  # original Retain PVC.
+  update_phase recovery-started
+  acceptance_pod live-traffic \
+    "    cairn.example.invalid/acceptance-client: ${namespace}" \
+    acceptance-client "$temporary/live-traffic.yaml" \
+    /opt/acceptance/traffic.py http://cairn:8000 \
+    /var/run/secrets/acceptance/token "live reference ${repository_revision}"
+  kubectl apply -f "$temporary/live-traffic.yaml" >/dev/null
+  for _ in $(seq 1 120); do
+    kubectl logs -n "$namespace" live-traffic 2>/dev/null | grep -q '^mutations 1 ' && break
+    sleep 0.5
+  done
+  local before observed backup_output bundle backup_pid backup_status overlap_candidate
+  local backup_marker backup_child_evidence marker_state
+  before=$(kubectl logs -n "$namespace" live-traffic |
+    awk '/^mutations / {n=$2} END {print n+0}')
+  # The wrapper owns a mode-0600, run/revision-bound marker for the exact child.
+  # A separate exec must prove that PID, start time and command are still live
+  # after the mutation. This is command overlap, not SQLite-barrier overlap.
+  backup_marker="/tmp/cairn-acceptance-backup-${run_id}.json"
+  cat >"$temporary/backup-runner.py" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+marker = Path(sys.argv[1])
+run_id = sys.argv[2]
+revision = sys.argv[3]
+command = ["cairn", "backup", "--config", "/etc/cairn/config.yaml", "--output", "/var/lib/cairn/backups"]
+descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+process = None
+marker_stream = None
+status = 1
+try:
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    suffix = Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()
+    child = {"run_id": run_id, "revision": revision, "pid": process.pid,
+             "proc_start_ticks": suffix[19], "command": command}
+    marker_stream = os.fdopen(descriptor, "w", encoding="utf-8")
+    descriptor = -1
+    with marker_stream as stream:
+        json.dump(child, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    marker_stream = None
+    started = time.time_ns()
+    print(json.dumps({"acceptance_event": "backup-process-started", "timestamp_ns": started,
+                      "pid": process.pid, "proc_start_ticks": suffix[19]}), flush=True)
+    stdout, stderr = process.communicate()
+    print(json.dumps({"acceptance_event": "backup-process-finished", "timestamp_ns": time.time_ns()}), flush=True)
+    sys.stdout.write(stdout)
+    sys.stderr.write(stderr)
+    status = process.returncode
+finally:
+    if marker_stream is not None:
+        marker_stream.close()
+    if descriptor >= 0:
+        os.close(descriptor)
+    if process is not None and process.poll() is None:
+        process.terminate()
+        process.wait()
+    marker.unlink(missing_ok=True)
+raise SystemExit(status)
+PY
+  kubectl exec -i -n "$namespace" cairn-0 -c cairn -- python - \
+    "$backup_marker" "$run_id" "$repository_revision" \
+    <"$temporary/backup-runner.py" >"$temporary/backup-output.jsonl" 2>&1 &
+  backup_pid=$!
+  backup_command_started_ns=
+  for _ in $(seq 1 200); do
+    backup_command_started_ns=$(jq -Rrc 'fromjson? |
+      select(.acceptance_event=="backup-process-started") | .timestamp_ns' \
+      "$temporary/backup-output.jsonl" | tail -1)
+    [[ -n "$backup_command_started_ns" ]] && break
+    kill -0 "$backup_pid" 2>/dev/null || break
+    sleep 0.01
+  done
+  [[ -n "$backup_command_started_ns" ]] || fail 'backup child process emitted no start observation'
+  backup_wrapper_observed_running=false
+  exact_child_observed_alive=false
+  backup_mutation_completed_ns=
+  backup_child_pid=
+  backup_child_start_ticks=
+  backup_child_alive_observed_ns=
+  while kill -0 "$backup_pid" 2>/dev/null; do
+    if jq -Rre 'fromjson? | select(.acceptance_event=="backup-process-finished")' \
+      "$temporary/backup-output.jsonl" >/dev/null; then
+      break
+    fi
+    overlap_candidate=$(kubectl logs -n "$namespace" live-traffic 2>/dev/null |
+      awk -v started="$backup_command_started_ns" \
+        '$1 == "mutations" && $3 >= started {timestamp=$3} END {print timestamp}')
+    if [[ -n "$overlap_candidate" ]] && kill -0 "$backup_pid" 2>/dev/null &&
+      ! jq -Rre 'fromjson? | select(.acceptance_event=="backup-process-finished")' \
+        "$temporary/backup-output.jsonl" >/dev/null; then
+      backup_wrapper_observed_running=true
+      backup_mutation_completed_ns=$overlap_candidate
+      backup_child_evidence=$(kubectl exec -i -n "$namespace" cairn-0 -c cairn -- \
+        python - "$backup_marker" "$run_id" "$repository_revision" \
+        <tests/acceptance/kind/backup_child.py 2>/dev/null || true)
+      if jq -e '.acceptance_event == "backup-child-alive"' \
+        <<<"$backup_child_evidence" >/dev/null 2>&1; then
+        exact_child_observed_alive=true
+        backup_child_pid=$(jq -r '.pid' <<<"$backup_child_evidence")
+        backup_child_start_ticks=$(jq -r '.proc_start_ticks' <<<"$backup_child_evidence")
+        backup_child_alive_observed_ns=$(jq -r '.timestamp_ns' <<<"$backup_child_evidence")
+      fi
+      break
+    fi
+    sleep 0.01
+  done
+  backup_status=0
+  wait "$backup_pid" || backup_status=$?
+  marker_state=$(kubectl exec -n "$namespace" cairn-0 -c cairn -- \
+    python -c 'import pathlib,sys; print("present" if pathlib.Path(sys.argv[1]).exists() else "absent")' \
+    "$backup_marker" 2>/dev/null || printf 'unknown')
+  [[ "$marker_state" == absent ]] || fail 'backup child marker was not safely removed; stop for recovery'
+  [[ "$backup_status" == 0 ]] || fail "backup command exited $backup_status"
+  backup_command_finished_ns=$(jq -Rrc 'fromjson? |
+    select(.acceptance_event=="backup-process-finished") | .timestamp_ns' \
+    "$temporary/backup-output.jsonl" | tail -1)
+  [[ -n "$backup_command_finished_ns" ]] || fail 'backup child process emitted no finish observation'
+  backup_output=$(<"$temporary/backup-output.jsonl")
+  observed=$(printf \
+    '{"backup_started_ns":%s,"backup_finished_ns":%s,"wrapper_observed_running":%s,"exact_child_observed_alive":%s,"child_alive_observed_ns":%s,"mutation_completed_ns":[%s]}\n' \
+    "$backup_command_started_ns" "$backup_command_finished_ns" \
+    "$backup_wrapper_observed_running" "$exact_child_observed_alive" \
+    "${backup_child_alive_observed_ns:-0}" "${backup_mutation_completed_ns:-0}" |
+    "$host_python" scripts/reference_acceptance_state.py validate-backup-overlap 2>/dev/null || true)
+  [[ -n "$observed" ]] || fail 'no mutation completed before exact server-side backup-child liveness was proved'
+  record backup-under-live-traffic recovery \
+    mutation-completed-while-exact-server-side-backup-child-alive \
+    mutation-completed-while-exact-server-side-backup-child-alive
+  local traffic_phase
+  traffic_phase=$(kubectl get pod -n "$namespace" live-traffic -o jsonpath='{.status.phase}')
+  record live-traffic-running-after-backup recovery Running "$traffic_phase"
+  bundle=$(jq -Rrc 'fromjson? | select(.bundle != null) | .bundle' <<<"$backup_output" | tail -1)
+  [[ -n "$bundle" ]] || fail 'backup emitted no bundle'
+  backup_barrier_ms=$(jq -Rrc 'fromjson? | select(.barrier_ms != null) | .barrier_ms' \
+    <<<"$backup_output" | tail -1)
+  [[ "$backup_barrier_ms" =~ ^[0-9]+([.][0-9]+)?$ ]] || fail 'backup emitted no barrier duration'
+  ((before >= 1)) || fail 'live traffic never completed its control mutation'
+
+  local bundle_local="$temporary/exported-bundle"
+  kubectl cp -n "$namespace" -c cairn "cairn-0:${bundle}" "$bundle_local" >/dev/null
+  [[ -f "$bundle_local/manifest.json" ]] || fail 'copied bundle has no manifest'
+  observed=$(jq -r '
+    if [.members[].name] == ["catalogue.sqlite3", "attic.sqlite3"]
+    then "catalogue.sqlite3,attic.sqlite3"
+    else ([.members[].name] | join(","))
+    end' "$bundle_local/manifest.json")
+  record backup-bundle-members recovery \
+    catalogue.sqlite3,attic.sqlite3 "$observed"
+  while IFS=$'\t' read -r member bytes digest; do
+    [[ -f "$bundle_local/$member" ]] || fail "bundle member absent: $member"
+    [[ $(wc -c <"$bundle_local/$member" | tr -d ' ') == "$bytes" ]] || fail "bundle size mismatch: $member"
+    [[ $(sha256sum "$bundle_local/$member" | awk '{print $1}') == "$digest" ]] || fail "bundle digest mismatch: $member"
+  done < <(jq -r '.members[] | [.name, (.bytes|tostring), .sha256] | @tsv' "$bundle_local/manifest.json")
+
+  kubectl delete pod -n "$namespace" live-traffic --wait=true >/dev/null
+  kubectl patch service -n "$namespace" cairn --type=json \
+    -p "[{\"op\":\"replace\",\"path\":\"/spec/selector\",\"value\":{\"app.kubernetes.io/name\":\"cairn\",\"app.kubernetes.io/instance\":\"${namespace}\",\"statefulset.kubernetes.io/pod-name\":\"cairn-0\"}}]" >/dev/null
+  kubectl scale -n "$namespace" statefulset/cairn statefulset/falkordb --replicas=0 >/dev/null
+  kubectl wait -n "$namespace" --for=delete pod/cairn-0 pod/falkordb-0 --timeout=180s >/dev/null
+  observed=$(kubectl get statefulset -n "$namespace" cairn -o jsonpath='{.spec.replicas}')
+  record original-quiesced recovery 0 "$observed"
+
+  kubectl get configmap -n "$namespace" cairn-config -o jsonpath='{.data.config\.yaml}' \
+    >"$temporary/restored-config.yaml"
+  sed -i 's/^  host: falkordb$/  host: falkordb-restored/' "$temporary/restored-config.yaml"
+  kubectl create configmap cairn-restored-config -n "$namespace" \
+    --from-file="config.yaml=$temporary/restored-config.yaml" --dry-run=client -o yaml |
+    kubectl apply -f - >/dev/null
+
+  cat >"$temporary/recovery.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata: {name: falkordb-restored, namespace: ${namespace}}
+spec:
+  selector:
+    app.kubernetes.io/name: falkordb
+    app.kubernetes.io/instance: ${namespace}
+    cairn.example.invalid/recovery: restored
+  ports: [{name: redis, port: 6379, targetPort: redis}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: falkordb-restored, namespace: ${namespace}}
+spec:
+  replicas: 1
+  serviceName: falkordb-restored
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falkordb
+      app.kubernetes.io/instance: ${namespace}
+      cairn.example.invalid/recovery: restored
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: falkordb
+        app.kubernetes.io/instance: ${namespace}
+        cairn.example.invalid/recovery: restored
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: falkordb
+          image: ${falkordb_image}
+          env:
+            - {name: REDIS_ARGS, value: /etc/falkordb/cairn.conf}
+            - {name: BROWSER, value: "0"}
+            - {name: TLS, value: "0"}
+          ports: [{name: redis, containerPort: 6379}]
+          readinessProbe: {tcpSocket: {port: redis}, periodSeconds: 5}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/falkordb/data}
+            - {name: index-config, mountPath: /etc/falkordb, readOnly: true}
+      volumes:
+        - name: index-config
+          secret:
+            secretName: cairn-credentials
+            defaultMode: 288
+            items: [{key: falkordb.conf, path: cairn.conf}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOncePod]
+        storageClassName: cairn-local
+        volumeMode: Filesystem
+        resources: {requests: {storage: 10Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: cairn-restored-data, namespace: ${namespace}}
+spec:
+  accessModes: [ReadWriteOncePod]
+  storageClassName: cairn-local
+  volumeMode: Filesystem
+  resources: {requests: {storage: 10Gi}}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cairn-restore
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: ${namespace}
+    cairn.example.invalid/recovery: restored
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: recovery
+      image: ${cairn_image_reference}
+      imagePullPolicy: IfNotPresent
+      command: [python]
+      args: [-c, "import os,time; e=set(os.listdir('/var/lib/cairn')); print('fresh' if e <= {'lost+found'} else 'not-fresh', flush=True); time.sleep(3600)"]
+      env:
+        - {name: HTTPS_PROXY, value: http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - {name: data, mountPath: /var/lib/cairn}
+        - {name: bundle, mountPath: /backup}
+        - {name: config, mountPath: /etc/cairn, readOnly: true}
+        - {name: credentials, mountPath: /var/run/secrets/cairn, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: cairn-restored-data}
+    - name: bundle
+      emptyDir: {}
+    - name: config
+      configMap: {name: cairn-restored-config}
+    - name: credentials
+      secret: {secretName: cairn-credentials, defaultMode: 288}
+    - name: tmp
+      emptyDir: {medium: Memory, sizeLimit: 256Mi}
+EOF
+  kubectl apply -f "$temporary/recovery.yaml" >/dev/null
+  stamp_namespace_resources "$namespace"
+  kubectl rollout status -n "$namespace" statefulset/falkordb-restored --timeout=420s >/dev/null
+  kubectl wait -n "$namespace" --for=condition=Ready pod/cairn-restore --timeout=180s >/dev/null
+  observed=$(kubectl logs -n "$namespace" cairn-restore | head -1)
+  record replacement-pvc-fresh recovery fresh "$observed"
+  bindings=$(current_claim_bindings)
+  record all-four-real-disc-bindings recovery 4 "$(jq 'length' <<<"$bindings")"
+
+  kubectl cp -n "$namespace" -c recovery "$bundle_local" cairn-restore:/backup/bundle >/dev/null
+  local restore_output verify_output rebuild_output
+  observed=Failed
+  if restore_output=$(kubectl exec -n "$namespace" cairn-restore -c recovery -- \
+    cairn restore --config /etc/cairn/config.yaml --bundle /backup/bundle 2>&1); then
+    observed=Succeeded
+  fi
+  record restore-command recovery Succeeded "$observed"
+  observed=Failed
+  if verify_output=$(kubectl exec -n "$namespace" cairn-restore -c recovery -- \
+    cairn verify --config /etc/cairn/config.yaml 2>&1); then
+    if jq -Rre 'fromjson? | select(.operation=="verify") | .fact_count >= 1' \
+      <<<"$verify_output" >/dev/null; then
+      observed=Succeeded
+    fi
+  fi
+  record restored-catalogue-integrity recovery Succeeded "$observed"
+  local restored_boundary backup_boundary
+  restored_boundary=$(jq -Rrc 'fromjson? | select(.operation=="restore") | .audit_boundary' <<<"$restore_output" | tail -1)
+  backup_boundary=$(jq -c '.audit_boundary' "$bundle_local/manifest.json")
+  record restored-audit-boundary recovery "$backup_boundary" "$restored_boundary"
+
+  observed=Failed
+  if rebuild_output=$(kubectl exec -n "$namespace" cairn-restore -c recovery -- \
+    cairn rebuild-index --config /etc/cairn/config.yaml 2>&1) &&
+    jq -Rre 'fromjson? | select(.projected != null) |
+      .status=="ok" and .projected>0 and .failed==0 and .unreadable==0' \
+      <<<"$rebuild_output" >/dev/null; then
+    observed=Succeeded
+  fi
+  record rebuild-index recovery Succeeded "$observed"
+
+  observed=$(run_python_stdin_probe restored-attic-payload cairn-restore recovery \
+    /var/lib/cairn/attic.sqlite3 "attic evidence ${restore_marker}" \
+    <tests/acceptance/kind/attic.py)
+  record restored-attic-payload recovery present "$observed"
+  local graph
+  graph=$(printf 'cairn.graphiti.partition/v1\000local\n[]' | sha256sum | awk '{print $1}')
+  if falkordb_completed_marker_present \
+    falkordb-restored-0 "$graph" "$restore_marker"; then
+    observed=present
+  else
+    observed=absent
+  fi
+  record restored-index-episode recovery present "$observed"
+
+  kubectl delete pod -n "$namespace" cairn-restore --wait=true >/dev/null
+  cat >"$temporary/candidate.yaml" <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cairn-restored, namespace: ${namespace}}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: ${namespace}
+      cairn.example.invalid/recovery: restored
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cairn
+        app.kubernetes.io/instance: ${namespace}
+        cairn.example.invalid/recovery: restored
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: cairn
+          image: ${cairn_image_reference}
+          imagePullPolicy: IfNotPresent
+          args: [serve, --config, /etc/cairn/config.yaml]
+          env:
+            - {name: HTTPS_PROXY, value: http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128}
+          ports: [{name: http, containerPort: 8000}]
+          startupProbe: {httpGet: {path: /health/startup, port: http}, periodSeconds: 5, failureThreshold: 60}
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 10}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/cairn}
+            - {name: config, mountPath: /etc/cairn, readOnly: true}
+            - {name: credentials, mountPath: /var/run/secrets/cairn, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: cairn-restored-data}
+        - name: config
+          configMap: {name: cairn-restored-config}
+        - name: credentials
+          secret: {secretName: cairn-credentials, defaultMode: 288}
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 256Mi}
+EOF
+  kubectl apply -f "$temporary/candidate.yaml" >/dev/null
+  stamp_namespace_resources "$namespace"
+  kubectl rollout status -n "$namespace" deployment/cairn-restored --timeout=420s >/dev/null
+  local candidate_pod candidate_uid health endpoint
+  candidate_pod=$(kubectl get pods -n "$namespace" \
+    -l cairn.example.invalid/recovery=restored,app.kubernetes.io/name=cairn -o json |
+    jq -er 'select(.items | length == 1) | .items[0].metadata.name')
+  candidate_uid=$(kubectl get pod -n "$namespace" "$candidate_pod" -o jsonpath='{.metadata.uid}')
+  for endpoint in startup ready live; do
+    health=$(run_python_stdin_probe "candidate-${endpoint}" "$candidate_pod" cairn \
+      "$endpoint" <<'PY'
+import sys
+import urllib.request
+with urllib.request.urlopen(f"http://127.0.0.1:8000/health/{sys.argv[1]}", timeout=5) as response:
+    print("ok" if response.status == 200 else response.status)
+PY
+)
+    case "$endpoint" in
+      startup) record candidate-startup recovery ok "$health" ;;
+      ready) record candidate-readiness recovery ok "$health" ;;
+      live) record candidate-liveness recovery ok "$health" ;;
+    esac
+  done
+
+  acceptance_pod restored-rest \
+    "    cairn.example.invalid/acceptance-client: ${namespace}" \
+    acceptance-client "$temporary/restored-rest.yaml" \
+    /opt/acceptance/client.py restored-rest \
+    http://cairn-restored:8000 "$restore_marker" \
+    /var/run/secrets/acceptance/token "$restore_mutation"
+  # Candidate-only Service, still not the stable traffic path.
+  kubectl expose deployment -n "$namespace" cairn-restored --name=cairn-restored \
+    --port=8000 --target-port=8000 --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  run_pod restored-rest "$temporary/restored-rest.yaml"
+  record restored-scoped-read-rest recovery ok "${pod_logs%% *}"
+  kubectl delete pod -n "$namespace" restored-rest --wait=true >/dev/null
+
+  acceptance_pod restored-mcp \
+    "    cairn.example.invalid/acceptance-client: ${namespace}" \
+    acceptance-client "$temporary/restored-mcp.yaml" \
+    /opt/acceptance/client.py restored-mcp \
+    http://cairn-restored:8000 "$restore_marker" \
+    /var/run/secrets/acceptance/token "$restore_mutation"
+  run_pod restored-mcp "$temporary/restored-mcp.yaml"
+  record restored-scoped-read-mcp recovery ok "${pod_logs%% *}"
+  kubectl delete pod -n "$namespace" restored-mcp --wait=true >/dev/null
+
+  observed=absent
+  bindings=$(current_claim_bindings)
+  jq -e '(."data-cairn-0" | .reclaim_policy == "Retain" and (.path | startswith("/mnt/cairn-local/pv"))) and
+    (."data-falkordb-0" | .reclaim_policy == "Retain" and (.path | startswith("/mnt/cairn-local/pv")))' \
+    <<<"$bindings" >/dev/null && observed=retained
+  record original-pvc-retained recovery retained "$observed"
+  kubectl patch service -n "$namespace" cairn --type=json \
+    -p "$("$host_python" -c 'import json,sys; from scripts.reference_acceptance_state import service_selector_patch; print(json.dumps(service_selector_patch(sys.argv[1])))' "$namespace")" >/dev/null
+  local candidate_ip endpoint_ip endpoint_uid stable=0 addresses
+  candidate_ip=$(kubectl get pod -n "$namespace" "$candidate_pod" -o jsonpath='{.status.podIP}')
+  for _ in $(seq 1 120); do
+    addresses=$(kubectl get endpoints -n "$namespace" cairn -o json 2>/dev/null |
+      jq -c '[.subsets[]?.addresses[]?.ip] | sort' || printf '[]')
+    if [[ "$addresses" == "[\"$candidate_ip\"]" ]]; then
+      stable=$((stable + 1))
+    else
+      stable=0
+    fi
+    ((stable >= 3)) && break
+    sleep 1
+  done
+  [[ "$stable" == 3 ]] || fail 'stable Service did not converge to exactly one candidate endpoint'
+  endpoint_ip=$(jq -r '.[0]' <<<"$addresses")
+  endpoint_uid=$(kubectl get endpoints -n "$namespace" cairn -o json |
+    jq -r '.subsets[0].addresses[0].targetRef.uid')
+  record traffic-moved-after-verification recovery "$candidate_ip" "$endpoint_ip"
+  record traffic-endpoint-pod-uid recovery "$candidate_uid" "$endpoint_uid"
+  update_phase complete
+  completed_stage=recovery
+}
+
+# run ------------------------------------------------
+preflight
+existing_phase=$(kubectl get configmap -n "$namespace" acceptance-state \
+  -o jsonpath='{.data.phase}' 2>/dev/null || true)
+report_exists=false
+[[ -e "$report_path" ]] && report_exists=true
+invocation=$("$host_python" scripts/reference_acceptance_state.py invocation-action \
+  "$mode" "$report_exists" "$existing_phase")
+if [[ "$mode" == preflight ]]; then
+  [[ "$invocation" == preflight-only ]] || fail 'invalid preflight action'
+  printf 'reference target preflight passed; canonical evidence was not created or changed\n'
+  exit 0
+fi
+[[ "$invocation" == start ]] || fail 'invalid run action'
+evidence_active=true
+prepare_run
+load_image
+prove_enforcement_active
+prove_restricted_admission
+deploy_target
+bootstrap_target
+prove_storage
+prove_connectivity_matrix
+prove_backup_restore
+status=passed
+completed_stage=complete
+printf 'reference target acceptance passed; evidence is in %s\n' "$report_path"

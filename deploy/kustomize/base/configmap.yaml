@@ -1,0 +1,43 @@
+# The instance's cairn.config/v1 document, mounted read-only at
+# /etc/cairn/config.yaml (P-62, I-19). Every key is written explicitly
+# rather than left to a schema default: this file is an operator artefact,
+# and a value that is only visible by reading the Python is a value nobody
+# audits.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cairn-config
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+data:
+  config.yaml: |
+    schema_version: cairn.config/v1
+    # REPLACE PER INSTANCE, and deliberately not a valid UUID so that
+    # forgetting to is a refusal rather than a diff a reviewer might miss.
+    # A well-formed placeholder loads silently, and two instances sharing
+    # an identity would accept each other's backup bundles — the I-41
+    # guard compares exactly this value, so a shared one disarms it. This
+    # fails configuration loading at startup, naming the field.
+    instance_id: REPLACE_WITH_PER_INSTANCE_UUID
+    mode: production
+    http:
+      # In-cluster only: the Service is the boundary, not the bind
+      # address (I-12). Both values are already permitted.
+      host: 0.0.0.0
+      port: 8000
+    paths:
+      data: /var/lib/cairn
+      # I-92's adapter-credential directory, and the mount point of the
+      # Secret below. With graphiti disabled nothing reads it.
+      credentials: /var/run/secrets/cairn
+    attic:
+      enabled: true
+    graphiti:
+      # Off in the base: the FalkorDB workload is included by choice
+      # (I-91), and the component and overlays that add it turn this on.
+      # An instance with this false opens no index connection and needs
+      # no adapter credentials at all.
+      enabled: false
+    delivery:
+      interval_seconds: 5

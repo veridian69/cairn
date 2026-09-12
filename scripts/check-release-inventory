@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Check that the release inventory classifies the exact Python lock."""
+
+from __future__ import annotations
+
+import re
+import sys
+import tomllib
+from hashlib import sha256
+from pathlib import Path
+
+START = "<!-- python-dependencies:start -->"
+END = "<!-- python-dependencies:end -->"
+UNCLASSIFIED = frozenset({"", "NOASSERTION", "UNKNOWN"})
+CLASSIFICATIONS = frozenset(
+    {"permissive/mixed", "weak-copyleft/mixed", "copyleft/mixed"}
+)
+LOCK_DIGEST = re.compile(r"^\|\s*`uv\.lock`\s*\|\s*`([0-9a-f]{64})`\s*\|$")
+
+
+class InventoryError(ValueError):
+    pass
+
+
+def _locked_dependencies(path: Path) -> dict[str, str]:
+    document = tomllib.loads(path.read_text())
+    return {
+        package["name"]: str(package.get("version", "workspace"))
+        for package in document["package"]
+    }
+
+
+def _lock_digest(path: Path) -> str:
+    return sha256(path.read_bytes()).hexdigest()
+
+
+def _inventory_lock_digest(path: Path) -> str:
+    for line in path.read_text().splitlines():
+        if match := LOCK_DIGEST.match(line):
+            return match.group(1)
+    raise InventoryError("uv.lock digest is missing from inventory")
+
+
+def _inventory_dependencies(path: Path) -> dict[str, str]:
+    lines = path.read_text().splitlines()
+    try:
+        start = lines.index(START)
+        end = lines.index(END, start + 1)
+    except ValueError as error:
+        raise InventoryError("dependency inventory markers are missing") from error
+
+    dependencies: dict[str, str] = {}
+    for line in lines[start + 1 : end]:
+        if not line.startswith("| `"):
+            continue
+        cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
+        if len(cells) != 4:
+            raise InventoryError("dependency inventory row is malformed")
+        name, version, licence, classification = cells
+        if name in dependencies:
+            raise InventoryError(f"duplicate dependency inventory row for {name}")
+        if licence in UNCLASSIFIED or classification not in CLASSIFICATIONS:
+            raise InventoryError(f"unclassified licence for {name}")
+        dependencies[name] = version
+    return dependencies
+
+
+def check(lock: Path, inventory: Path) -> None:
+    if _lock_digest(lock) != _inventory_lock_digest(inventory):
+        raise InventoryError("uv.lock digest does not match inventory")
+    if _locked_dependencies(lock) != _inventory_dependencies(inventory):
+        raise InventoryError("dependency inventory does not match uv.lock")
+
+
+def main(arguments: list[str]) -> int:
+    if len(arguments) != 2:
+        print("usage: check-release-inventory UV_LOCK INVENTORY", file=sys.stderr)
+        return 2
+    try:
+        check(Path(arguments[0]), Path(arguments[1]))
+    except (InventoryError, KeyError, OSError, tomllib.TOMLDecodeError) as error:
+        print(error, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

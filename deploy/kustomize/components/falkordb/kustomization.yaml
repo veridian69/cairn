@@ -1,0 +1,19 @@
+# The per-instance retrieval index (P-63, I-91), realised as a component
+# rather than as base material for one reason: an overlay that does not
+# include it renders no FalkorDB resource at all. "Included by choice"
+# then has a mechanical meaning, and the choice is one line in an
+# overlay's kustomization rather than a patch that deletes things.
+#
+# The component brings the workload, its Service, its own closed policies
+# and the one egress allowance Cairn needs to reach it. It does not turn
+# the index on: `graphiti.enabled` lives in the configuration document,
+# which the including overlay restates, and neither does it name the
+# egress gateway, which is a cluster fact rather than an instance one.
+# Both belong to the overlay, and its README says so.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - service.yaml
+  - statefulset.yaml
+  - networkpolicy.yaml

@@ -1,0 +1,25 @@
+# The OpenShift overlay, and it is empty on purpose.
+#
+# An overlay exists so that OpenShift is a rendered, validated target
+# rather than an aspiration, and so the day a cluster exists there is a
+# place for its differences. Today there are none worth writing:
+#
+# - I-11 fixes no `runAsUser`, `runAsGroup` or `fsGroup` anywhere in the
+#   base, so there is nothing for the restricted-v2 SCC to fight and
+#   nothing to strip. The base was written this way for exactly this
+#   target.
+# - I-12 keeps publication explicit, so no Route belongs here any more
+#   than an Ingress belongs in the Kubernetes overlay.
+# - The storage class is left unnamed, unlike the Kubernetes overlay:
+#   naming one would be a claim about a cluster that does not exist. The
+#   operator names theirs, or the cluster's default applies.
+#
+# I-14 governs what may be said about it: this overlay renders and is
+# validated statically, and claims nothing further until a cluster proves
+# it. An empty overlay that says so is more honest than an inherited one
+# full of settings nobody has run.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base

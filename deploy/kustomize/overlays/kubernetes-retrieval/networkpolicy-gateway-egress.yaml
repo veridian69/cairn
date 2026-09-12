@@ -1,0 +1,27 @@
+# Cairn may reach only the declared gateway proxy outside its own namespace;
+# direct provider egress remains denied by the base default-deny policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cairn-allow-gateway-egress
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: cairn
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cairn-egress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cairn-egress-gateway
+      ports:
+        - protocol: TCP
+          port: 3128

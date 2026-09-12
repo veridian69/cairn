@@ -1,0 +1,57 @@
+name: Optional host isolation diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_host_diagnostics:
+        description: Run real isolation tests without changing runner policy
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-diagnostics-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  host_diagnostics:
+    name: Optional host isolation diagnostics
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_host_diagnostics }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: "0.12.0"
+          enable-cache: true
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Verify disposable hosted runner
+        env:
+          CAIRN_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          test "$CAIRN_RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_ACTIONS" = true
+          test "$ImageOS" = ubuntu24
+          test "$(id -u)" -ne 0
+      - name: Install Bubblewrap executable only
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          /usr/bin/bwrap --version
+      - run: uv sync --locked
+      - name: Run actual isolation tests under existing runner policy
+        run: >-
+          uv run --locked pytest -n auto --no-cov -m host_isolation
+          tests/conformance tests
+      - name: State diagnostic scope
+        if: always()
+        run: |
+          echo '### Optional isolation diagnostics — not full host acceptance' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Real synthetic jail tests only; no provider/account execution or runner-policy changes. Missing kernel capability and test failures remain failures.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This does not run or replace local make check. No canary or policy-installer fallback is permitted.' >> "$GITHUB_STEP_SUMMARY"

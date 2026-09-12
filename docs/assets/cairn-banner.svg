@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Cairn</title>
+  <desc id="desc">Six individually shaped river stones, carefully balanced on their natural faces, beside branching memory paths on a dark background.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#120822"/>
+      <stop offset="0.55" stop-color="#74104f"/>
+      <stop offset="1" stop-color="#f01972"/>
+    </linearGradient>
+    <linearGradient id="granite" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#ffe187"/>
+      <stop offset="0.55" stop-color="#ff805c"/>
+      <stop offset="1" stop-color="#a92c78"/>
+    </linearGradient>
+    <linearGradient id="slate" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#b464ff"/>
+      <stop offset="1" stop-color="#3c087e"/>
+    </linearGradient>
+    <linearGradient id="limestone" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#fff6a3"/>
+      <stop offset="0.55" stop-color="#ffba32"/>
+      <stop offset="1" stop-color="#ff566d"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00f0ff"/>
+      <stop offset="1" stop-color="#a0ffed"/>
+    </linearGradient>
+    <radialGradient id="sunset-light" cx="20%" cy="45%" r="60%">
+      <stop offset="0" stop-color="#ff942f" stop-opacity=".32"/>
+      <stop offset="0.45" stop-color="#ff257b" stop-opacity=".14"/>
+      <stop offset="1" stop-color="#ff257b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="360" rx="24" fill="url(#background)"/>
+  <rect width="1200" height="360" rx="24" fill="url(#sunset-light)"/>
+  <path d="M0 304C205 272 357 324 552 291S935 236 1200 278V360H0Z" fill="#10051f" opacity=".88"/>
+
+  <g opacity=".38" stroke="#ff73cd" fill="none">
+    <path d="M742 88H884L941 145H1115"/>
+    <path d="M742 158H861L925 222H1115"/>
+    <path d="M742 228H884L941 171H1115"/>
+    <circle cx="742" cy="88" r="4" fill="#58f4ff"/>
+    <circle cx="742" cy="158" r="4" fill="#58f4ff"/>
+    <circle cx="742" cy="228" r="4" fill="#58f4ff"/>
+    <circle cx="1115" cy="145" r="4" fill="#58f4ff"/>
+    <circle cx="1115" cy="171" r="4" fill="#58f4ff"/>
+    <circle cx="1115" cy="222" r="4" fill="#58f4ff"/>
+  </g>
+
+  <!-- Each stone has its own silhouette, resting face and mineral grain. -->
+  <g transform="translate(100 30)" stroke-linejoin="round">
+    <ellipse cx="132" cy="280" rx="122" ry="10" fill="#070312" opacity=".8"/>
+
+    <!-- Broad, weathered foundation. -->
+    <path d="M24 249 Q33 232 60 224 L154 219 Q181 219 203 230
+             L238 252 Q249 267 226 274 L79 281 Q43 282 27 271 Q16 262 24 249Z"
+          fill="url(#granite)" stroke="#ffd2bf" stroke-opacity=".22"/>
+    <path d="M25 248 L68 236 L157 230 L201 234 L228 251
+             L176 245 L107 250 L56 261 L23 262Z" fill="#ffc99b" opacity=".24"/>
+    <path d="M56 266 L106 253 L141 255 L176 245" fill="none" stroke="#ffedd1" stroke-opacity=".35"/>
+    <path d="M82 274 L98 260 M189 251 L202 264" stroke="#84416e" stroke-opacity=".55"/>
+
+    <!-- A low, dark stone forms a level seat for the upright one. -->
+    <path d="M61 207 Q78 195 108 194 L183 199 L211 211
+             Q219 220 201 226 L124 232 L79 228 Q60 226 53 218 Q50 213 61 207Z"
+          fill="url(#slate)" stroke="#ffaad6" stroke-opacity=".28"/>
+    <path d="M62 208 L113 202 L175 204 L206 212 L161 216 L93 216Z"
+          fill="#ffa3cf" opacity=".24"/>
+    <path d="M74 223 L129 224 L180 219" fill="none" stroke="#ffc0df" stroke-opacity=".35"/>
+
+    <!-- Upright limestone: narrower at the foot, with a naturally flat crown. -->
+    <path d="M102 148 Q102 140 116 137 L153 136 Q170 139 181 157
+             L191 181 Q194 193 179 199 L137 201 L117 196 L103 170Z"
+          fill="url(#limestone)" stroke="#fff0c7" stroke-opacity=".3"/>
+    <path d="M116 141 L151 140 L160 159 L144 190 L122 197 L109 169Z"
+          fill="#ffeebd" opacity=".25"/>
+    <path d="M160 148 L173 164 L176 190 L153 199 L143 190Z" fill="#a8567c" opacity=".25"/>
+    <path d="M126 150 L135 167 L131 178 M146 144 L152 156" fill="none"
+          stroke="#b06a82" stroke-opacity=".4" stroke-width="1.1"/>
+
+    <!-- Long slab, selected to bridge the crown rather than repeat its shape. -->
+    <path d="M53 118 Q57 107 77 104 L170 99 L200 104 Q213 109 205 117
+             L174 131 L116 141 L73 138 Q51 133 49 126Z"
+          fill="url(#granite)" stroke="#ffe0c2" stroke-opacity=".33"/>
+    <path d="M59 117 L87 110 L170 105 L201 110 L163 119 L101 128 L56 126Z"
+          fill="#ffdeab" opacity=".33"/>
+    <path d="M74 132 L120 130 L167 119" fill="none" stroke="#ae5785" stroke-opacity=".5"/>
+    <path d="M98 113 L125 111 M145 107 L159 106" stroke="#fff0c7" stroke-opacity=".4"/>
+
+    <!-- Small, rounded river stone, offset over the supporting contact. -->
+    <path d="M120 77 Q131 65 154 65 Q175 68 184 81
+             Q190 91 178 97 L152 104 L132 103 Q117 96 116 88 Q115 82 120 77Z"
+          fill="url(#slate)" stroke="#ffc3dd" stroke-opacity=".3"/>
+    <path d="M123 78 Q144 68 163 75 L178 84 L161 87 L129 91Z"
+          fill="#ffb7da" opacity=".23"/>
+    <path d="M130 93 Q146 82 173 85" fill="none" stroke="#ffe7c4" stroke-opacity=".48" stroke-width="1.5"/>
+
+    <!-- A little capstone with an angled upper face. -->
+    <path d="M137 49 L158 43 Q168 43 176 51 L179 59 Q178 65 167 67
+             L143 68 Q131 66 130 61 Q130 55 137 49Z"
+          fill="url(#limestone)" stroke="#fff1c2" stroke-opacity=".38"/>
+    <path d="M136 53 L157 47 L171 52 L159 58 L132 61Z" fill="#fff3cd" opacity=".45"/>
+  </g>
+
+  <g transform="translate(394 103)">
+    <text x="0" y="68" fill="#fff9e9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="82" font-weight="700" letter-spacing="6">CAIRN</text>
+    <rect x="2" y="91" width="74" height="4" rx="2" fill="url(#accent)"/>
+    <text x="2" y="132" fill="#ffd7ee" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="19" letter-spacing="1.1">SCOPED · EVIDENCE-AWARE · AUDITABLE MEMORY</text>
+  </g>
+</svg>

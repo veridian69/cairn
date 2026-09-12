@@ -1,0 +1,54 @@
+# The component promises `runAsNonRoot` and the pinned image declares no
+# USER, so somebody has to name a UID. On OpenShift the SCC does it; on
+# kind nothing does, and without this the Pod fails admission with
+# `container has runAsNonRoot and image will run as root`.
+#
+# The UID is arbitrary, but it is not free: it must be a UID the image's
+# own `/etc/passwd` does not name. With `runAsUser` set and `runAsGroup`
+# unset the runtime resolves the primary group from that file, and this
+# image names two UIDs in the range an operator would plausibly reach
+# for. Measured against the pinned digest, 15 August 2026:
+#
+#   999   -> uid=999(redis)  gid=999(redis)     # `redis`
+#   1001  -> uid=1001(nextjs) gid=1001(nodejs)  # the bundled browser UI
+#   10001 -> uid=10001        gid=0(root)       # no passwd entry
+#   65532 -> uid=65532        gid=0(root)       # no passwd entry
+#
+# 10001 is chosen for the last line. The Secret's files are `root:root`
+# at 0440 (P-67), so a UID resolving to any group but 0 cannot open the
+# configuration the index is started with: it crash-loops on
+# `Permission denied`. That is not hypothetical. This overlay ran as 999
+# and did exactly that, found by the kind acceptance harness on
+# 13 August 2026 on a render whose every other guard was green. The first
+# fix named the group; this one removes the trap that made the group
+# load-bearing, because a worked example that picks the one dangerous UID
+# teaches the wrong lesson to whoever copies it.
+#
+# `runAsGroup: 0` stays regardless, and is now belt to the UID's braces.
+# Group 0 is the arbitrary-UID convention the rest of this repository
+# already keeps — the image gives Cairn `65532:0` for this reason and
+# OpenShift assigns its own UID with gid 0 for the same one — and stating
+# it means a future UID change cannot quietly reintroduce the fault.
+#
+# No `fsGroup` is set. The index writes only to its mounted data
+# directory, which kind's local-path provisioner creates world-writable;
+# the base takes the same position for Cairn's own claim, and the
+# acceptance run proves both at once or neither.
+#
+# Verified against the pinned image before it was written: FalkorDB 4.20.2
+# starts, loads the graph module, refuses unauthenticated clients and
+# serves queries as an arbitrary non-root UID with the root filesystem
+# read-only. The pin moved to v4.20.4 on 28 August 2026 — the version the
+# P-89 attribution runs proved on the compose tier — which re-ran module
+# load and authentication but not this overlay's arbitrary-UID posture;
+# the next kind acceptance run is what re-proves that.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: falkordb
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 0

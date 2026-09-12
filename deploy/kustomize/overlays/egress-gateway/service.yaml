@@ -1,0 +1,18 @@
+# The name every graphiti-enabled instance's HTTPS_PROXY resolves:
+# http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128
+apiVersion: v1
+kind: Service
+metadata:
+  name: cairn-egress-gateway
+  namespace: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cairn-egress-gateway
+  ports:
+    - name: proxy
+      protocol: TCP
+      port: 3128
+      targetPort: proxy

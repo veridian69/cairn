@@ -1,0 +1,29 @@
+# The vanilla-Kubernetes overlay: the portable base, plus the one thing a
+# real cluster must name and the base deliberately does not.
+#
+# The retrieval index is absent, and that is the default rather than an
+# omission (I-91). Enabling it is an operator's decision, taken by
+# including `../../components/falkordb` and doing the three things its
+# README lists — the kind overlay is the worked example. With it absent
+# this render contains no FalkorDB resource and no proxy variable at all,
+# which is the property `tests/deploy/test_rendered_manifests.py` asserts
+# on these bytes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  # I-10: the storage class is named explicitly, not left to whichever
+  # class a cluster happens to mark default. `cairn-local` is the class
+  # this project provisions for its own instances; a cluster with another
+  # name changes this one line, and changing it in the overlay keeps the
+  # base portable.
+  - target:
+      kind: StatefulSet
+      name: cairn
+    patch: |-
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: cairn-local

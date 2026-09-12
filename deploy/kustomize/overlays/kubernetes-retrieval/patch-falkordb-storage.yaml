@@ -1,0 +1,7 @@
+# The derived index has its own explicit claim on the same provisioner as
+# Cairn; it keeps the component's strict Filesystem/ReadWriteOncePod defaults.
+# A JSON patch preserves that complete claim specification; a strategic merge
+# would replace it because volumeClaimTemplates have no usable merge key.
+- op: add
+  path: /spec/volumeClaimTemplates/0/spec/storageClassName
+  value: cairn-local

@@ -1,0 +1,436 @@
+apiVersion: v1
+automountServiceAccountToken: false
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    schema_version: cairn.config/v1
+    # REPLACE PER INSTANCE, and deliberately not a valid UUID so that
+    # forgetting to is a refusal rather than a diff a reviewer might miss.
+    # A well-formed placeholder loads silently, and two instances sharing
+    # an identity would accept each other's backup bundles — the I-41
+    # guard compares exactly this value, so a shared one disarms it. This
+    # fails configuration loading at startup, naming the field.
+    instance_id: REPLACE_WITH_PER_INSTANCE_UUID
+    mode: production
+    http:
+      # In-cluster only: the Service is the boundary, not the bind
+      # address (I-12). Both values are already permitted.
+      host: 0.0.0.0
+      port: 8000
+    paths:
+      data: /var/lib/cairn
+      # I-92's adapter-credential directory, and the mount point of the
+      # Secret below. Retrieval reads its provider and index credentials here.
+      credentials: /var/run/secrets/cairn
+    attic:
+      enabled: true
+    graphiti:
+      # The index is this instance's dedicated FalkorDB Service. Its
+      # credentials are files under paths.credentials, never configuration.
+      enabled: true
+      host: falkordb
+      port: 6379
+    delivery:
+      interval_seconds: 5
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn
+spec:
+  ports:
+  - name: http
+    port: 8000
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: falkordb
+  name: falkordb
+spec:
+  ports:
+  - name: redis
+    port: 6379
+    protocol: TCP
+    targetPort: redis
+  selector:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: falkordb
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  serviceName: cairn
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: cairn
+        app.kubernetes.io/name: cairn
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - serve
+        - --config
+        - /etc/cairn/config.yaml
+        env:
+        - name: HTTPS_PROXY
+          value: http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128
+        image: cairn:v0.1.0
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: http
+          periodSeconds: 20
+        name: cairn
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: http
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /health/startup
+            port: http
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /var/lib/cairn
+          name: data
+        - mountPath: /etc/cairn
+          name: config
+          readOnly: true
+        - mountPath: /var/run/secrets/cairn
+          name: credentials
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      initContainers:
+      - args:
+        - migrate
+        - --config
+        - /etc/cairn/config.yaml
+        image: cairn:v0.1.0
+        name: migrate
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /var/lib/cairn
+          name: data
+        - mountPath: /etc/cairn
+          name: config
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: cairn
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - configMap:
+          name: cairn-config
+        name: config
+      - name: credentials
+        secret:
+          defaultMode: 288
+          optional: true
+          secretName: cairn-credentials
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 256Mi
+        name: tmp
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        app.kubernetes.io/instance: cairn
+        app.kubernetes.io/name: cairn
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOncePod
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: cairn-local
+      volumeMode: Filesystem
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: falkordb
+  name: falkordb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: falkordb
+  serviceName: falkordb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: cairn
+        app.kubernetes.io/name: falkordb
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - env:
+        - name: REDIS_ARGS
+          value: /etc/falkordb/cairn.conf
+        - name: BROWSER
+          value: "0"
+        - name: TLS
+          value: "0"
+        - name: FALKORDB_ARGS
+          value: MAX_QUEUED_QUERIES 200 TIMEOUT 5000 RESULTSET_SIZE 10000
+        image: falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62
+        livenessProbe:
+          periodSeconds: 20
+          tcpSocket:
+            port: redis
+        name: falkordb
+        ports:
+        - containerPort: 6379
+          name: redis
+          protocol: TCP
+        readinessProbe:
+          periodSeconds: 10
+          tcpSocket:
+            port: redis
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 30
+          periodSeconds: 5
+          tcpSocket:
+            port: redis
+        volumeMounts:
+        - mountPath: /var/lib/falkordb/data
+          name: data
+        - mountPath: /etc/falkordb
+          name: index-config
+          readOnly: true
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 0
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: index-config
+        secret:
+          defaultMode: 288
+          items:
+          - key: falkordb.conf
+            path: cairn.conf
+          secretName: cairn-credentials
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        app.kubernetes.io/instance: cairn
+        app.kubernetes.io/name: falkordb
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOncePod
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: cairn-local
+      volumeMode: Filesystem
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-allow-dns-egress
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-allow-gateway-egress
+spec:
+  egress:
+  - ports:
+    - port: 3128
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cairn-egress
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: cairn-egress-gateway
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-allow-index-egress
+spec:
+  egress:
+  - ports:
+    - port: 6379
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: cairn
+          app.kubernetes.io/name: falkordb
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: cairn
+  name: cairn-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: cairn
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: falkordb
+  name: falkordb-allow-cairn-ingress
+spec:
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: cairn
+          app.kubernetes.io/name: cairn
+    ports:
+    - port: 6379
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: falkordb
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: cairn
+    app.kubernetes.io/name: falkordb
+  name: falkordb-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: cairn
+      app.kubernetes.io/name: falkordb
+  policyTypes:
+  - Ingress
+  - Egress
