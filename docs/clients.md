@@ -1,6 +1,6 @@
 # Cairn client guide
 
-**Last updated:** 1 September 2026.
+**Last updated:** 13 September 2026.
 
 This guide is for software calling one Cairn v0.1 instance through REST or
 MCP. Operators deploying, backing up or migrating an instance should use the
@@ -21,8 +21,7 @@ The generated contracts are the wire authority:
 Verify a checkout before generating a client or accepting its schemas:
 
 ```sh
-sha256sum -c contracts/cairn-openapi-v1.json.sha256
-sha256sum -c contracts/cairn-mcp-tools-v1.json.sha256
+(cd contracts && sha256sum -c cairn-openapi-v1.json.sha256 cairn-mcp-tools-v1.json.sha256)
 ```
 
 An authenticated `GET /v1/instance` returns `contract_identity`,
@@ -52,11 +51,27 @@ in Git, configuration committed to Git, command arguments, environment
 variables, URLs, logs or traces.
 
 The examples below read a token from an owner-only file without putting it on
-`curl`'s command line. Run them on Linux with `curl`, `jq` and Python 3 available as `python3`:
+`curl`'s command line. Run them on Linux with curl 8.4.0 or newer, `jq` and
+Python 3 available as `python3`. The bounded helper uses curl's
+[`--max-filesize`](https://curl.se/docs/manpage.html#--max-filesize)
+transfer-time limit, which protects unknown-length responses from 8.4.0. Check
+the installed version with `curl --version`. The default credential path
+matches the Compose guide; change only that variable if the installation
+retained it elsewhere.
 
-```sh
-base_url=http://127.0.0.1:8080
-credential_file=/absolute/path/to/cairn-credential
+```bash
+set -eu
+umask 077
+: "${base_url:=http://127.0.0.1:8080}"
+: "${credential_file:=$HOME/.config/cairn/cairn-a-admin.token}"
+test -f "$credential_file" && test ! -L "$credential_file"
+test "$(stat -c '%u' "$credential_file")" = "$(id -u)"
+python3 - "$credential_file" <<'PYTHON'
+import pathlib, re, sys
+value = pathlib.Path(sys.argv[1]).read_bytes()
+if len(value) > 16384 or not re.fullmatch(rb"cairn1\.[A-Za-z0-9_.-]+[\r\n]*", value):
+    raise SystemExit("invalid credential file")
+PYTHON
 
 credential_mode="$(stat -c '%a' "$credential_file")"
 case "$credential_mode" in
@@ -150,24 +165,65 @@ result directly.
 
 ### Check the instance
 
-```sh
-curl --silent --show-error --fail-with-body \
-  --config "$curl_config" \
-  "$base_url/v1/instance" |
-  jq '{instance_id, product_version, contract_identity, contract_digest, mcp_contract_digest}'
+```bash
+instance_response="$(mktemp)"
+instance_headers="$(mktemp)"
+trap 'rm -f "$curl_config" "$instance_response" "$instance_headers"' EXIT
+if instance_status="$(curl --disable --silent --show-error --noproxy '*' \
+    --max-time 10 --config "$curl_config" \
+    --output "$instance_response" --dump-header "$instance_headers" \
+    --write-out '%{http_code}' "$base_url/v1/instance")"; then
+  printf 'Instance HTTP %s\n' "$instance_status"
+  cat "$instance_response"
+  printf '\n'
+else
+  printf 'Instance transport failed\n' >&2
+  exit 1
+fi
+test "$instance_status" = 200
+jq -e '{instance_id, product_version, contract_identity, contract_digest,
+        mcp_contract_digest} |
+       select(.contract_identity == "cairn/v1" and
+              (.instance_id | type == "string") and
+              (.contract_digest | type == "string") and
+              (.mcp_contract_digest | type == "string"))' \
+  "$instance_response"
 ```
 
 Require `contract_identity` to be `cairn/v1`, both digests to match the pinned
 values above, and `instance_id` to match the intended target.
 
-### Ingest
+## Bounded ingest and retrieval verification
 
-This example writes synthetic candidate memory at one repository scope:
+Run this in the same Bash session as the credential setup above. Move to the
+repository root explicitly before continuing:
 
 ```sh
-request_file="$(mktemp)"
-response_file="$(mktemp)"
-trap 'rm -f "$curl_config" "$request_file" "$response_file"' EXIT
+cd "$(git rev-parse --show-toplevel)"
+```
+
+Keep `base_url` on numeric loopback. The example uses the `local`
+realm and needs `ingest` and `retrieve` authority at repository `example` with
+`internal` clearance. The documented bootstrap credential has this authority.
+Semantic retrieval must be configured first; see the
+[Compose procedure](../deploy/compose/README.md#optional-semantic-retrieval).
+
+### Ingest
+
+This writes one synthetic candidate fact. It retains the exact request,
+idempotency key and response outside Git in an owner-only directory. Do not
+run this block again merely because retrieval is waiting.
+
+```bash
+set -eu
+umask 077
+install -d -m 0700 "$HOME/.local/state/cairn-checks"
+verification_dir="$(mktemp -d "$HOME/.local/state/cairn-checks/check.XXXXXXXX")"
+printf 'Retained verification files: %s\n' "$verification_dir"
+request_file="$verification_dir/ingest.json"
+response_file="$verification_dir/ingest-response.json"
+python3 -c 'import uuid; print(uuid.uuid4())' > "$verification_dir/idempotency-key"
+idempotency_key="$(cat "$verification_dir/idempotency-key")"
 
 jq -n '{
   scope: {
@@ -179,54 +235,85 @@ jq -n '{
   facts: [{body: "The example repository uses a locked dependency set."}]
 }' > "$request_file"
 
-idempotency_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-curl --silent --show-error --fail-with-body \
-  --request POST \
-  --config "$curl_config" \
+if http_status="$(curl --disable --silent --show-error --noproxy '*' \
+  --max-time 30 --request POST --config "$curl_config" \
   --header 'Content-Type: application/json' \
   --header "Idempotency-Key: $idempotency_key" \
-  --data-binary "@$request_file" \
-  --output "$response_file" \
-  "$base_url/v1/ingest"
-jq '{outcome, result, mutation_receipt, audit_receipt}' "$response_file"
+  --data-binary "@$request_file" --output "$response_file" \
+  --dump-header "$verification_dir/ingest-headers" --write-out '%{http_code}' \
+  "$base_url/v1/ingest")"; then
+  printf 'Ingest HTTP %s\n' "$http_status"
+  cat "$response_file"
+  printf '\n'
+else
+  printf 'Transport failed; commit is uncertain. Keep %s and replay the same key/request.\n' "$verification_dir" >&2
+  exit 1
+fi
+test "$http_status" = 200
+jq -e '
+  (.outcome == "committed" or .outcome == "replayed") and
+  (.mutation_receipt | type == "object") and
+  (.audit_receipt | type == "object") and
+  (.result.fact_ids | type == "array" and length == 1 and
+    all(.[]; type == "string"))
+' "$response_file" >/dev/null
+jq -er '.result.fact_ids[0] | select(type == "string")' "$response_file" > "$verification_dir/fact-id"
 ```
 
-Retain the idempotency key until the caller has durably accepted the response.
-Retry an uncertain mutation with the same key and byte-equivalent request.
-Never reuse that key for different intent: Cairn returns
-`idempotency_conflict` rather than guessing.
+A successful acknowledgement and its mutation/audit receipts establish committed
+custody. They do **not** establish completed indexing. If transport fails after
+submission, do not create a fresh key: recover the printed directory, set
+`verification_dir`, `request_file`, `response_file` and `idempotency_key` from
+its saved files, and repeat only the `if http_status=...` request and response
+checks above. A byte-equivalent request with the same key is safe to replay.
+An HTTP error is printed in full before the block stops; follow the failure
+policy below rather than retrying blindly.
 
 ### Retrieve and trust filters
 
-Retrieval is available only when projection is enabled and current. The query
-is opaque UTF-8; Cairn owns no query language. `budget` is a fact-body byte
-budget from 1 to 1,048,576. Omitted or empty `trust_filters` means
-`["validated"]`; candidate and failed-approach memory must be requested
-explicitly. Duplicate filters are invalid.
+Run this after committed/replayed custody, with the same `verification_dir`:
 
 ```sh
-jq -n '{
-  scope: {
-    realm: "local",
-    segments: [{kind: "repository", identifier: "example"}]
-  },
-  query: "locked dependency set",
-  budget: 65536,
-  trust_filters: ["candidate"]
-}' > "$request_file"
-
-curl --silent --show-error --fail-with-body \
-  --request POST \
-  --config "$curl_config" \
-  --header 'Content-Type: application/json' \
-  --data-binary "@$request_file" \
-  "$base_url/v1/retrieve" |
-  jq '{hits, budget_consumed, budget_exhausted}'
+python3 scripts/verify-retrieval.py \
+  --base-url "$base_url" \
+  --credential-file "$credential_file" \
+  --fact-id "$(cat "$verification_dir/fact-id")" \
+  --deadline 120 --request-timeout 10 --max-attempts 30
 ```
 
-An ingest acknowledgement proves custody, not immediate searchability. Treat
-`index_pending`, `stale_index` and `dependency_unavailable` as delayed retries
-and honour `Retry-After`. Do not add an idempotency key to retrieval.
+The helper makes only `POST /v1/retrieve` calls, without an idempotency key. It
+queries `locked dependency set` at `local/repository:example`, uses budget
+65536 and explicitly requests `trust_filters: ["candidate"]`. The default
+trust filter is `validated`; omitting the candidate filter would conceal this
+newly ingested candidate. The query is opaque UTF-8; Cairn owns no query
+language. Budgets are fact-body bytes, from 1 to 1,048,576.
+
+While waiting, stderr retains HTTP status, the failure envelope (including code,
+retry class and correlation ID) and `Retry-After`. Only HTTP 503 with
+`index_pending`, `stale_index` or `dependency_unavailable` **and**
+`retry: "after-delay"` permits another retrieval. `index_pending` and
+`stale_index` describe projection readiness; `dependency_unavailable` may mean
+a failed or contended dependency and must not be presented as harmless indexing.
+A valid numeric or HTTP-date `Retry-After` controls the wait. A missing or invalid
+header, a delay beyond the remaining deadline, another failure class, malformed
+success or HTTP 200 without the exact fact ID/body is a failed check.
+
+The helper stops after at most 30 attempts or 120 seconds, whichever comes
+first; each request has a 10-second timeout. It returns nonzero on failure.
+Inspect the retained failure and the installation's service health,
+logs and semantic-provider configuration; correct the cause and rerun **only the
+retrieval command with the same fact ID**. Do not repeat committed ingest. The
+helper refuses redirects, environment proxies and non-loopback endpoints, and
+reads an owner-owned regular credential file with mode 0400 or 0600.
+
+Success prints `"status": "verified"` with the exact saved ID and body. This
+proves authenticated custody-to-search retrieval for this synthetic candidate
+through the configured projection. It does not prove every fact is indexed,
+recall quality, backups or production readiness. Retain the verification directory
+for the restart test: restart Cairn using your installation guide and rerun this
+same read-only command. Do not filter an error response through a success-only
+`jq '{hits, budget_consumed, budget_exhausted}'` projection: that hides the reason
+for failure behind null fields.
 
 ## Failures and retry policy
 

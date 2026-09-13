@@ -65,6 +65,105 @@ Monitor each backup's emitted `barrier_ms` and mutation retry rate.
 
 ## Backup
 
+### Native systemd user service
+
+The [persistent native installation](native-installation.md) uses these fixed
+paths:
+
+```text
+~/.config/cairn/config.yaml
+~/.local/share/cairn/data/
+~/.local/share/cairn/credentials/local-operator.token
+~/.local/share/cairn/backups/
+```
+
+Its authoritative state is the catalogue plus the Attic database in `data`.
+The runtime environment is rebuildable. The base procedure leaves semantic
+retrieval disabled; its supported optional extension runs FalkorDB separately.
+That index remains rebuildable and is not in the Cairn bundle.
+
+A backup may run while the service is active. The following creates an
+owner-only recovery directory, validates the completed bundle, and copies the
+stable configuration and one-time plaintext token beside it. Those two copies
+are recovery material, not bundle members:
+
+```sh
+set -eu
+umask 077
+
+runtime_dir="$HOME/.local/share/cairn/runtime"
+config_file="$HOME/.config/cairn/config.yaml"
+credential_file="$HOME/.local/share/cairn/credentials/local-operator.token"
+backup_root="$HOME/.local/share/cairn/backups"
+
+test -x "$runtime_dir/bin/cairn"
+test -f "$config_file"
+test -f "$credential_file"
+case "$(stat -c '%a' "$credential_file")" in
+  400|600) ;;
+  *) printf 'Credential must be owner-only (0400 or 0600)\n' >&2; exit 1 ;;
+esac
+recovery_dir="$(mktemp -d "$backup_root/recovery.XXXXXXXX")"
+chmod 0700 "$recovery_dir"
+
+backup_json="$(
+  "$runtime_dir/bin/cairn" backup --config "$config_file" \
+    --output "$recovery_dir"
+)"
+printf '%s\n' "$backup_json" | jq .
+printf '%s\n' "$backup_json" |
+  jq -e '.status == "ok" and .operation == "backup"' >/dev/null
+printf '%s\n' "$backup_json" >"$recovery_dir/backup-result.json"
+chmod 0600 "$recovery_dir/backup-result.json"
+
+bundle="$(printf '%s\n' "$backup_json" | jq -er '.bundle')"
+case "$bundle" in
+  "$recovery_dir"/*) ;;
+  *) printf 'Unexpected bundle location: %s\n' "$bundle" >&2; exit 1 ;;
+esac
+manifest="$bundle/manifest.json"
+jq -e '.schema_version == "cairn.backup/v1" and
+       (.instance_id | type == "string") and
+       (.members | type == "array" and length > 0)' "$manifest" >/dev/null
+
+verified=0
+while IFS="$(printf '\t')" read -r member bytes digest; do
+  case "$member" in
+    catalogue.sqlite3|attic.sqlite3) ;;
+    *) printf 'Unexpected bundle member: %s\n' "$member" >&2; exit 1 ;;
+  esac
+  member_path="$bundle/$member"
+  test -f "$member_path"
+  test "$(wc -c <"$member_path" | tr -d ' ')" = "$bytes"
+  test "$(sha256sum "$member_path" | awk '{print $1}')" = "$digest"
+  verified=$((verified + 1))
+done <<EOF
+$(jq -r '.members[] | [.name, (.bytes | tostring), .sha256] | @tsv' "$manifest")
+EOF
+test "$verified" -eq "$(jq '.members | length' "$manifest")"
+sha256sum "$manifest" >"$recovery_dir/manifest.sha256"
+
+install -m 0600 "$config_file" "$recovery_dir/config.yaml"
+install -m 0600 "$credential_file" \
+  "$recovery_dir/local-operator.token"
+for adapter_credential in falkordb-password openai-api-key; do
+  adapter_path="$HOME/.local/share/cairn/credentials/$adapter_credential"
+  if [ -f "$adapter_path" ]; then
+    install -m 0600 "$adapter_path" "$recovery_dir/$adapter_credential"
+  fi
+done
+printf 'Recovery directory: %s\n' "$recovery_dir"
+```
+
+The final path is the unit to export. Transfer the whole recovery directory to
+an approved encrypted, access-controlled backup sink. Record its location,
+manifest digest, Cairn revision, `instance_id` and `barrier_ms`, then perform a
+restore rehearsal under the retention policy. The plaintext token makes this
+directory secret; do not commit it, put it in ordinary object storage, or copy
+it into command output. A site may instead retain the token in its existing
+secret manager and omit the adjacent token copy after proving that independent
+recovery path.
+
 ### Kubernetes or OpenShift shape
 
 The bundle starts on the Cairn PVC because that is where the local command can
@@ -139,8 +238,10 @@ The sequence is invariant across targets:
 2. Quiesce the original and wait for complete termination. Do not allow any
    Route, Ingress, Service selector, reverse proxy or Compose publication to
    point to a replacement yet.
-3. Create a fresh empty Cairn data volume and, when retrieval is enabled, a
-   fresh FalkorDB volume. Keep the original volumes retained and untouched.
+3. Create a fresh empty Cairn data volume. When retrieval is enabled, use a
+   fresh FalkorDB volume or the native procedure's complete clear-and-rebuild
+   of that derived index. Keep the original authoritative volume retained and
+   untouched.
 4. Start a non-serving recovery container or Pod with the reviewed Cairn
    image, replacement config, credentials, empty data volume and bundle
    staging volume. It must not expose the Cairn Service port.
@@ -172,6 +273,299 @@ The sequence is invariant across targets:
    REST and MCP reads for known pre-backup data.
 9. Move traffic only after those checks pass. Retain the quiesced original
    until the operator explicitly accepts the replacement.
+
+### Native systemd user service
+
+This recipe restores the native installation for the same Linux user and fixed
+home-directory layout. `recovery_dir` is the complete directory retrieved from
+the protected sink. `known_mutation_id` is the mutation UUID recorded from a
+successful ingest before the backup; checking it distinguishes recovery of
+known application data from mere process health. Replace both assignment
+values before running the block. Run all restore blocks in the same
+shell; later blocks reuse the validated paths and identities established by
+the first.
+
+First validate the recovery material, stop the service and preserve any current
+data directory as the rollback point:
+
+```sh
+set -eu
+umask 077
+
+recovery_dir=/absolute/path/to/recovery.XXXXXXXX
+known_mutation_id=00000000-0000-4000-8000-000000000000
+runtime_dir="$HOME/.local/share/cairn/runtime"
+state_dir="$HOME/.local/share/cairn"
+config_file="$HOME/.config/cairn/config.yaml"
+credential_file="$HOME/.local/share/cairn/credentials/local-operator.token"
+data_dir="$HOME/.local/share/cairn/data"
+
+test -d "$recovery_dir"
+test "$known_mutation_id" != 00000000-0000-4000-8000-000000000000
+test -f "$recovery_dir/config.yaml"
+test -f "$recovery_dir/local-operator.token"
+test "$(stat -c '%a' "$recovery_dir/local-operator.token")" = 600
+
+bundle_count="$(find "$recovery_dir" -mindepth 1 -maxdepth 1 -type d \
+  -name 'cairn-backup-*' -printf '.\n' | wc -l)"
+test "$bundle_count" -eq 1
+bundle="$(find "$recovery_dir" -mindepth 1 -maxdepth 1 -type d \
+  -name 'cairn-backup-*' -print -quit)"
+expected_instance="$(jq -er '.instance_id' "$bundle/manifest.json")"
+snapshot_instance="$(awk '$1 == "instance_id:" {print $2}' \
+  "$recovery_dir/config.yaml")"
+test "$snapshot_instance" = "$expected_instance"
+
+systemctl --user stop cairn.service
+! systemctl --user is-active --quiet cairn.service
+
+rollback_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+rollback_material_dir="$state_dir/recovery-rollback.$rollback_stamp"
+install -d -m 0700 "$rollback_material_dir"
+if [ -f "$config_file" ]; then
+  install -m 0600 "$config_file" "$rollback_material_dir/config.yaml"
+fi
+for credential_name in local-operator.token falkordb-password openai-api-key; do
+  current_credential="$(dirname "$credential_file")/$credential_name"
+  if [ -f "$current_credential" ]; then
+    install -m 0600 "$current_credential" \
+      "$rollback_material_dir/$credential_name"
+  fi
+done
+install -d -m 0700 "$(dirname "$config_file")" "$(dirname "$credential_file")"
+install -m 0600 "$recovery_dir/config.yaml" "$config_file"
+install -m 0600 "$recovery_dir/local-operator.token" "$credential_file"
+for adapter_credential in falkordb-password openai-api-key; do
+  if [ -f "$recovery_dir/$adapter_credential" ]; then
+    install -m 0600 "$recovery_dir/$adapter_credential" \
+      "$(dirname "$credential_file")/$adapter_credential"
+  fi
+done
+"$runtime_dir/bin/cairn" check-config --config "$config_file" |
+  jq -e --arg expected "$expected_instance" \
+    '.status == "ok" and .instance_id == $expected'
+
+rollback_dir=
+if [ -e "$data_dir" ]; then
+  rollback_dir="$state_dir/data.rollback.$rollback_stamp"
+  test ! -e "$rollback_dir"
+  mv -- "$data_dir" "$rollback_dir"
+fi
+install -d -m 0700 "$data_dir"
+printf 'Rollback directory: %s\n' "${rollback_dir:-none}"
+printf 'Rollback configuration and credential: %s\n' "$rollback_material_dir"
+```
+
+The service is now stopped and the restore target is empty. Keep
+`rollback_dir` untouched. Restore and perform offline verification:
+
+```sh
+set -eu
+
+restore_json="$(
+  "$runtime_dir/bin/cairn" restore --config "$config_file" --bundle "$bundle"
+)"
+printf '%s\n' "$restore_json" | jq .
+printf '%s\n' "$restore_json" |
+  jq -e --arg expected "$expected_instance" \
+    '.status == "ok" and .operation == "restore" and
+     .instance_id == $expected' >/dev/null
+
+verify_json="$("$runtime_dir/bin/cairn" verify --config "$config_file")"
+printf '%s\n' "$verify_json" | jq .
+printf '%s\n' "$verify_json" |
+  jq -e --arg expected "$expected_instance" \
+    '.status == "ok" and .operation == "verify" and
+     .instance_id == $expected' >/dev/null
+```
+
+If either command fails, do not start the candidate. Preserve the failed data
+directory and command output for diagnosis. The [failure and rollback](#failure-and-rollback)
+rules apply; when the error says `delete_data_directory_and_retry`, it means
+this new target only, never the retained rollback directory.
+
+If `graphiti.enabled` is true, the derived index must match the restored
+catalogue before Cairn serves. If the named index container and volumes were
+also lost, recreate only FalkorDB using the volume-init and start blocks in the
+[native semantic procedure](native-installation.md#optional-semantic-retrieval)
+with the recovered `falkordb-password`; do not generate replacement
+credentials. Then run this complete clear-and-rebuild while Cairn remains
+stopped:
+
+```sh
+graphiti_enabled="$(
+  "$runtime_dir/bin/python" - "$config_file" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+document = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print("true" if document["graphiti"]["enabled"] is True else "false")
+PY
+)"
+if [ "$graphiti_enabled" = true ]; then
+  host_uid="$(id -u)"
+  index_name="cairn-native-$host_uid-falkordb"
+  if [ "$(docker inspect -f '{{.State.Running}}' "$index_name")" != true ]; then
+    docker start "$index_name" >/dev/null
+  fi
+  attempt=0
+  until docker exec "$index_name" sh -c \
+    '{ sed -n "s/^requirepass /AUTH /p" /etc/falkordb/cairn.conf; echo PING; } | redis-cli -h 127.0.0.1 -p 6379' |
+    grep -q '^PONG$'
+  do
+    attempt=$((attempt + 1))
+    test "$attempt" -lt 60
+    sleep 2
+  done
+  rebuild_json="$(
+    "$runtime_dir/bin/cairn" rebuild-index --config "$config_file"
+  )"
+  printf '%s\n' "$rebuild_json" | jq .
+  printf '%s\n' "$rebuild_json" |
+    jq -e '.status == "ok" and .failed == 0 and .unreadable == 0' >/dev/null
+fi
+```
+
+`rebuild-index` clears the whole FalkorDB index before projecting the restored
+catalogue. A failure or `partial` result leaves Cairn stopped. The original
+catalogue remains at `rollback_dir`; returning to it also requires rebuilding
+the derived index before that original serves.
+
+Start the restored service and verify health, identity, the retained credential
+and the known pre-backup mutation through an authenticated audit read:
+
+```sh
+set -eu
+umask 077
+
+systemctl --user start cairn.service
+attempt=0
+until curl --disable --silent --show-error --fail \
+  --noproxy '*' --proto '=http' --max-redirs 0 --max-time 2 \
+  http://127.0.0.1:8000/health/ready |
+  jq -e '.status == "ready"' >/dev/null 2>&1
+do
+  attempt=$((attempt + 1))
+  test "$attempt" -lt 60
+  sleep 1
+done
+
+curl_config="$(mktemp)"
+audit_request="$(mktemp)"
+audit_response="$(mktemp)"
+trap 'rm -f "$curl_config" "$audit_request" "$audit_response"' EXIT HUP INT TERM
+{
+  printf 'header = "Authorization: Bearer '
+  tr -d '\r\n' <"$credential_file"
+  printf '"\n'
+} >"$curl_config"
+chmod 0600 "$curl_config"
+
+curl --disable --silent --show-error --fail-with-body \
+  --noproxy '*' --proto '=http' --max-redirs 0 --max-time 5 \
+  --config "$curl_config" \
+  http://127.0.0.1:8000/v1/instance |
+  jq -e --arg expected "$expected_instance" '.instance_id == $expected'
+
+audit_after=0
+audit_page=0
+mutation_found=0
+while [ "$audit_page" -lt 100 ]; do
+  audit_page=$((audit_page + 1))
+  jq -n --argjson after "$audit_after" \
+    '{realm_id: "local", scope_prefix: [], after_sequence: $after, limit: 500}' \
+    >"$audit_request"
+  curl --disable --silent --show-error --fail-with-body \
+    --noproxy '*' --proto '=http' --max-redirs 0 --max-time 5 \
+    --request POST --config "$curl_config" \
+    --header 'Content-Type: application/json' \
+    --data-binary "@$audit_request" \
+    --output "$audit_response" \
+    http://127.0.0.1:8000/v1/read-audit-events
+  if jq -e --arg mutation_id "$known_mutation_id" \
+    '.events | any(.mutation_id == $mutation_id)' "$audit_response" >/dev/null
+  then
+    mutation_found=1
+    break
+  fi
+  next_after="$(jq -er '.next_after_sequence // empty' "$audit_response")" || break
+  test "$next_after" -gt "$audit_after"
+  audit_after="$next_after"
+done
+test "$mutation_found" -eq 1
+printf 'Recovered mutation found after %s audit page(s).\n' "$audit_page"
+```
+
+The final `true` proves that the restored catalogue contains the named
+pre-backup mutation and the retained credential can read its audit scope. It
+does not prove semantic retrieval, every fact, production readiness or the
+external sink's future availability. Complete any additional known-data reads
+required by the recovery objective before accepting the restored directory.
+
+The rebuild block above is mandatory when Graphiti is enabled. When it is
+disabled, the audit check proves restored custody without claiming semantic
+search. The [Compose recovery procedure](#docker-compose-mechanics) remains the
+full-container alternative.
+
+After acceptance, retain or remove `rollback_dir` and `rollback_material_dir`
+according to the site's retention and incident policy. Both may contain
+sensitive data.
+
+If validation fails and `rollback_dir` exists, return to the original without
+overwriting either copy:
+
+```sh
+set -eu
+
+systemctl --user stop cairn.service
+! systemctl --user is-active --quiet cairn.service
+failed_dir="$state_dir/data.failed.$(date -u +%Y%m%dT%H%M%SZ)"
+test ! -e "$failed_dir"
+mv -- "$data_dir" "$failed_dir"
+mv -- "$rollback_dir" "$data_dir"
+if [ -f "$rollback_material_dir/config.yaml" ]; then
+  install -m 0600 "$rollback_material_dir/config.yaml" "$config_file"
+fi
+for credential_name in local-operator.token falkordb-password openai-api-key; do
+  if [ -f "$rollback_material_dir/$credential_name" ]; then
+    install -m 0600 "$rollback_material_dir/$credential_name" \
+      "$(dirname "$credential_file")/$credential_name"
+  fi
+done
+graphiti_enabled="$(
+  "$runtime_dir/bin/python" - "$config_file" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+document = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print("true" if document["graphiti"]["enabled"] is True else "false")
+PY
+)"
+if [ "$graphiti_enabled" = true ]; then
+  rebuild_json="$(
+    "$runtime_dir/bin/cairn" rebuild-index --config "$config_file"
+  )"
+  printf '%s\n' "$rebuild_json" |
+    jq -e '.status == "ok" and .failed == 0 and .unreadable == 0' >/dev/null
+fi
+systemctl --user start cairn.service
+attempt=0
+until curl --disable --silent --show-error --fail \
+  --noproxy '*' --proto '=http' --max-redirs 0 --max-time 2 \
+  http://127.0.0.1:8000/health/ready |
+  jq -e '.status == "ready"' >/dev/null 2>&1
+do
+  attempt=$((attempt + 1))
+  test "$attempt" -lt 60
+  sleep 1
+done
+printf 'Failed restored candidate retained at: %s\n' "$failed_dir"
+```
+
+Repeat the authenticated identity and known-data checks against the original.
+Do not overwrite either data directory in place.
 
 ### Kubernetes or OpenShift mechanics
 

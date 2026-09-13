@@ -1,8 +1,15 @@
 # Local source quickstart
 
+> **Disposable:** this script stops Cairn and deletes its temporary data and
+> credential when it exits. For an instance that survives restart and reboot,
+> use the [persistent native installation](operations/native-installation.md).
+
 This procedure runs Cairn from source on numeric loopback with disposable test data. It makes no productive access and no model-provider call: retrieval and the optional evidence adapter remain disabled.
 
 ## Requirements
+
+Complete the [disposable native prerequisites](install.md#disposable-native-quickstart-prerequisites)
+before continuing. The path-specific summary is:
 
 - Linux on a native Linux filesystem
 - Python 3.12
@@ -12,7 +19,7 @@ This procedure runs Cairn from source on numeric loopback with disposable test d
 From the repository root, install the exact locked environment:
 
 ```sh
-uv sync --locked
+uv sync --locked --no-dev
 ```
 
 Run the following block from that same directory. It creates the data, configuration, request bodies and owner-only credential under a new `/tmp` directory, then removes them when it exits.
@@ -35,7 +42,7 @@ trap cleanup EXIT HUP INT TERM
 install -d -m 0700 \
   "$quickstart_dir/data" \
   "$quickstart_dir/credentials"
-instance_id="$(uv run --locked python -c 'import uuid; print(uuid.uuid4())')"
+instance_id="$(uv run --locked --no-dev python -c 'import uuid; print(uuid.uuid4())')"
 config_file="$quickstart_dir/config.yaml"
 cat >"$config_file" <<EOF
 schema_version: cairn.config/v1
@@ -53,14 +60,14 @@ graphiti:
   enabled: false
 EOF
 
-uv run --locked cairn check-config --config "$config_file"
-uv run --locked cairn migrate --config "$config_file"
+uv run --locked --no-dev cairn check-config --config "$config_file"
+uv run --locked --no-dev cairn migrate --config "$config_file"
 
 # Bootstrap is local-only. Capture its one-time plaintext token in an
 # owner-only file outside the checkout, then remove the full result.
 bootstrap_result="$quickstart_dir/bootstrap.json"
 credential_file="$quickstart_dir/cairn-credential"
-uv run --locked cairn bootstrap --config "$config_file" \
+uv run --locked --no-dev cairn bootstrap --config "$config_file" \
   --realm local --label quickstart >"$bootstrap_result"
 jq -er \
   'select(.status == "ok" and .operation == "bootstrap") | .token | strings | select(startswith("cairn1."))' \
@@ -68,12 +75,14 @@ jq -er \
 chmod 0600 "$credential_file"
 rm -f -- "$bootstrap_result"
 
-uv run --locked cairn serve --config "$config_file" \
+uv run --locked --no-dev cairn serve --config "$config_file" \
   >"$quickstart_dir/server.log" 2>&1 &
 server_pid=$!
 
 attempt=0
-until curl --silent --fail http://127.0.0.1:8000/health/ready >/dev/null; do
+until curl --disable --silent --show-error --fail \
+  --noproxy '*' --proto '=http' --max-redirs 0 --max-time 2 \
+  http://127.0.0.1:8000/health/ready >/dev/null; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 50 ]; then
     cat "$quickstart_dir/server.log" >&2
@@ -104,8 +113,9 @@ cat >"$quickstart_dir/ingest.json" <<'JSON'
 }
 JSON
 
-idempotency_key="$(uv run --locked python -c 'import uuid; print(uuid.uuid4())')"
-curl --silent --show-error --fail-with-body \
+idempotency_key="$(uv run --locked --no-dev python -c 'import uuid; print(uuid.uuid4())')"
+curl --disable --silent --show-error --fail-with-body \
+  --noproxy '*' --proto '=http' --max-redirs 0 --max-time 5 \
   --request POST \
   --config "$curl_config" \
   --header 'Content-Type: application/json' \
@@ -127,7 +137,8 @@ cat >"$quickstart_dir/audit-request.json" <<'JSON'
 }
 JSON
 
-curl --silent --show-error --fail-with-body \
+curl --disable --silent --show-error --fail-with-body \
+  --noproxy '*' --proto '=http' --max-redirs 0 --max-time 5 \
   --request POST \
   --config "$curl_config" \
   --header 'Content-Type: application/json' \

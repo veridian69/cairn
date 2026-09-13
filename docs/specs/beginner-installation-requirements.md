@@ -1,9 +1,9 @@
 # Beginner installation requirements
 
 Date: 13 September 2026.
-Status: requirements recorded at Operator's request; implementation and beginner
-acceptance remain outstanding. This document is not an installation guide or
-evidence that these requirements have been delivered.
+Status: BI-1 through BI-4 installation guidance is implemented; engineering
+verification and distribution publication are recorded with this change.
+**Fresh-user beginner acceptance remains pending.** Start at [Install Cairn](../install.md).
 
 ## Purpose and scope
 
@@ -21,7 +21,7 @@ handling and loopback boundaries must not be weakened for convenience.
 The following is Operator's fresh-user acceptance handoff, recorded here rather than
 claimed as a new execution by the author of this document:
 
-- Testing used a fresh Linux user on the reference host and the Gitea `cairn-dist` distribution.
+- Testing used a fresh Linux user and the Gitea `cairn-dist` distribution.
 - The native source quickstart passed.
 - Unchanged `make check` passed at distribution revision
   `336e0e68c915fd9f44de4b8a3a6c50955c283dfc`: 6,169 passed and 134 skipped.
@@ -155,13 +155,14 @@ showing only the eventual successful response.
 
 ## Delivery and acceptance checklist
 
-All items below are pending. Developer-suite evidence and end-user installation
-acceptance must be recorded separately; one cannot substitute for the other.
+Delivery and fresh-user acceptance are separate. The delivery items below can
+close after engineering verification and publication; every fresh-user acceptance
+item remains pending until the published instructions have been followed literally.
 
-- [ ] Deliver BI-1 through BI-4 in the native entry documentation, Compose guide,
+- [x] Deliver BI-1 through BI-4 in the native entry documentation, Compose guide,
   deployment guide, client verification examples and relevant backup/recovery
   guidance, with consistent cross-links and no competing incomplete procedure.
-- [ ] Publish source/documentation changes through the normal reviewed
+- [x] Publish source/documentation changes through the normal reviewed
   distribution-export workflow. Reconcile source pins and public overlays;
   validate the exported guides rather than only the private source wording.
 - [ ] Have a fresh inexperienced evaluator use a fresh supported user/environment
@@ -196,5 +197,7 @@ with operational dependencies on
 [Compose](../../deploy/compose/README.md),
 [client examples](../clients.md) and
 [backup/restore](../operations/backup-restore.md).
-Detailed implementation sequencing and supported-version choices remain future
-work; this task records the requirements rather than implementing them.
+The [installation entry guide](../install.md), [persistent native procedure](../operations/native-installation.md)
+and [bounded verification flow](../clients.md#bounded-ingest-and-retrieval-verification)
+implement this record. Local synthetic checks are engineering evidence only;
+they do not close the fresh-user, reboot, provider or recovery acceptance gates.

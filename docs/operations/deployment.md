@@ -1,5 +1,10 @@
 # Deploying Cairn
 
+**Installing for the first time?** Start with [Install Cairn](../install.md) for
+purpose-specific prerequisites, [persistent native installation](native-installation.md)
+or the [complete Compose procedure](../../deploy/compose/README.md). Kubernetes
+is a separate deployment path. Fresh-user beginner acceptance is still pending.
+
 This guide deploys one Cairn v0.1 instance. Read the
 [backup and restore runbook](backup-restore.md) first, then use the
 [client guide](../clients.md) to verify the server and configure callers.

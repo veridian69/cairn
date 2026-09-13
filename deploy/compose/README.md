@@ -16,22 +16,11 @@ recovery procedure.
 ## Image and contract boundary
 
 `CAIRN_IMAGE=cairn:v0.1.0` in `../images.lock` is a local build tag, not a
-published image. Build it from the repository root before first boot:
+published image. Use the reviewed local build produced below or a separately
+reviewed registry digest and record its exact identity.
 
-```sh
-make image IMAGE=cairn:v0.1.0
-```
-
-For deployment, use the reviewed local build or a separately reviewed registry
-digest and record its exact identity.
-
-The wire contracts are already pinned. From the repository root, verify them
-before deploying:
-
-```sh
-(cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
-(cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-```
+The wire contracts are already pinned. The first-boot sequence verifies them
+from the repository root before deploying.
 
 Expected SHA-256 values:
 
@@ -45,26 +34,122 @@ authenticated `GET /v1/instance` using the
 [safe client procedure](../../docs/clients.md#check-the-instance). An image
 reference alone does not prove which contract an endpoint serves.
 
-## The shape of every command
+## Compose prerequisites and local image
 
-The image pins live in `../images.lock` and nowhere else (P-61), so every
-command reads two env files — the pins, then this instance's parameters:
+The [installation guide](../../docs/install.md#docker-compose-installation)
+separates the prerequisites for this path from the native and developer paths.
+This supported procedure uses a native **Linux x86-64** checkout and a
+systemd-managed Linux Docker host. Other architectures have not passed the
+published Compose acceptance baseline.
 
-```sh
-cd deploy/compose
-docker compose --env-file ../images.lock --env-file .env up -d
+Required runtime and command-line tools are:
+
+- Docker Engine 25.0 or newer. Engine 25.0 is required because this project
+  uses health-check `start_interval`;
+- the Docker Compose v2 plugin, version 2.20.2 or newer. Older Compose clients
+  do not understand that field;
+- Bash, `git`, `make`, `systemctl`, `sed`, and GNU coreutils including
+  `sha256sum`, `install`, `realpath`, `stat` and `tr` for the local build,
+  service check and safe file preparation; and
+- curl 8.4.0 or newer, `jq` and `python3` for bootstrap and the bounded client
+  checks. The helper uses curl's [`--max-filesize`](https://curl.se/docs/manpage.html#--max-filesize)
+  transfer-time limit, which protects unknown-length responses from 8.4.0;
+  `openssl` and privilege through `sudo` or an existing root session are
+  required only when semantic retrieval is enabled.
+
+Check them from the repository root before creating any instance files:
+
+```bash
+uname -s
+uname -m
+for tool in bash docker git make systemctl sed sha256sum install realpath stat \
+    tr curl jq python3; do
+  command -v "$tool" || exit 1
+done
+docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+docker compose version --short
+docker info --format 'daemon={{.OSType}}/{{.Architecture}}'
+systemctl is-enabled docker
+curl --version
 ```
 
-Everything below is written from this directory and uses that pair. The
-`.env` file sets no image variable, so a pin can never be changed in one
-place and forgotten in another.
+If you plan to enable semantic retrieval, run its additional checks before
+creating the instance:
 
-If retrieval is enabled, add the overlay file to *every* command:
+```bash
+command -v openssl
+if (( EUID != 0 )); then command -v sudo; fi
+```
+
+The expected results are `Linux`, `x86_64`, Engine client and server versions
+of at least 25.0, Compose v2.20.2 or newer, `daemon=linux/x86_64`, `enabled`,
+curl 8.4.0 or newer, and one absolute executable path per required tool. The semantic checks must
+also print the OpenSSL path and, for a non-root operator, the `sudo` path. If a
+command is absent or below the
+minimum version, follow the installation guide's platform instructions, then
+repeat the complete checklist. If `docker version` or `docker info` reports a
+permission error, stop here: access to the Docker socket is effectively
+root-equivalent. Have the host administrator grant the trusted operator access
+under local policy, sign in again if group membership changed, and repeat the
+checks. Do not alternate between privileged and unprivileged Docker commands.
+If automatic start after reboot is wanted and the systemd check says
+`disabled`, ask an administrator to run `systemctl enable --now docker` (or run
+it through the host's approved privilege mechanism).
+
+Go, `uv`, Bubblewrap and `kubectl` belong to developer or other deployment
+paths; they are not required to build and run this Compose instance. From the
+repository root, verify the contracts, build the image named by
+`deploy/images.lock`, and confirm that it exists:
+
+```sh
+(cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
+(cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
+make image IMAGE=cairn:v0.1.0
+docker image inspect --format '{{.Id}}' cairn:v0.1.0
+cd deploy/compose
+```
+
+Both checksum commands must report `OK`; the build must finish successfully;
+and the inspect command must print an image ID. The `cd` above is the only
+working-directory change for Compose installation and operation. Every Compose
+command below runs from `deploy/compose`; the separate client verification says
+explicitly when to move back to the repository root.
+
+## Command and state shape
+
+The image pins live in `../images.lock` and nowhere else (P-61), so every
+Compose command reads two env files: the pins first, then this instance's
+parameters. `.env` contains no image pin. The base form is:
+
+```sh
+docker compose --env-file ../images.lock --env-file .env -f compose.yaml ps
+```
+
+When semantic retrieval is enabled, every Compose command includes the
+retrieval overlay as well:
 
 ```sh
 docker compose --env-file ../images.lock --env-file .env \
-  -f compose.yaml -f compose.graphiti.yaml <command>
+  -f compose.yaml -f compose.graphiti.yaml ps
 ```
+
+The default `config.example.yaml` enables Attic and leaves semantic retrieval
+off. The persistent pieces are:
+
+| Location | Contents | Backup status |
+| --- | --- | --- |
+| `${COMPOSE_PROJECT_NAME}_cairn-data` named volume | The authoritative catalogue, audit history, delivery state and Attic exact evidence | Included in a Cairn backup bundle |
+| `${COMPOSE_PROJECT_NAME}_falkordb-data` named volume | Semantic Graphiti/FalkorDB index | Derived; rebuild from the catalogue rather than backing it up |
+| `.env` and `config.yaml` bind mounts | Project name, loopback port, stable instance UUID and non-secret runtime configuration | Preserve securely with the deployment record |
+| `credentials/` and `falkordb.conf` bind mounts | Optional semantic provider and index credentials | Preserve in the approved credential store; never in a Cairn backup |
+| `$HOME/.config/cairn/*-admin.token` | Bootstrap administrator bearer token used by clients | Preserve in an owner-only credential store; never in Git or the backup bundle |
+
+Compose expands `COMPOSE_PROJECT_NAME` when it creates both volume names.
+Cairn runs as numeric UID/GID `65532:0`. Docker initialises a fresh
+`cairn-data` volume from the image with the required ownership. The host
+configuration file is deliberately `0644` because it contains no secret and
+UID 65532 must read it. Optional credential files need different ownership,
+which the semantic procedure handles where it becomes necessary.
 
 ## One rule that governs every procedure below
 
@@ -93,190 +178,264 @@ relies on to make "deliberately replace, never overlap" structural. The
 procedures below already have the stop in the right place — this is here
 so that a procedure nobody wrote down still comes out right.
 
-## First boot
+## First boot with Attic
 
-```sh
-cd deploy/compose
+Run the following in Bash from `deploy/compose`. The four values at the top are
+the only operator choices. `cairn_project` is a lowercase Compose project name;
+`cairn_port` is an unused loopback TCP port; `cairn_realm` is a lowercase Cairn
+realm identifier; and `cairn_label` is the human administrator's display label.
+The shown values are valid and can be used for a first local instance.
 
-# 1. Parameters and configuration. Both copies are yours, neither is
-#    committed, and both are already in .gitignore.
-#
-#    `.env` is created 0600 rather than copied and chmod-ed afterwards:
-#    with retrieval enabled it holds the index password, and a `cp` would
-#    leave it 0644 — world-readable for however long it takes to
-#    remember.
-#
-#    `config.yaml` gets an explicit mode for the mirror-image reason, and
-#    it is the operator's ambient `umask` that makes it necessary rather
-#    than anything in this project. `cp` takes the mode from the source
-#    minus that umask, so on a hardened host — `umask 077`, which the
-#    retrieval section below sets deliberately and a careful sysadmin may
-#    have as a shell default — the copy lands 0600 owned by *you*. The
-#    container reads it as 65532, so it would get the world bits, and
-#    there are none: Cairn cannot open its own configuration document.
-#    Measured, 15 August 2026: umask 022 renders 0644 and the read
-#    succeeds, umask 077 renders 0600 and it fails. The document carries
-#    no credential — those are files of their own under `credentials/`,
-#    per I-19 — so 0644 is the right mode and not a concession.
-install -m 0600 .env.example .env
+```bash
+set -eu
+
+cairn_project='cairn-a'
+cairn_port='8080'
+cairn_realm='local'
+cairn_label='Local administrator'
+cairn_credential_dir="$HOME/.config/cairn"
+cairn_credential_file="$cairn_credential_dir/${cairn_project}-admin.token"
+
+if ! [[ "$cairn_project" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+  printf 'invalid Compose project name\n' >&2
+  exit 1
+fi
+if ! [[ "$cairn_realm" =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  printf 'invalid Cairn realm identifier\n' >&2
+  exit 1
+fi
+if ! [[ "$cairn_port" =~ ^[0-9]+$ ]] ||
+    (( cairn_port < 1 || cairn_port > 65535 )); then
+  printf 'invalid TCP port\n' >&2
+  exit 1
+fi
+
+instance_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+
+# Create the instance parameters without putting an image pin or a secret in
+# .env. Redirection keeps the 0600 mode established before content is written.
+for path in .env config.yaml credentials falkordb.conf; do
+  if test -e "$path"; then
+    printf 'refusing to overwrite existing path: %s\n' "$path" >&2
+    exit 1
+  fi
+done
+install -m 0600 /dev/null .env
+{
+  printf 'COMPOSE_PROJECT_NAME=%s\n' "$cairn_project"
+  printf 'CAIRN_HOST_PORT=%s\n' "$cairn_port"
+  printf 'CAIRN_CONFIG_FILE=./config.yaml\n'
+  printf 'CAIRN_CREDENTIALS_DIR=./credentials\n'
+} > .env
+
+# Preserve this generated UUID for the lifetime of the instance. The template
+# contains exactly one deliberately invalid marker, so refuse unexpected input.
 install -m 0644 config.example.yaml config.yaml
-$EDITOR .env                # instance name, loopback port
-$EDITOR config.yaml         # a real instance_id — `uuidgen` will do
+python3 - "$instance_id" <<'PY'
+from pathlib import Path
+import sys
 
-# 2. The adapter-credential directory. Empty is correct with retrieval
-#    disabled; the "Turning retrieval on" section fills it.
+path = Path("config.yaml")
+marker = "REPLACE_WITH_PER_INSTANCE_UUID"
+text = path.read_text(encoding="utf-8")
+if text.count(marker) != 1:
+    raise SystemExit("config template has an unexpected instance_id marker")
+path.write_text(text.replace(marker, sys.argv[1]), encoding="utf-8")
+PY
+chmod 0644 config.yaml
+
+# Empty is correct while semantic retrieval is disabled. The directory itself
+# is readable so UID 65532 can traverse the read-only bind mount.
 install -d -m 0755 credentials
+stat -c '%a %n' .env config.yaml credentials
 
-# 3. Migrate the catalogue. `--no-deps` because migration needs no index,
-#    and this is the same idempotent step the Kubernetes shape runs as an
-#    init container (I-39). Schema mutation never rides an ordinary
-#    restart — it is this command, every time.
 docker compose --env-file ../images.lock --env-file .env \
-  run --rm --no-deps cairn migrate --config /etc/cairn/config.yaml
+  -f compose.yaml config -q
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml run --rm --no-deps cairn migrate \
+  --config /etc/cairn/config.yaml
 
-# 4. Bootstrap the realm once and capture the token in a *new* owner-only
-#    file outside this checkout. The subshell exits on any refusal and step
-#    5 is inside it, so a failed capture can never fall through to serving.
-(
-  set -eu
-  umask 077
-
-  credential_file=/absolute/path/to/cairn-credential
-  case "$credential_file" in
-    /*) ;;
-    *) printf 'credential path must be absolute\n' >&2; exit 1 ;;
-  esac
-
-  repository_root="$(git rev-parse --show-toplevel)"
-  credential_parent="$(realpath -e -- "$(dirname -- "$credential_file")")"
-  case "$credential_parent" in
-    "$repository_root"|"$repository_root"/*)
-      printf 'credential path must be outside the checkout\n' >&2
-      exit 1
-      ;;
-  esac
-  credential_file="$credential_parent/$(basename -- "$credential_file")"
-
-  # noclobber makes creation atomic: an existing file or symlink is refused.
-  # The 0077 umask creates the new file 0600 before any token exists.
-  set -C
-  if ! : > "$credential_file"; then
-    printf 'credential path already exists or cannot be created\n' >&2
+# Bootstrap exactly once. Create the destination before the token exists,
+# refuse an existing file or symlink, and keep it outside the checkout.
+install -d -m 0700 "$cairn_credential_dir"
+repository_root="$(git rev-parse --show-toplevel)"
+credential_parent="$(realpath -e -- "$cairn_credential_dir")"
+case "$credential_parent" in
+  "$repository_root"|"$repository_root"/*)
+    printf 'credential directory must be outside the checkout\n' >&2
     exit 1
-  fi
-  set +C
-  chmod 0600 "$credential_file"
+    ;;
+esac
+cairn_credential_file="$credential_parent/$(basename -- "$cairn_credential_file")"
 
-  bootstrap_result="$(mktemp)"
-  if ! docker compose --env-file ../images.lock --env-file .env \
-      run --rm --no-deps cairn bootstrap --realm <realm> --label <label> \
-      > "$bootstrap_result"; then
-    rm -f "$credential_file"
-    printf 'bootstrap failed; owner-only result retained at %s\n' \
-      "$bootstrap_result" >&2
-    exit 1
-  fi
+umask 077
+set -C
+if ! : > "$cairn_credential_file"; then
+  printf 'credential path already exists; refusing to overwrite it\n' >&2
+  exit 1
+fi
+set +C
+chmod 0600 "$cairn_credential_file"
 
-  if ! jq -er \
-      'select(.status == "ok" and .operation == "bootstrap") | .token | strings | select(startswith("cairn1."))' \
-      "$bootstrap_result" > "$credential_file"; then
-    rm -f "$credential_file"
-    printf 'token extraction failed; owner-only result retained at %s\n' \
-      "$bootstrap_result" >&2
-    exit 1
-  fi
-  if ! test -s "$credential_file" || \
-      test "$(stat -c '%a' "$credential_file")" != 600; then
-    rm -f "$credential_file"
-    printf 'credential validation failed; owner-only result retained at %s\n' \
-      "$bootstrap_result" >&2
-    exit 1
-  fi
+bootstrap_result="$(mktemp)"
+if ! docker compose --env-file ../images.lock --env-file .env \
+    -f compose.yaml run --rm --no-deps cairn bootstrap \
+    --config /etc/cairn/config.yaml \
+    --realm "$cairn_realm" --label "$cairn_label" \
+    > "$bootstrap_result"; then
+  rm -f "$cairn_credential_file"
+  printf 'bootstrap failed; owner-only result retained at %s\n' \
+    "$bootstrap_result" >&2
+  exit 1
+fi
 
-  # Only the verified credential now remains. The full result also contains
-  # the token, so remove it before starting the service.
-  rm -f "$bootstrap_result"
+if ! jq -er \
+    'select(.status == "ok" and .operation == "bootstrap") | .token | strings | select(startswith("cairn1."))' \
+    "$bootstrap_result" > "$cairn_credential_file"; then
+  rm -f "$cairn_credential_file"
+  printf 'token extraction failed; owner-only result retained at %s\n' \
+    "$bootstrap_result" >&2
+  exit 1
+fi
+if ! test -s "$cairn_credential_file" || \
+    test "$(stat -c '%a' "$cairn_credential_file")" != 600; then
+  rm -f "$cairn_credential_file"
+  printf 'credential validation failed; owner-only result retained at %s\n' \
+    "$bootstrap_result" >&2
+  exit 1
+fi
+rm -f "$bootstrap_result"
 
-  # 5. Serve only after successful credential capture.
-  docker compose --env-file ../images.lock --env-file .env up -d
-  docker compose --env-file ../images.lock --env-file .env ps
-)
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml up -d --wait --wait-timeout 330
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml ps
+curl --disable --silent --show-error --fail --noproxy '*' --proto '=http' \
+  --max-redirs 0 --max-time 5 \
+  "http://127.0.0.1:${cairn_port}/health/ready"
+printf '\ninstance_id=%s\ncredential_file=%s\n' \
+  "$instance_id" "$cairn_credential_file"
 ```
 
-Health, from the host, once `ps` reports the container healthy:
+The mode check must print `600 .env`, `644 config.yaml` and `755 credentials`.
+`config -q` and migration must exit zero. `up --wait` must finish with `cairn`
+healthy, and the health request must return `{"status":"ready"}`. Cairn is
+published only on the host's `127.0.0.1` address at `cairn_port`. Set
+`base_url="http://127.0.0.1:${cairn_port}"` and
+`credential_file="$cairn_credential_file"`, then run the client guide's
+[Credentials setup](../../docs/clients.md#credentials) followed by its
+[authenticated instance check](../../docs/clients.md#check-the-instance).
+The setup's `:=` defaults preserve these two values when they are already set.
+It must return the generated `instance_id` and the pinned contract digests.
 
-```sh
-curl -s http://127.0.0.1:8080/health/ready
-```
+Attic is enabled now. It stores exact evidence in the `cairn-data` volume and
+participates in retrieval only after a semantic index supplies candidates.
+With semantic retrieval disabled, authenticated identity and ingest custody can
+still be verified. A REST retrieval is refused as HTTP 400 with public code
+`invalid_request`; the internal audit reason is `retrieval_disabled`, so this
+is permanent until semantic retrieval is configured rather than an indexing
+delay.
 
-Require `{"status":"ready"}`. Then run the client guide's
-[authenticated instance check](../../docs/clients.md#check-the-instance) with
-the owner-only credential path chosen above; do not substitute a token into a
-command argument or enable verbose curl output.
+If bootstrap returns `realm_exists`, the volume is already bootstrapped. Do not
+bootstrap again, change `instance_id`, overwrite a retained token, or delete the
+volume. A normal start uses `up -d` with the existing `.env`, `config.yaml`,
+volume and token. If the only administrator token has been lost, keep the data
+stopped and use the local `cairn recover` incident procedure; ordinary restart
+does not mint replacement credentials.
 
-## Turning retrieval on
+## Optional semantic retrieval
 
-Two halves, and both are needed: the overlay file adds the index service,
-and the configuration document says to use it.
+Semantic retrieval adds Graphiti, a project-private FalkorDB index and outbound
+OpenAI API calls. It is optional; Attic remains enabled either way. Two halves
+are required: the overlay adds FalkorDB, and `config.yaml` tells Cairn to use
+it. Stop Cairn before changing the configuration.
 
-```sh
-# 1. The password, written to the two files that need it, from one
-#    generated secret. Cairn reads its copy as a bare value (I-92); the
-#    index reads its own configuration file, which is where its
-#    credential lives — not in .env, not in the service environment, and
-#    not on any command line.
+```bash
+set -eu
+
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml stop cairn
+
+test ! -e credentials/falkordb-password
+test ! -e credentials/openai-api-key
+test ! -e falkordb.conf
 umask 077
 openssl rand -hex 32 > credentials/falkordb-password
-printf 'requirepass %s\n' "$(cat credentials/falkordb-password)" > falkordb.conf
+{
+  printf 'requirepass '
+  tr -d '\r\n' < credentials/falkordb-password
+  printf '\n'
+} > falkordb.conf
+
+# Read the provider key from the terminal without echo, argv, environment or
+# shell history. An empty value is refused.
+IFS= read -r -s -p 'OpenAI API key: ' openai_api_key
+printf '\n'
+test -n "$openai_api_key"
+printf '%s\n' "$openai_api_key" > credentials/openai-api-key
+unset openai_api_key
+
+# These operations need privilege because the consuming numeric identities are
+# Cairn 65532:0 and FalkorDB 10001:0, not the host operator.
+if (( EUID == 0 )); then
+  privileged=()
+else
+  privileged=(sudo)
+fi
+"${privileged[@]}" chown 65532:0 \
+  credentials/falkordb-password credentials/openai-api-key
+"${privileged[@]}" chmod 0400 \
+  credentials/falkordb-password credentials/openai-api-key
+"${privileged[@]}" chown 10001:0 falkordb.conf
+"${privileged[@]}" chmod 0400 falkordb.conf
+stat -c '%u:%g %a %n' \
+  credentials/falkordb-password credentials/openai-api-key falkordb.conf
+
 printf 'FALKORDB_CONFIG_FILE=./falkordb.conf\n' >> .env
+python3 <<'PY'
+from pathlib import Path
 
-# 2. The provider key, as a file — never an environment variable (I-19).
-$EDITOR credentials/openai-api-key
+path = Path("config.yaml")
+lines = path.read_text(encoding="utf-8").splitlines()
+start = lines.index("graphiti:")
+enabled = next(
+    position
+    for position in range(start + 1, len(lines))
+    if lines[position].startswith("  enabled:")
+)
+if lines[enabled] != "  enabled: false":
+    raise SystemExit("graphiti.enabled is not the expected disabled value")
+lines[enabled : enabled + 1] = [
+    "  enabled: true",
+    "  host: falkordb",
+    "  port: 6379",
+]
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+chmod 0644 config.yaml
 
-# 3. Each file readable by the container that needs it and nobody else
-#    on this host. Needs root, because neither UID is you: Cairn runs as
-#    65532, the index as 10001.
-#
-#    0400 is enough here, and would not be on Kubernetes. A bind mount
-#    keeps the file's host ownership, so each of these is *owned* by the
-#    UID that opens it and the owner bits are the ones that count. A
-#    Kubernetes Secret projects root:root and cannot be chowned, which is
-#    why the manifests need 0440 and group 0 instead.
-sudo chown 65532:0 credentials/falkordb-password credentials/openai-api-key
-sudo chmod 0400 credentials/falkordb-password credentials/openai-api-key
-sudo chown 10001:0 falkordb.conf
-sudo chmod 0400 falkordb.conf
-
-# 4. The configuration document. Three keys, exactly as the kind overlay
-#    sets them:
-#
-#      graphiti:
-#        enabled: true
-#        host: falkordb
-#        port: 6379
-#
-#    This edit happens under the `umask 077` set above, and some editors
-#    write a new file and rename it over the old one rather than writing
-#    in place. Check the mode afterwards: it must stay group- or
-#    world-readable, or Cairn cannot open it as 65532.
-$EDITOR config.yaml
-test "$(stat -c '%a' config.yaml)" = 0644 || chmod 0644 config.yaml
-
-# 5. Up, with the overlay. The `falkordb-init` one-shot runs first and
-#    hands the index's volume to the index — a fresh named volume arrives
-#    root-owned, because the FalkorDB image contains no
-#    /var/lib/falkordb/data for Docker to copy ownership from, and
-#    Compose has no fsGroup. There is nothing to remember: it runs on
-#    every `up` and is idempotent.
 docker compose --env-file ../images.lock --env-file .env \
-  -f compose.yaml -f compose.graphiti.yaml up -d
+  -f compose.yaml -f compose.graphiti.yaml config -q
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml up -d --wait --wait-timeout 330
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml ps
 ```
+
+The ownership check must show `65532:0 400` for both files under
+`credentials/` and `10001:0 400` for `falkordb.conf`. If it does not, do not
+start the services.
 
 Cairn waits for the index's healthcheck before it starts, and that check
 asserts an *authenticated* `PONG`: `redis-cli` exits 0 on a `NOAUTH`
 reply as readily as on a successful one, so a check that only read its
 exit status would call an unauthenticated or wrongly-credentialled index
-healthy. Measured, not assumed.
+healthy. Measured, not assumed. Run the client guide's
+[bounded ingest and retrieval verification](../../docs/clients.md#bounded-ingest-and-retrieval-verification).
+It captures the committed ingest before polling, preserves HTTP failures and
+`Retry-After`, and never repeats a committed ingest while indexing catches up.
+That client procedure explicitly changes to the repository root. Return with
+`cd deploy/compose` before running any later Compose command in this guide.
 
 If the index is lost, it rebuilds from the catalogue — it is derived
 state, and the backup bundle excludes it on purpose (P-65). The rebuild
@@ -306,30 +465,126 @@ services:
       HTTPS_PROXY: http://proxy.internal:3128
 ```
 
+## Normal operation, reboot and cleanup
+
+For the base instance, these are the complete status, stop, start and restart
+commands:
+
+```sh
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml ps
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml stop
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml start
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml restart
+```
+
+With semantic retrieval enabled, use the same operations with both files:
+
+```sh
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml ps
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml stop
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml start
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml restart
+```
+
+`stop` retains the containers, project network, both named volumes and every
+host file. `start` reuses them. `restart` stops and starts the existing
+containers with the same stable instance UUID, catalogue, Attic evidence,
+semantic index and credentials. It does not migrate a new image or schema.
+After `stop`, `ps --all` must show the service containers as exited. After
+`start` or `restart`, `ps` must show Cairn healthy and the loopback readiness
+request from first boot must again return `{"status":"ready"}`.
+
+The services use `restart: unless-stopped`. After the first successful `up`,
+they return after a host reboot when the Docker daemon is enabled and the
+operator did not deliberately stop them. A deliberate `stop` suppresses that
+automatic return; run `start` or `up -d` to enable the instance again. `down`
+removes the containers and project network, so nothing starts automatically
+after reboot, but it retains named volumes and host files. Recreate the base
+instance with:
+
+```sh
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml down
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml up -d --wait --wait-timeout 330
+```
+
+For a semantic instance, the exact equivalent is:
+
+```sh
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml down
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml -f compose.graphiti.yaml \
+  up -d --wait --wait-timeout 330
+```
+
+Never add `-v` to normal `down`: `down -v` deletes `cairn-data`, including the
+authoritative catalogue, audit history and Attic evidence, and also deletes
+the rebuildable FalkorDB index volume when present. Removing `config.yaml`
+loses the configured stable identity; removing the external administrator
+token loses that credential. Removing `.env` loses the project-to-volume
+selection, while removing `credentials/` or `falkordb.conf` prevents a semantic
+instance from starting. Compose does not delete those bind-mounted host files
+for you.
+
+Before deleting or replacing any volume, take and export a verified Cairn
+bundle using [Backup and restore](#backup-and-restore) and the authoritative
+[backup runbook](../../docs/operations/backup-restore.md). A backup contains
+the catalogue and Attic, not credentials or the derived semantic index.
+
 ## Upgrade
 
 Explicit, in I-39's spirit — the schema never migrates on a restart:
 
-```sh
-# 1. Change the pin. One line, in ../images.lock, reviewed like any other.
-$EDITOR ../images.lock
+```bash
+set -eu
+
+# 1. Supply the reviewed tag or name@sha256:digest, then replace exactly the
+#    Cairn pin in ../images.lock. This value is not a credential.
+IFS= read -r -p 'Reviewed Cairn image reference: ' new_cairn_image
+test -n "$new_cairn_image"
+python3 - "$new_cairn_image" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path("../images.lock")
+lines = path.read_text(encoding="utf-8").splitlines()
+matches = [position for position, line in enumerate(lines) if line.startswith("CAIRN_IMAGE=")]
+if len(matches) != 1:
+    raise SystemExit("images.lock must contain exactly one CAIRN_IMAGE pin")
+lines[matches[0]] = f"CAIRN_IMAGE={sys.argv[1]}"
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
 
 # 2. Pull it.
-docker compose --env-file ../images.lock --env-file .env pull
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml pull
 
 # 3. Stop the instance. `migrate` takes the data-directory lease, so it
 #    refuses to run beneath a serving container — `catalogue_unavailable`,
 #    exit 3, with the old schema still in place and nothing migrated.
 #    Stopping first is not tidiness; it is the only order that works.
-docker compose --env-file ../images.lock --env-file .env stop cairn
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml stop cairn
 
 # 4. Migrate with the new image, before it serves.
 docker compose --env-file ../images.lock --env-file .env \
-  run --rm --no-deps cairn migrate --config /etc/cairn/config.yaml
+  -f compose.yaml run --rm --no-deps cairn migrate \
+  --config /etc/cairn/config.yaml
 
 # 5. Replace the container. `up -d` recreates it because the image
 #    changed.
-docker compose --env-file ../images.lock --env-file .env up -d
+docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml up -d --wait --wait-timeout 330
 ```
 
 The stop in step 3 is the one that spends I-20's grace period: the
@@ -344,16 +599,16 @@ The bundle is written by the CLI, not by an HTTP route (I-35), and a
 backup can be taken while the instance serves: it deliberately takes no
 lease, and its barrier is inside the command.
 
-`--output` is a *directory* the command writes into, not a file it
-creates. Each run makes its own
-`cairn-backup-<instance_id>-<timestamp>/` beneath it and refuses rather
-than overwriting one that exists:
+`--output` is a *directory* the command writes into, not a file it creates.
+Each run makes its own directory, whose name begins `cairn-backup-` and includes
+the instance ID and timestamp, and refuses rather than overwriting one that
+exists:
 
 ```sh
-# The container writes as 65532, so the destination is its to write —
-# the same ownership the credential files need, and for the same reason.
+# The container writes as 65532, so make the destination writable by that UID.
 sudo install -d -o 65532 -g 0 -m 0750 backups
 docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml \
   run --rm --no-deps -v "$PWD/backups:/backups" \
   cairn backup --config /etc/cairn/config.yaml --output /backups
 ```
@@ -361,34 +616,15 @@ docker compose --env-file ../images.lock --env-file .env \
 The command prints the bundle it wrote as `bundle` in its JSON, which is
 what a scripted backup should read rather than reconstructing the name.
 
-Restore takes the whole bundle directory, and refuses a non-empty data
-directory, a bundle from another instance and a tampered member, each as
-its own typed refusal (P-66). It therefore wants a *new* volume with the
-instance stopped — and, with retrieval enabled, a new index volume too:
-the restored catalogue and the surviving index describe different
-instants, and the index is the one that is wrong.
-
-```sh
-C="docker compose --env-file ../images.lock --env-file .env"      # add -f … with retrieval
-$C down
-docker volume rm <project>_cairn-data          # or restore into a fresh project
-docker volume rm <project>_falkordb-data       # retrieval only: derived state, never restored
-$C run --rm --no-deps -v "$PWD/backups:/backups" \
-  cairn restore --config /etc/cairn/config.yaml \
-  --bundle /backups/cairn-backup-<instance_id>-<timestamp>
-$C up -d                                       # without retrieval, this is the last step
-```
-
-With retrieval enabled, rebuild the index *instead of* that last `up -d`
-— the restored instance would otherwise start with an empty index and
-answer retrievals from nothing. `rebuild-index` takes the lease, so it
-runs while Cairn is still stopped, and `run` without `--no-deps` starts
-the index it needs:
-
-```sh
-$C run --rm cairn rebuild-index --config /etc/cairn/config.yaml
-$C up -d
-```
+Restore takes the whole emitted bundle directory and refuses a non-empty data
+directory, a bundle from another instance and a tampered member, each as its
+own typed refusal (P-66). Follow the
+[replacement restore procedure](../../docs/operations/backup-restore.md#restore-into-a-replacement):
+it preserves the original volume, restores into a fresh empty `cairn-data`
+volume with the same configured `instance_id`, and admits the replacement only
+after verification. With semantic retrieval enabled it also creates a fresh
+FalkorDB volume and runs `rebuild-index` before serving. Do not improvise this
+with `down -v`, a copied SQLite file or a reconstructed bundle name.
 
 ## Publication is explicit operator work
 
@@ -402,10 +638,11 @@ evidence.
 
 ## Production acceptance
 
-P-69's full target-tier procedure is executable from the repository root:
+P-69's full target-tier procedure runs from the repository root. From this
+guide's `deploy/compose` working directory, execute it in a subshell:
 
 ```sh
-make compose-acceptance
+(cd ../.. && make compose-acceptance)
 ```
 
 It requires root-equivalent access to the Docker daemon and the recorded
