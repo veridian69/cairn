@@ -310,10 +310,77 @@ Use those values to pin contract digests and run scoped ingest and audit
 checks. With Graphiti disabled, do not treat an absent semantic result as a
 failed custody check or claim this procedure verified search.
 
-Before enabling semantic retrieval, run the [Attic payload round-trip](evidence-verification.md).
+## Quick Attic write/read test
+
+From the repository root, reuse the endpoint, retained credential and protected
+`curl_config` already created above in this shell. Do not create a second curl
+configuration. Python 3.12–3.14 as `python3`, curl 8.4.0 or newer
+and jq are required. This small check needs no semantic provider. The bootstrap
+administrator can ingest and read this synthetic evidence at
+`local/repository:example`.
+
+```bash
+set -eu
+umask 077
+install -d -m 0700 "$HOME/.local/state/cairn-checks"
+evidence_check_dir="$(mktemp -d "$HOME/.local/state/cairn-checks/evidence.XXXXXXXX")"
+printf 'Retained evidence verification files: %s\n' "$evidence_check_dir"
+printf 'Cairn Attic check: café.\nExact second line.\n' > "$evidence_check_dir/payload.txt"
+python3 -c 'import uuid; print(uuid.uuid4())' > "$evidence_check_dir/idempotency-key"
+jq -n --rawfile payload "$evidence_check_dir/payload.txt" '{
+  scope: {
+    realm: "local",
+    segments: [{kind: "repository", identifier: "example"}]
+  },
+  classification: "internal",
+  source_type: "human",
+  facts: [{body: "The installation has submitted a synthetic Attic payload."}],
+  evidence_payload: $payload
+}' > "$evidence_check_dir/ingest.json"
+
+if http_status="$(curl --disable --silent --show-error --noproxy '*' \
+  --max-time 30 --request POST --config "$curl_config" \
+  --header 'Content-Type: application/json' \
+  --header "Idempotency-Key: $(cat "$evidence_check_dir/idempotency-key")" \
+  --data-binary "@$evidence_check_dir/ingest.json" \
+  --output "$evidence_check_dir/ingest-response.json" \
+  --dump-header "$evidence_check_dir/ingest-headers" --write-out '%{http_code}' \
+  "$base_url/v1/ingest")"; then
+  printf 'Ingest HTTP %s\n' "$http_status"
+  cat "$evidence_check_dir/ingest-response.json"
+  printf '\n'
+else
+  printf 'Commit uncertain; retain the same request and key in %s.\n' "$evidence_check_dir" >&2
+  exit 1
+fi
+test "$http_status" = 200
+jq -e '
+  (.outcome == "committed" or .outcome == "replayed") and
+  (.mutation_receipt | type == "object") and
+  (.audit_receipt | type == "object") and
+  (.result.evidence_id | type == "string")
+' "$evidence_check_dir/ingest-response.json" >/dev/null
+jq -er '.result.evidence_id' "$evidence_check_dir/ingest-response.json" > "$evidence_check_dir/evidence-id"
+
+python3 scripts/verify-retrieval.py \
+  --base-url "$base_url" \
+  --credential-file "$credential_file" \
+  --evidence-id "$(cat "$evidence_check_dir/evidence-id")" \
+  --payload-file "$evidence_check_dir/payload.txt" \
+  --deadline 120 --request-timeout 10 --max-attempts 30
+```
+
+Expect `"status": "verified"`: the exact saved UTF-8 bytes, SHA-256 and byte
+length have returned through Cairn. The helper honours `Retry-After` and retries
+only reads, stopping after 120 seconds or 30 attempts. Corruption and mismatched
+bytes fail the check. Retain the printed directory and saved evidence ID.
+
 Restart with `systemctl --user restart cairn.service`, wait for the readiness
-check above, and repeat only its saved evidence-read command. This verifies
-native custody and restart retention without a semantic provider.
+check above, and repeat **only** the final evidence-read command. Do not repeat
+a committed ingest. This checks custody and retention without semantic search;
+the synthetic payload remains in the persistent data directory. See the
+[Attic round-trip documentation](evidence-verification.md) for uncertain-write
+recovery, failure details and what a successful check proves.
 
 ## Optional semantic retrieval
 

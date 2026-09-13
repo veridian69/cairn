@@ -373,17 +373,17 @@ notifications from server to client or server-side sessions. A compatible
 client must accept JSON and support protocol revision `2025-11-25`.
 
 The admitted protocol methods are `initialize`, `ping`, `tools/list`,
-`tools/call` and the client's `notifications/initialized`. The eleven tools
+`tools/call` and the client's `notifications/initialized`. The twelve tools
 are named exactly:
 
 ```text
 ingest  promote  invalidate  create-principal  issue-credential
 revoke-credential  create-grant  revoke-grant  read-audit-events
-retrieve  instance
+retrieve  read-evidence  instance
 ```
 
 For the eight mutations, `idempotency_key` is a tool argument, not an HTTP
-header. The three reads reject it. Otherwise the arguments and result objects
+header. The four reads reject it. Otherwise the arguments and result objects
 match REST. Operation failures are successful JSON-RPC responses containing
 an MCP error result (`isError: true`) with the same Cairn failure envelope;
 authentication and protocol faults are decided before a tool exists and use

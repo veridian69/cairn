@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "1987c46252fc883626c3fd0d8577b69b9951927d",
+  "source_revision": "461ed339f485560b26148727afab5d103f25b46b",
   "release_configuration": {
-    "files.json": "42123246de9c22eca355bc6b9917f9f741a0993ec7ceaa80e1f2c4f2b5289298",
+    "files.json": "6a86a44ebb1d8831c50029022173e65b80cd40d3ed17c53fd44bc4b292a98b8e",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
-    "overlay_set_sha256": "e4d49d35c633748e50c3410c33a86134c51238cb3fde472384bcffd47e8bbf9d"
+    "overlay_set_sha256": "af53247eded656e11e69840cc664302fb2587393ea1e1765ebe7bc125256f710"
   },
   "files": {
     ".dockerignore": {
@@ -282,7 +282,7 @@
       "mode": 420
     },
     "deploy/compose/README.md": {
-      "sha256": "d7c84d383433e574e794439d6a759bb18815b50de435c6c0ee0ce02e39cd1b66",
+      "sha256": "3a730429503cdcbcbe427c27a20b2024e447b72ed0ba2e14ef4e22be7df741d3",
       "mode": 420
     },
     "deploy/compose/compose.graphiti.yaml": {
@@ -522,7 +522,7 @@
       "mode": 420
     },
     "docs/clients.md": {
-      "sha256": "64c3283d670d9d06cce3bd7a968a6ebbdcd6e3d207296b33f705016ac7113757",
+      "sha256": "90e18f55f25a90cc37ffcf6cdf76680e63ac11b987e108c93cd271c65fa82741",
       "mode": 420
     },
     "docs/durable-sessions.md": {
@@ -546,7 +546,7 @@
       "mode": 420
     },
     "docs/install.md": {
-      "sha256": "85103d013d3d3edf08e8d0bf3780f9bb24e0906be1af23777a3a92dae103c727",
+      "sha256": "9b47eba9aee13168296dd99d9705993ed65aa56229d9b274543850ab2cdea623",
       "mode": 420
     },
     "docs/memory-connection-profiles.md": {
@@ -594,7 +594,7 @@
       "mode": 420
     },
     "docs/operations/native-installation.md": {
-      "sha256": "6224540297748712b9a5042fbf34de1b9d08729e3803edc72db43bec2db3da29",
+      "sha256": "2c6c58193c495414263ec02357047f4f9d71898a8e9f8dbdcc8b245ac1e99875",
       "mode": 420
     },
     "docs/operations/semantic-fact-search.md": {
@@ -602,7 +602,7 @@
       "mode": 420
     },
     "docs/quickstart.md": {
-      "sha256": "ccbc351f98980790a544a0f3e6879dd0feb5d680e2c2b1b9383f32b232bab0fa",
+      "sha256": "f839f124803be6fe28ff13a48af6370c24c6f0a9d436d2af1097a7972e8584cc",
       "mode": 420
     },
     "docs/runbooks/runbook-reference-task11a-posture.md": {

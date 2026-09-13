@@ -608,9 +608,73 @@ volume and token. If the only administrator token has been lost, keep the data
 stopped and use the local `cairn recover` incident procedure; ordinary restart
 does not mint replacement credentials.
 
-From `deploy/compose`, return to the repository root with `cd ../..` and run
-the [Attic payload round-trip](../../docs/operations/evidence-verification.md)
-before enabling semantic retrieval. Then restart from the Compose directory:
+## Quick Attic write/read test
+
+From `deploy/compose`, return to the repository root with `cd ../..`. Keep the
+`base_url`, `credential_file` and protected `curl_config` from the client setup
+above. With Python 3.12–3.14 as `python3`, curl 8.4.0 or newer and jq, commit a
+small synthetic payload and read back its exact bytes:
+
+```bash
+set -eu
+umask 077
+install -d -m 0700 "$HOME/.local/state/cairn-checks"
+evidence_check_dir="$(mktemp -d "$HOME/.local/state/cairn-checks/evidence.XXXXXXXX")"
+printf 'Retained evidence verification files: %s\n' "$evidence_check_dir"
+printf 'Cairn Attic check: café.\nExact second line.\n' > "$evidence_check_dir/payload.txt"
+python3 -c 'import uuid; print(uuid.uuid4())' > "$evidence_check_dir/idempotency-key"
+jq -n --rawfile payload "$evidence_check_dir/payload.txt" '{
+  scope: {
+    realm: "local",
+    segments: [{kind: "repository", identifier: "example"}]
+  },
+  classification: "internal",
+  source_type: "human",
+  facts: [{body: "The installation has submitted a synthetic Attic payload."}],
+  evidence_payload: $payload
+}' > "$evidence_check_dir/ingest.json"
+
+if http_status="$(curl --disable --silent --show-error --noproxy '*' \
+  --max-time 30 --request POST --config "$curl_config" \
+  --header 'Content-Type: application/json' \
+  --header "Idempotency-Key: $(cat "$evidence_check_dir/idempotency-key")" \
+  --data-binary "@$evidence_check_dir/ingest.json" \
+  --output "$evidence_check_dir/ingest-response.json" \
+  --dump-header "$evidence_check_dir/ingest-headers" --write-out '%{http_code}' \
+  "$base_url/v1/ingest")"; then
+  printf 'Ingest HTTP %s\n' "$http_status"
+  cat "$evidence_check_dir/ingest-response.json"
+  printf '\n'
+else
+  printf 'Commit uncertain; retain the same request and key in %s.\n' "$evidence_check_dir" >&2
+  exit 1
+fi
+test "$http_status" = 200
+jq -e '
+  (.outcome == "committed" or .outcome == "replayed") and
+  (.mutation_receipt | type == "object") and
+  (.audit_receipt | type == "object") and
+  (.result.evidence_id | type == "string")
+' "$evidence_check_dir/ingest-response.json" >/dev/null
+jq -er '.result.evidence_id' "$evidence_check_dir/ingest-response.json" > "$evidence_check_dir/evidence-id"
+
+python3 scripts/verify-retrieval.py \
+  --base-url "$base_url" \
+  --credential-file "$credential_file" \
+  --evidence-id "$(cat "$evidence_check_dir/evidence-id")" \
+  --payload-file "$evidence_check_dir/payload.txt" \
+  --deadline 120 --request-timeout 10 --max-attempts 30
+```
+
+Expect `"status": "verified"` with the saved evidence ID and SHA-256. The helper
+checks exact UTF-8 bytes, byte length and digest, honours `Retry-After`, retries
+only reads and stops after 120 seconds or 30 attempts. Corruption or mismatched
+bytes fail immediately. Retain the printed directory; the payload remains in
+the persistent volume. No FalkorDB or semantic provider is required.
+
+See the [Attic round-trip documentation](../../docs/operations/evidence-verification.md)
+for failure details and uncertain-write recovery. Do not repeat a committed
+ingest. Then restart using the same Compose configuration:
 
 ```bash
 (cd deploy/compose && docker compose --env-file ../images.lock --env-file .env \

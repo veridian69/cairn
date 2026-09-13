@@ -4,7 +4,7 @@
 > credential when it exits. For an instance that survives restart and reboot,
 > use the [persistent native installation](operations/native-installation.md).
 
-This procedure runs Cairn from source on numeric loopback with disposable test data. It makes no productive access and no model-provider call: retrieval and the optional evidence adapter remain disabled.
+This procedure runs Cairn from source on numeric loopback with disposable test data. It makes no productive access and no model-provider call: semantic retrieval remains disabled. Attic is enabled so the script also checks an exact evidence write/read round-trip.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ before continuing. The path-specific summary is:
 - Linux on a native Linux filesystem
 - Python 3.12
 - uv 0.12.0
-- `curl` and `jq`
+- curl 8.4.0 or newer and `jq`
 
 From the repository root, install the exact locked environment:
 
@@ -55,7 +55,7 @@ paths:
   data: $quickstart_dir/data
   credentials: $quickstart_dir/credentials
 attic:
-  enabled: false
+  enabled: true
 graphiti:
   enabled: false
 EOF
@@ -100,18 +100,18 @@ curl_config="$quickstart_dir/curl.conf"
 } >"$curl_config"
 chmod 0600 "$curl_config"
 
-cat >"$quickstart_dir/ingest.json" <<'JSON'
-{
-  "scope": {
-    "realm": "local",
-    "segments": [{"kind": "repository", "identifier": "example"}]
+printf 'Cairn Attic check: café.\nExact second line.\n' > "$quickstart_dir/payload.txt"
+jq -n --rawfile payload "$quickstart_dir/payload.txt" '{
+  scope: {
+    realm: "local",
+    segments: [{kind: "repository", identifier: "example"}]
   },
-  "classification": "internal",
-  "source_type": "human",
-  "requested_trust": "candidate",
-  "facts": [{"body": "The example repository uses a locked dependency set."}]
-}
-JSON
+  classification: "internal",
+  source_type: "human",
+  requested_trust: "candidate",
+  facts: [{body: "The example repository uses a locked dependency set."}],
+  evidence_payload: $payload
+}' > "$quickstart_dir/ingest.json"
 
 idempotency_key="$(uv run --locked --no-dev python -c 'import uuid; print(uuid.uuid4())')"
 curl --disable --silent --show-error --fail-with-body \
@@ -127,6 +127,16 @@ curl --disable --silent --show-error --fail-with-body \
 mutation_id="$(jq -er '.mutation_receipt.mutation_id' "$quickstart_dir/ingest-response.json")"
 jq '{outcome, result, mutation_receipt, audit_receipt}' \
   "$quickstart_dir/ingest-response.json"
+
+# Read the committed evidence; the helper compares exact UTF-8 bytes,
+# SHA-256 and byte length, retrying only the read while delivery is pending.
+evidence_id="$(jq -er '.result.evidence_id | strings' "$quickstart_dir/ingest-response.json")"
+uv run --locked --no-dev python scripts/verify-retrieval.py \
+  --base-url http://127.0.0.1:8000 \
+  --credential-file "$credential_file" \
+  --evidence-id "$evidence_id" \
+  --payload-file "$quickstart_dir/payload.txt" \
+  --deadline 120 --request-timeout 10 --max-attempts 30
 
 cat >"$quickstart_dir/audit-request.json" <<'JSON'
 {
@@ -148,7 +158,16 @@ curl --disable --silent --show-error --fail-with-body \
     '.events[] | select(.mutation_id == $mutation_id and .action_code == "ingest") | {sequence, action_code, outcome, mutation_id}'
 ```
 
-The ingest response is a custody acknowledgement. The audit read proves that the corresponding mutation was recorded in the realm chain. Search retrieval is a separate, optional projection and is intentionally outside this local exercise.
+The ingest response acknowledges custody. The evidence check must print
+`"status": "verified"`: the exact saved payload and its SHA-256 have returned
+through the authenticated API. It honours `Retry-After` for pending delivery or
+a retryable dependency failure, stops after 120 seconds or 30 attempts, and
+fails on corruption or mismatched bytes. It never repeats ingest. The audit
+read also proves the original mutation was recorded in the realm chain.
+Semantic search remains outside this exercise. All synthetic data is deleted
+on exit; use a persistent installation to verify retention across restart.
+See the [Attic round-trip documentation](operations/evidence-verification.md)
+for the API, failure handling and persistent checks.
 
 ## MCP endpoint
 
@@ -158,4 +177,4 @@ The same process exposes Cairn's stateless Streamable HTTP MCP endpoint at:
 http://127.0.0.1:8000/v1/mcp
 ```
 
-MCP uses the same Cairn bearer credential and scope grants as REST. Its eleven tool schemas are published in [`contracts/cairn-mcp-tools-v1.json`](../contracts/cairn-mcp-tools-v1.json); see the [client guide](clients.md#mcp-clients) before configuring a client. Use TLS whenever the endpoint leaves numeric loopback.
+MCP uses the same Cairn bearer credential and scope grants as REST. Its tool schemas are published in [`contracts/cairn-mcp-tools-v1.json`](../contracts/cairn-mcp-tools-v1.json); see the [client guide](clients.md#mcp-clients) before configuring a client. Use TLS whenever the endpoint leaves numeric loopback.

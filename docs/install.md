@@ -103,7 +103,7 @@ file-ownership operations before first boot.
 ## Disposable native quickstart prerequisites
 
 Required: Linux x86_64, Bash, Git, coreutils (including `mktemp`, `chmod`,
-`sha256sum`, `tr` and `rm`), curl 7.76 or newer, jq 1.6 or newer, a system
+`sha256sum`, `tr` and `rm`), curl 8.4.0 or newer, jq 1.6 or newer, a system
 Python 3 available as `python3`, and uv 0.12.0 with Cairn’s Python 3.12 runtime. You need a writable checkout and `/tmp`, an unused loopback port
 8000, and network access for locked dependency installation. You do not need
 Go, Bubblewrap, kubectl, Docker or administrator access to run the quickstart.
@@ -129,7 +129,7 @@ with socket.socket() as listener:
 PY
 ```
 
-Expect an executable path for every tool, curl 7.76 or newer, jq 1.6 or newer,
+Expect an executable path for every tool, curl 8.4.0 or newer, jq 1.6 or newer,
 and uv `0.12.0`. `python3 --version` reports the system Python and may show
 `3.14.x`; it is used here only for the standard-library socket check.
 `uv python find 3.12` must report the separate Python 3.12 interpreter used by
@@ -154,8 +154,8 @@ Linux userland/systemd packages. You need an ordinary non-root account, at least
 and separately protected backup storage. Only optional startup before login
 requires administrator/polkit authority. The [native guide](operations/native-installation.md#requirements)
 provides exact checks and expected results before installation.
-Running the optional bounded retrieval verification also requires curl 8.4.0
-or newer; check it with `curl --version` before following the client guide.
+The inline Attic check uses the same curl 8.4.0 minimum as the disposable
+checklist. Its standard-library helper supports Python 3.12–3.14 as `python3`.
 
 ## Docker Compose installation
 
@@ -271,7 +271,7 @@ in this order. All site-specific values must be chosen before applying anything:
    bootstrap, retains the one-time credential safely and restarts Cairn. Bootstrap
    is not a normal restart step; retain the same UUID, claims and credential.
 5. Check authenticated instance identity and run the
-   [Attic payload round-trip](operations/evidence-verification.md), including
+   [quick Attic write/read test](#quick-attic-writeread-test) below, including
    its read after restarting the StatefulSet and restoring the port-forward.
    From the repository root, use the namespace selected for the installation:
 
@@ -309,6 +309,80 @@ and verification commands. Port forwarding also needs the administrator-approved
 `pods/portforward` permission. It provides a local API check, not proof of an
 external ingress path or cross-node CNI isolation. External publication remains
 an explicit TLS-only ingress/proxy configuration.
+
+### Quick Attic write/read test
+
+After first boot, run the [client credential setup](clients.md#credentials)
+with the `base_url` and retained `credential_file` above, in the client terminal
+at the repository root. Keep the loopback port-forward running. These commands
+use that protected `curl_config` and the bootstrap administrator's grant at
+`local/repository:example`; no semantic provider is needed.
+
+Commit one small synthetic text payload and read it back byte-for-byte:
+
+```bash
+set -eu
+umask 077
+install -d -m 0700 "$HOME/.local/state/cairn-checks"
+evidence_check_dir="$(mktemp -d "$HOME/.local/state/cairn-checks/evidence.XXXXXXXX")"
+printf 'Retained evidence verification files: %s\n' "$evidence_check_dir"
+printf 'Cairn Attic check: café.\nExact second line.\n' > "$evidence_check_dir/payload.txt"
+python3 -c 'import uuid; print(uuid.uuid4())' > "$evidence_check_dir/idempotency-key"
+jq -n --rawfile payload "$evidence_check_dir/payload.txt" '{
+  scope: {
+    realm: "local",
+    segments: [{kind: "repository", identifier: "example"}]
+  },
+  classification: "internal",
+  source_type: "human",
+  facts: [{body: "The installation has submitted a synthetic Attic payload."}],
+  evidence_payload: $payload
+}' > "$evidence_check_dir/ingest.json"
+
+if http_status="$(curl --disable --silent --show-error --noproxy '*' \
+  --max-time 30 --request POST --config "$curl_config" \
+  --header 'Content-Type: application/json' \
+  --header "Idempotency-Key: $(cat "$evidence_check_dir/idempotency-key")" \
+  --data-binary "@$evidence_check_dir/ingest.json" \
+  --output "$evidence_check_dir/ingest-response.json" \
+  --dump-header "$evidence_check_dir/ingest-headers" --write-out '%{http_code}' \
+  "$base_url/v1/ingest")"; then
+  printf 'Ingest HTTP %s\n' "$http_status"
+  cat "$evidence_check_dir/ingest-response.json"
+  printf '\n'
+else
+  printf 'Commit uncertain; retain the same request and key in %s.\n' "$evidence_check_dir" >&2
+  exit 1
+fi
+test "$http_status" = 200
+jq -e '
+  (.outcome == "committed" or .outcome == "replayed") and
+  (.mutation_receipt | type == "object") and
+  (.audit_receipt | type == "object") and
+  (.result.evidence_id | type == "string")
+' "$evidence_check_dir/ingest-response.json" >/dev/null
+jq -er '.result.evidence_id' "$evidence_check_dir/ingest-response.json" > "$evidence_check_dir/evidence-id"
+
+python3 scripts/verify-retrieval.py \
+  --base-url "$base_url" \
+  --credential-file "$credential_file" \
+  --evidence-id "$(cat "$evidence_check_dir/evidence-id")" \
+  --payload-file "$evidence_check_dir/payload.txt" \
+  --deadline 120 --request-timeout 10 --max-attempts 30
+```
+
+Expect `"status": "verified"` with the saved evidence ID and SHA-256. The helper
+checks exact UTF-8 bytes, byte length and digest. It retries only evidence reads,
+honours `Retry-After`, and fails after 120 seconds or 30 attempts. Corruption or
+mismatched bytes fail immediately. This proves Attic custody and recovery of
+this payload, not semantic indexing or factual truth.
+
+The payload remains in the persistent volume. Retain the printed directory.
+After the StatefulSet restart in step 5, restore the port-forward and rerun
+**only** the final `python3 scripts/verify-retrieval.py` command with the same
+saved ID and payload file. Do not repeat a committed ingest. If the ingest
+transport fails, its commit is uncertain: reuse the saved request and key as
+explained in the [full round-trip procedure](operations/evidence-verification.md).
 
 ## Full developer validation
 
