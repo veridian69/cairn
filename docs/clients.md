@@ -52,7 +52,7 @@ in Git, configuration committed to Git, command arguments, environment
 variables, URLs, logs or traces.
 
 The examples below read a token from an owner-only file without putting it on
-`curl`'s command line. Run them on Linux with `curl`, `jq` and Python 3:
+`curl`'s command line. Run them on Linux with `curl`, `jq` and Python 3 available as `python3`:
 
 ```sh
 base_url=http://127.0.0.1:8080
@@ -179,7 +179,7 @@ jq -n '{
   facts: [{body: "The example repository uses a locked dependency set."}]
 }' > "$request_file"
 
-idempotency_key="$(python -c 'import uuid; print(uuid.uuid4())')"
+idempotency_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 curl --silent --show-error --fail-with-body \
   --request POST \
   --config "$curl_config" \

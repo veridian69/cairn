@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "147cd7d420fdc2365efb60c5abf7fa4abdcb62aa",
+  "source_revision": "9fe80bde574892092a2bf9e55f885519d9078c66",
   "release_configuration": {
     "files.json": "6547d6f3aa69c01ceeaed908394a8fb7c2267af7a12b3a94fe07580857797c36",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
@@ -522,7 +522,7 @@
       "mode": 420
     },
     "docs/clients.md": {
-      "sha256": "b4d669a7d90a1dc772d80f25f1914343533a4bf83a7d8a1538d0f28d54b1c450",
+      "sha256": "8dd4276d2c6a2f91bdc5d120778db08589cfa42e0021ce3521af88f42cd6a2b9",
       "mode": 420
     },
     "docs/durable-sessions.md": {
