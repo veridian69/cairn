@@ -4,6 +4,9 @@ import importlib
 import json
 import shutil
 import socket
+import subprocess
+import sys
+import sysconfig
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -109,3 +112,78 @@ def test_runtime_builder_does_not_overwrite_existing_destination(
     with pytest.raises(FileExistsError):
         builder.build_cli_runtime(target)
     assert original.read_text() == "keep"
+
+
+@pytest.mark.host_isolation
+def test_cli_runtime_does_not_use_host_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    builder = importlib.import_module("host_workflow_fixture")
+    sandbox = importlib.import_module("scripts.host_workflow_sandbox")
+    runtime = tmp_path / "runtime"
+    builder.build_cli_runtime(runtime)
+    wrong_python = tmp_path / "wrong-python"
+    wrong_python.write_text("#!/bin/sh\necho wrong-host-python >&2\nexit 86\n")
+    wrong_python.chmod(0o700)
+    command = sandbox._command(((runtime, "/runtime/cli"),), False, ("--help",))
+    command[command.index("--remount-ro") : command.index("--remount-ro")] = [
+        "--ro-bind",
+        str(wrong_python),
+        "/usr/bin/python3",
+    ]
+    boundary = command.index("--") + 1
+    control = subprocess.run(
+        [*command[:boundary], "/usr/bin/python3", "--version"],
+        capture_output=True,
+        timeout=30,
+    )
+    assert control.returncode == 86
+    assert b"wrong-host-python" in control.stderr
+    result = subprocess.run(command, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr.decode()
+    assert b"usage:" in result.stdout
+    probe = subprocess.run(
+        [
+            *command[:boundary],
+            "/runtime/cli/python/bin/python3",
+            "-I",
+            "-S",
+            "-c",
+            "import sys, sysconfig, json, os, _ssl; "
+            "from pathlib import Path; "
+            "assert Path(os.__file__).is_relative_to('/runtime/cli/python'); "
+            "assert '_ssl' in sys.builtin_module_names or "
+            "Path(_ssl.__file__).is_relative_to('/runtime/cli/python'); "
+            "sys.path.insert(0, '/runtime/cli/site-packages'); "
+            "import pydantic_core._pydantic_core; "
+            "print(json.dumps([sys.implementation.cache_tag, sysconfig.get_config_var('SOABI')]))",
+        ],
+        capture_output=True,
+        timeout=30,
+    )
+    assert probe.returncode == 0, probe.stderr.decode()
+    assert json.loads(probe.stdout) == [
+        sys.implementation.cache_tag,
+        sysconfig.get_config_var("SOABI"),
+    ]
+
+
+def test_python_staging_preserves_lib64_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builder = importlib.import_module("host_workflow_fixture")
+    base = tmp_path / "base"
+    stdlib = base / "lib64/python3.12"
+    native = stdlib / "lib-dynload"
+    native.mkdir(parents=True)
+    (stdlib / "os.py").write_text("fixture standard library")
+    (native / "_ssl.so").write_bytes(b"fixture native module")
+    monkeypatch.setattr(builder.sys, "base_prefix", str(base))
+    monkeypatch.setattr(builder.sysconfig, "get_path", lambda name: str(stdlib))
+    variables = {"DESTSHARED": str(native), "LIBDIR": str(base / "lib64")}
+    monkeypatch.setattr(builder.sysconfig, "get_config_var", variables.__getitem__)
+    builder._stage_python(tmp_path / "runtime")
+    staged = tmp_path / "runtime/python/lib64/python3.12"
+    assert (staged / "os.py").read_text() == "fixture standard library"
+    assert (staged / "lib-dynload/_ssl.so").read_bytes() == b"fixture native module"

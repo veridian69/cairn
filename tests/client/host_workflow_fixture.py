@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import sys
 import sysconfig
 import tempfile
 import zipfile
@@ -34,6 +35,59 @@ def build_cli_runtime(destination: Path) -> RuntimeEvidence:
         return _build(destination)
     finally:
         os.umask(previous)
+
+
+def _stage_python(destination: Path) -> None:
+    """Stage the interpreter and standard library that supplied our dependencies."""
+    runtime = destination / "python"
+    binary = runtime / "bin"
+    library = runtime / "lib"
+    binary.mkdir(parents=True, mode=0o700)
+    library.mkdir(mode=0o700)
+    shutil.copyfile(Path(sys.executable).resolve(), binary / "python3")
+    (binary / "python3").chmod(0o700)
+    stdlib = Path(sysconfig.get_path("stdlib")).resolve()
+    base = Path(sys.base_prefix).resolve()
+    native = Path(sysconfig.get_config_var("DESTSHARED")).resolve()
+    excluded = {
+        "site-packages",
+        "dist-packages",
+        "__pycache__",
+        "test",
+        "tests",
+        "sitecustomize.py",
+        "usercustomize.py",
+    }
+    for root in sorted({stdlib, native}):
+        if not root.is_relative_to(base):
+            raise ValueError("standard library is outside the base interpreter prefix")
+        target = runtime / root.relative_to(base)
+        for source in sorted(root.rglob("*")):
+            relative = source.relative_to(root)
+            if (
+                set(relative.parts) & excluded
+                or any(part.startswith("config-") for part in relative.parts)
+                or source.suffix in {".pyc", ".pth"}
+            ):
+                continue
+            if not source.resolve().is_relative_to(root):
+                raise ValueError(
+                    "standard library member escapes interpreter directory"
+                )
+            output = target / relative
+            if source.is_dir():
+                output.mkdir(parents=True, exist_ok=True, mode=0o700)
+            elif source.is_file():
+                output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                shutil.copyfile(source, output)
+                output.chmod(0o600)
+    # Managed Python builds use a shared libpython alongside the interpreter.
+    # Copy its aliases as regular files: sealed runtimes prohibit symlinks.
+    libdir = Path(sysconfig.get_config_var("LIBDIR"))
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    for source in libdir.glob(f"libpython{version}*.so*"):
+        shutil.copyfile(source, library / source.name)
+        (library / source.name).chmod(0o600)
 
 
 def _build(destination: Path) -> RuntimeEvidence:
@@ -119,15 +173,22 @@ def _build(destination: Path) -> RuntimeEvidence:
                 with target.open("xb") as output:
                     output.write(wheel.read(wheel_member))
                 target.chmod(0o600)
-    entry = destination / "entry"
-    entry.write_text(
-        "#!/usr/bin/python3 -I\n"
+    _stage_python(destination)
+    main = destination / "main.py"
+    main.write_text(
         "import sys\n"
         "sys.path.insert(0, '/runtime/cli/site-packages')\n"
         "from importlib.metadata import distribution\n"
         "entry = next(item for item in distribution('drystane-cairn').entry_points\n"
         "             if item.group == 'console_scripts' and item.name == 'cairn-memory')\n"
         "entry.load()()\n"
+    )
+    main.chmod(0o600)
+    entry = destination / "entry"
+    entry.write_text(
+        "#!/bin/sh\n"
+        "LD_LIBRARY_PATH=/runtime/cli/python/lib "
+        'exec /runtime/cli/python/bin/python3 -I -S /runtime/cli/main.py "$@"\n'
     )
     entry.chmod(0o700)
     return RuntimeEvidence(
