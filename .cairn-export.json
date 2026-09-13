@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "a350394962bc079c1082ce47b3e7be9e06ecb381",
+  "source_revision": "840a3f6d8758495a487475fc569d9d76339bf667",
   "release_configuration": {
-    "files.json": "61ce27a1ba211889e5cded88a9566683345434b3a08b91faf13904dab8aca322",
+    "files.json": "802db377b3c57760e857689f0d7bb69d2b5801012998113c406ed8d50db2f9f4",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
-    "overlay_set_sha256": "7d3e10b26dc6ea75c2041dd293f67a20d6a5d00bbcff46bd71df588c0b2c502e"
+    "overlay_set_sha256": "841cf6f88307d75359e290c60c313c6cde7632039b67fb07fda70ea4b226537f"
   },
   "files": {
     ".dockerignore": {
@@ -282,7 +282,7 @@
       "mode": 420
     },
     "deploy/compose/README.md": {
-      "sha256": "c784258f7b7d01623880af45257ea940b6645fa252860ab0a6c1cc01c6c31929",
+      "sha256": "1470f646d5edc52c67124bbec01d109a7037e283693e3a58ccfef9513ae0e9d6",
       "mode": 420
     },
     "deploy/compose/compose.graphiti.yaml": {
@@ -567,6 +567,10 @@
     },
     "docs/operations/deployment.md": {
       "sha256": "3b5244ecaafb6c2c4a742d6595c0a6127dbbb493320faa2f5157074130654226",
+      "mode": 420
+    },
+    "docs/operations/docker-firewalld.md": {
+      "sha256": "3af62bc59cbdb05be5bdc1a510f77224b15d8894e2aaa81f79caf33d074d6084",
       "mode": 420
     },
     "docs/operations/kubernetes-gateway.md": {

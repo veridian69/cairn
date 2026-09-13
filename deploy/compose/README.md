@@ -49,7 +49,7 @@ Required runtime and command-line tools are:
 - the Docker Compose v2 plugin, version 2.20.2 or newer. Older Compose clients
   do not understand that field;
 - Bash, `git`, `make`, `systemctl`, `sed`, and GNU coreutils including
-  `sha256sum`, `install`, `realpath`, `stat` and `tr` for the local build,
+  `sha256sum`, `install`, `realpath`, `stat`, `timeout` and `tr` for the local build,
   service check and safe file preparation; and
 - curl 8.4.0 or newer, `jq` and Python 3.12–3.14 as `python3` for bootstrap and the bounded client
   checks. The helper uses curl's [`--max-filesize`](https://curl.se/docs/manpage.html#--max-filesize)
@@ -63,7 +63,7 @@ Check them from the repository root before creating any instance files:
 uname -s
 uname -m
 for tool in bash docker git make systemctl sed sha256sum install realpath stat \
-    tr curl jq python3; do
+    timeout tr curl jq python3; do
   command -v "$tool" || exit 1
 done
 docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
@@ -123,14 +123,256 @@ repository root, verify the contracts, build the image named by
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
 make image IMAGE=cairn:v0.1.0
 docker image inspect --format '{{.Id}}' cairn:v0.1.0
-cd deploy/compose
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
-and the inspect command must print an image ID. The `cd` above is the only
-working-directory change for Compose installation and operation. Every Compose
-command below runs from `deploy/compose`; the separate client verification says
-explicitly when to move back to the repository root.
+and the inspect command must print an image ID.
+
+## Container-to-container connectivity preflight
+
+Run this disposable check from the repository root before creating `.env`,
+configuration or credentials. It starts no Cairn or FalkorDB process. Instead,
+two containers use the Python runtime in the image just built: one serves a
+fixed HTTP body and the other checks Docker DNS, TCP and that body over a new
+user-defined bridge. No port is published and neither container makes an
+external request.
+
+The Compose project uses an ordinary user-defined bridge, so the probe verifies
+`bridge false`; adding `--internal` here would test a different network shape.
+Every temporary object has a random name and matching ownership label. Cleanup
+removes an object only when both still match.
+
+```bash
+set -eu
+set -o pipefail
+
+preflight_image='cairn:v0.1.0'
+preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+preflight_label_key='io.cairn.compose-preflight'
+preflight_network="cairn-preflight-$preflight_id"
+preflight_server="cairn-preflight-server-$preflight_id"
+preflight_client="cairn-preflight-client-$preflight_id"
+
+cleanup_preflight() {
+  local cleanup_status=0 name owner owned_containers owned_networks
+  for name in "$preflight_client" "$preflight_server"; do
+    if owner="$(timeout 5 docker container inspect --format \
+        '{{ index .Config.Labels "io.cairn.compose-preflight" }}' \
+        "$name" 2>/dev/null)"; then
+      if test "$owner" = "$preflight_id"; then
+        if ! timeout 10 docker container rm --force "$name" >/dev/null 2>&1; then
+          printf 'CLEANUP_FAILED: could not remove owned container: %s\n' \
+            "$name" >&2
+          cleanup_status=1
+        fi
+      else
+        printf 'not removing unowned container: %s\n' "$name" >&2
+        cleanup_status=1
+      fi
+    fi
+  done
+  if owner="$(timeout 5 docker network inspect --format \
+      '{{ index .Labels "io.cairn.compose-preflight" }}' \
+      "$preflight_network" 2>/dev/null)"; then
+    if test "$owner" = "$preflight_id"; then
+      if ! timeout 10 docker network rm "$preflight_network" >/dev/null 2>&1; then
+        printf 'CLEANUP_FAILED: could not remove owned network: %s\n' \
+          "$preflight_network" >&2
+        cleanup_status=1
+      fi
+    else
+      printf 'not removing unowned network: %s\n' "$preflight_network" >&2
+      cleanup_status=1
+    fi
+  fi
+  if ! owned_containers="$(timeout 5 docker container ls --all --quiet \
+      --filter "label=$preflight_label_key=$preflight_id")"; then
+    printf 'CLEANUP_UNVERIFIED: could not inventory labelled containers\n' >&2
+    cleanup_status=1
+  elif test -n "$owned_containers"; then
+    printf 'CLEANUP_RESIDUE: labelled container IDs: %s\n' \
+      "$owned_containers" >&2
+    cleanup_status=1
+  fi
+  if ! owned_networks="$(timeout 5 docker network ls --quiet \
+      --filter "label=$preflight_label_key=$preflight_id")"; then
+    printf 'CLEANUP_UNVERIFIED: could not inventory labelled networks\n' >&2
+    cleanup_status=1
+  elif test -n "$owned_networks"; then
+    printf 'CLEANUP_RESIDUE: labelled network IDs: %s\n' \
+      "$owned_networks" >&2
+    cleanup_status=1
+  fi
+  return "$cleanup_status"
+}
+finish_preflight() {
+  local status=$? cleanup_status
+  trap - EXIT
+  set +e
+  cleanup_preflight
+  cleanup_status=$?
+  if test "$cleanup_status" != 0; then
+    printf 'preflight cleanup incomplete; remove only the reported labelled resources\n' >&2
+    if test "$status" = 0; then status=1; fi
+  fi
+  exit "$status"
+}
+trap finish_preflight EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+docker image inspect "$preflight_image" >/dev/null
+docker network create --driver bridge \
+  --label "$preflight_label_key=$preflight_id" \
+  "$preflight_network" >/dev/null
+test "$(docker network inspect --format '{{.Driver}} {{.Internal}}' \
+  "$preflight_network")" = 'bridge false'
+
+server_code="$(cat <<'PY'
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+BODY = b"cairn-compose-bridge-ok\n"
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        if self.path != "/probe":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(BODY)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(BODY)
+
+
+ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
+PY
+)"
+docker run --detach --name "$preflight_server" \
+  --label "$preflight_label_key=$preflight_id" \
+  --network "$preflight_network" --network-alias compose-http \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --entrypoint python "$preflight_image" -u -c "$server_code" >/dev/null
+
+server_ready=0
+for ((attempt = 1; attempt <= 10; attempt++)); do
+  if timeout 3 docker exec "$preflight_server" python -c \
+      'import socket; socket.create_connection(("127.0.0.1", 8000), 2).close()' \
+      >/dev/null 2>&1; then
+    server_ready=1
+    break
+  fi
+  sleep 1
+done
+if test "$server_ready" != 1; then
+  printf 'SERVER_FAILED: fixture did not listen inside its container\n' >&2
+  docker logs --tail 50 "$preflight_server" >&2 || true
+  exit 1
+fi
+
+set +e
+timeout 20 docker run --interactive --rm --name "$preflight_client" \
+  --label "$preflight_label_key=$preflight_id" \
+  --network "$preflight_network" \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --entrypoint python "$preflight_image" - <<'PY'
+import http.client
+import socket
+import sys
+
+host = "compose-http"
+port = 8000
+expected = b"cairn-compose-bridge-ok\n"
+try:
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+except socket.gaierror as error:
+    print(f"DNS_FAILED: {host}: {error}", file=sys.stderr)
+    raise SystemExit(10)
+if not addresses:
+    print(f"DNS_FAILED: {host}: no addresses", file=sys.stderr)
+    raise SystemExit(10)
+print("DNS_OK: " + ",".join(sorted({item[4][0] for item in addresses})))
+
+connect_errors = []
+for family, socket_type, protocol, _, address in addresses:
+    connection = socket.socket(family, socket_type, protocol)
+    connection.settimeout(5)
+    try:
+        connection.connect(address)
+    except OSError as error:
+        connect_errors.append(f"{address[0]}:{address[1]}: {error}")
+        connection.close()
+        continue
+    print(f"TCP_OK: {address[0]}:{address[1]}")
+    try:
+        connection.sendall(
+            b"GET /probe HTTP/1.1\r\nHost: compose-http\r\nConnection: close\r\n\r\n"
+        )
+        response = http.client.HTTPResponse(connection)
+        response.begin()
+        body = response.read(1024)
+    except (OSError, http.client.HTTPException) as error:
+        print(f"HTTP_FAILED: {error}", file=sys.stderr)
+        raise SystemExit(12)
+    finally:
+        connection.close()
+    if response.status != 200 or body != expected:
+        print(
+            f"HTTP_FAILED: status={response.status} body={body!r}",
+            file=sys.stderr,
+        )
+        raise SystemExit(12)
+    print("HTTP_OK: fixed body matched")
+    raise SystemExit(0)
+
+print("TCP_FAILED: " + "; ".join(connect_errors), file=sys.stderr)
+raise SystemExit(11)
+PY
+client_status=$?
+set -e
+
+case "$client_status" in
+  0) ;;
+  10) printf 'Docker DNS failed; inspect daemon/firewall policy.\n' >&2; exit 1 ;;
+  11) printf 'Docker bridge TCP failed after DNS; inspect host firewall forwarding policy.\n' >&2; exit 1 ;;
+  12) printf 'Docker bridge HTTP response was wrong; inspect the fixture diagnostics.\n' >&2; exit 1 ;;
+  124) printf 'Docker bridge client timed out after 20 seconds.\n' >&2; exit 1 ;;
+  *) printf 'Docker bridge client failed with exit %s.\n' "$client_status" >&2; exit 1 ;;
+esac
+
+if ! cleanup_preflight; then
+  printf 'preflight succeeded but cleanup could not be proved complete\n' >&2
+  exit 1
+fi
+trap - EXIT
+printf 'PASS: Docker DNS, bridge TCP and fixed HTTP response; cleanup complete\n'
+```
+
+Expected output includes `DNS_OK`, `TCP_OK`, `HTTP_OK` and the final `PASS`.
+A DNS, TCP, HTTP or timeout diagnostic is a failed prerequisite. Give it to the
+host administrator with `docker info` and follow the read-only
+[Docker/firewalld diagnostics](../../docs/operations/docker-firewalld.md); do
+not disable the firewall, open broad forwarding or change Cairn's Compose
+files. Cleanup runs on failure, never removes an object whose random name has
+lost its matching label, and reports labelled residue or an inventory it could
+not complete. Remove reported residue only after verifying its ownership label.
+
+After this passes, make the guide's single working-directory change:
+
+```sh
+cd deploy/compose
+```
+
+Every Compose command below runs from `deploy/compose`; the separate client
+verification says explicitly when to move back to the repository root.
 
 ## Command and state shape
 
@@ -371,7 +613,10 @@ does not mint replacement credentials.
 Semantic retrieval adds Graphiti, a project-private FalkorDB index and outbound
 OpenAI API calls. It is optional; Attic remains enabled either way. Two halves
 are required: the overlay adds FalkorDB, and `config.yaml` tells Cairn to use
-it. Recheck privileged access immediately before stopping Cairn, even if the
+it. If Docker, firewalld or host network policy has changed since first boot,
+repeat the [container connectivity preflight](#container-to-container-connectivity-preflight)
+in a separate repository-root terminal before stopping Cairn. Recheck
+privileged access immediately before stopping Cairn, even if the
 initial preflight passed. Run this block from `deploy/compose`; a failed
 authentication or command-permission check exits before shutdown or credential
 creation. Stop Cairn before changing the configuration.
