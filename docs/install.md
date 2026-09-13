@@ -1,5 +1,10 @@
 # Install Cairn
 
+**Semantic search requires an OpenAI API key.** Basic installation and Attic
+write/read checks need no OpenAI key. The key is separate from your Cairn
+administrator credential; follow your chosen guide's semantic setup to store
+it securely before enabling search.
+
 Choose one path before installing tools. These instructions target Linux
 `x86_64`, including WSL with a native Linux checkout; the persistent service
 requires a working systemd user manager. Keep the checkout, Python environment
@@ -182,6 +187,11 @@ from beginning to end, including its choice of base or semantic lifecycle
 commands. `down` and volume deletion have different retention consequences.
 
 ## Kubernetes installation
+
+**For semantic search, have an OpenAI API key ready.** Supply it through the
+protected credential Secret described in [credentials and retrieval egress](operations/deployment.md#credentials-and-retrieval-egress).
+The base Kubernetes installation and inline Attic check need no OpenAI key.
+
 
 Use this path to install Cairn into an **existing conformant Kubernetes cluster**.
 It includes Attic, with semantic retrieval optional. Cluster creation, CNI/CSI

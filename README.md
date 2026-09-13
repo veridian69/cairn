@@ -35,6 +35,11 @@ The response preserves accepted UTF-8 source bytes with their SHA-256 digest,
 independently of semantic indexing. Scope, grants and classification still
 govern access; reading source evidence does not validate its claims.
 
+**Semantic search requires an OpenAI API key.** Installation and the Attic
+write/read checks work without one. To enable semantic search, follow the
+[provider credential setup](deploy/compose/README.md#optional-semantic-retrieval);
+the OpenAI key is separate from your Cairn administrator credential.
+
 ## Interfaces
 
 Cairn exposes two compatible API families over one catalogue:

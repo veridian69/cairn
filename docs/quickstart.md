@@ -6,6 +6,12 @@
 
 This procedure runs Cairn from source on numeric loopback with disposable test data. It makes no productive access and no model-provider call: semantic retrieval remains disabled. Attic is enabled so the script also checks an exact evidence write/read round-trip.
 
+**Semantic search requires an OpenAI API key.** This disposable quickstart
+leaves semantic search disabled, so its Attic write/read check needs no OpenAI
+key. For semantic search, use the [persistent native setup](operations/native-installation.md#optional-semantic-retrieval)
+or [Docker Compose setup](../deploy/compose/README.md#optional-semantic-retrieval).
+The OpenAI key is separate from the Cairn credential created below.
+
 ## Requirements
 
 Complete the [disposable native prerequisites](install.md#disposable-native-quickstart-prerequisites)

@@ -1,5 +1,11 @@
 # The Compose project
 
+**Semantic search requires an OpenAI API key.** The base Compose installation
+and Attic write/read check work without one. Follow the
+[optional semantic setup](#optional-semantic-retrieval) to store the OpenAI key
+in the protected credential file before enabling search. It is separate from
+your Cairn administrator token.
+
 One Cairn instance on one host, packaged as a Compose project.
 
 **One project is one instance.** The project name is the instance name,

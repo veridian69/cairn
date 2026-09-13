@@ -12,6 +12,11 @@ complete local semantic-retrieval stack with FalkorDB. This native baseline
 enables Attic evidence custody but leaves semantic retrieval disabled, so its
 verification proves catalogue and evidence custody rather than search.
 
+**Semantic search requires an OpenAI API key.** The native baseline and Attic
+write/read check need no OpenAI key. Before enabling search, complete the
+[optional semantic setup](#optional-semantic-retrieval), including its protected
+OpenAI credential file. This key is separate from the Cairn administrator token.
+
 ## Requirements
 
 Complete these checks before creating any files:
