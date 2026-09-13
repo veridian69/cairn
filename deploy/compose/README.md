@@ -29,8 +29,8 @@ The wire contracts are already pinned. From the repository root, verify them
 before deploying:
 
 ```sh
-sha256sum -c contracts/cairn-openapi-v1.json.sha256
-sha256sum -c contracts/cairn-mcp-tools-v1.json.sha256
+(cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
+(cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
 ```
 
 Expected SHA-256 values:

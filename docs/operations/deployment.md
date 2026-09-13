@@ -12,11 +12,11 @@ from a trusted checkout or supply an operator-controlled immutable image
 reference. Record the image digest with the rendered deployment manifest. Do
 not claim that a release image exists until one has actually been published.
 
-Verify the checked-out contracts before deployment:
+From the repository root, verify the checked-out contracts before deployment:
 
 ```sh
-sha256sum -c contracts/cairn-openapi-v1.json.sha256
-sha256sum -c contracts/cairn-mcp-tools-v1.json.sha256
+(cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
+(cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
 ```
 
 After deployment, compare those values with authenticated
