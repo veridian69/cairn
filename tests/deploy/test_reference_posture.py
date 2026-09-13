@@ -8,6 +8,8 @@ import importlib.util
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -759,6 +761,33 @@ def _fake_executable(path: Path, text: str) -> None:
 def _install_fake_commands(root: Path) -> None:
     binary = root / "bin"
     binary.mkdir()
+    # Expose only the real utilities this harness needs. Inheriting PATH lets a
+    # disabled fake command fall through to an installed host tool.
+    for command in (
+        "bash",
+        "cat",
+        "dirname",
+        "grep",
+        "jq",
+        "mkdir",
+        "mktemp",
+        "rm",
+        "sed",
+        "seq",
+        "setsid",
+        "sleep",
+        "sort",
+        "tail",
+        "timeout",
+        "wc",
+    ):
+        executable = shutil.which(command)
+        assert executable is not None, f"test harness requires {command}"
+        (binary / command).symlink_to(executable)
+    _fake_executable(
+        binary / "python3",
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+    )
     oci = root / "oci"
     oci.mkdir()
     config = FAKE_CAIRN_CONFIG
@@ -1446,8 +1475,7 @@ def _run_fake_harness(
     root = _FAKE_HARNESS_ROOT
     if not (root / "bin").exists():
         _install_fake_commands(root)
-    if fixture == "missing-socat":
-        (root / "bin" / "socat").chmod(0o600)
+    (root / "bin" / "socat").chmod(0o600 if fixture == "missing-socat" else 0o755)
     for marker in root.glob("deleted-*"):
         marker.unlink()
     (root / "kubectl.jsonl").write_text("", encoding="utf-8")
@@ -1464,9 +1492,7 @@ def _run_fake_harness(
     environment.pop("PYTHONPATH", None)
     environment.update(
         {
-            "PATH": (
-                f"{root / 'bin'}:{Path(sys.executable).parent}:{environment['PATH']}"
-            ),
+            "PATH": str(root / "bin"),
             "KUBECTL": str(root / "bin" / "kubectl"),
             "FAKE_KUBE_ROOT": str(root),
             "FAKE_KUBE_FIXTURE": fixture,
@@ -2238,6 +2264,24 @@ def test_preflight_refuses_before_apply_on_protected_or_target_drift(
         ]
 
     assert not any(call and call[0] in {"apply", "delete"} for call in calls)
+
+
+def test_missing_socat_is_isolated_from_host_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host_bin = tmp_path / "host-bin"
+    host_bin.mkdir()
+    marker = tmp_path / "host-socat-called"
+    _fake_executable(host_bin / "socat", f"#!/bin/sh\n: > {shlex.quote(str(marker))}\n")
+    monkeypatch.setenv("PATH", f"{host_bin}:{os.environ['PATH']}")
+    with _fake_harness_environment(tmp_path):
+        assert _run_fake_harness("preflight", fixture="missing-socat") == 1
+        assert (
+            "required tool is not an absolute executable: socat"
+            in (tmp_path / "harness.stderr").read_text()
+        )
+        assert _run_fake_harness("preflight", fixture="safe") == 0
+    assert not marker.exists()
 
 
 def test_gateway_is_rechecked_as_six_objects_then_proved_as_seven(

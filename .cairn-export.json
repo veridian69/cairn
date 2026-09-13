@@ -1,9 +1,9 @@
 {
   "format": 1,
-  "source_revision": "9f0222e637df802a6440dfc8d6105e13262324a0",
+  "source_revision": "26404d85ed0464a893bb0581999932d6bc7d112b",
   "release_configuration": {
-    "files.json": "278f1770dc3196c766aa4d16b0fb29505487f953250e9f42170150c51932a31c",
-    "export.py": "0c0dcef8d7bc022cf38bb77203ec929e1ebd1d49839b2a9751db8b5d7ece5bef",
+    "files.json": "a2e0daaef7f4c17d72d30371b27e2cfcdd13131098cbcfa8cc4620ad1f243bd7",
+    "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
     "overlay_set_sha256": "4f34519e20798f0f7469aad21cddd1815bcd31c9ac6a99c11b63a2dbfdf144e6"
@@ -1942,7 +1942,7 @@
       "mode": 420
     },
     "tests/deploy/test_reference_posture.py": {
-      "sha256": "e4b2e97cdcaff58c0d8e1b1d71f11142e0a0ae3aec1b2cf922b61fa03db61f8a",
+      "sha256": "4ddb3aec22674e1640ead9d6faf32feb61ff84fdb8db6603f02b25fe7e9bdfe3",
       "mode": 420
     },
     "tests/deploy/test_rendered_manifests.py": {
