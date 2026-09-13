@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "6cf7c4b8fe2063ab361edd95811b0141c7f2ad85",
+  "source_revision": "d041186b54e474cb29578f228469637c22062cf6",
   "release_configuration": {
     "files.json": "c1248aff8243ccc182440595da5aea5e7ff6a25696a5a9f15cd469da6b40c404",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
@@ -58,7 +58,7 @@
       "mode": 420
     },
     "Dockerfile": {
-      "sha256": "eaad20e7ca532527b5dcfaa6c7b556d1031c04fe1db8a23d24016121c82705bb",
+      "sha256": "f81f57f81b3d6db2ded4c62a8d2bd82a03abd1d6bb2832412060b36e3b030ebb",
       "mode": 420
     },
     "LICENSE-Apache-2.0.txt": {
