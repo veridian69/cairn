@@ -24,10 +24,10 @@ become established truth merely because it was remembered.
 
 ## Install Cairn
 
-- [Disposable native quickstart](docs/quickstart.md)
-- [Persistent native service](docs/operations/native-installation.md)
-- [Docker Compose](deploy/compose/README.md)
-- [Kubernetes](docs/install.md#kubernetes-installation)
+- [Disposable native quickstart](docs/quickstart.md) — for development and testing.
+- [Persistent native service](docs/operations/native-installation.md) — manual native setup for experienced users.
+- [Docker Compose](deploy/compose/README.md) — recommended for beginners.
+- [Kubernetes](docs/install.md#kubernetes-installation) — advanced installation.
 
 ## Interfaces
 
