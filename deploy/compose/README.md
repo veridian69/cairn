@@ -200,7 +200,9 @@ so that a procedure nobody wrote down still comes out right.
 Run the following in Bash from `deploy/compose`. The four values at the top are
 the only operator choices. `cairn_project` is a lowercase Compose project name;
 `cairn_port` is an unused loopback TCP port; `cairn_realm` is a lowercase Cairn
-realm identifier; and `cairn_label` is the human administrator's display label.
+realm identifier; and `cairn_label` is the administrator's label: 1–63 lowercase
+letters, digits or hyphens, starting with a letter and ending with a letter or
+digit.
 The shown values are valid and can be used for a first local instance.
 
 ```bash
@@ -209,7 +211,7 @@ set -eu
 cairn_project='cairn-a'
 cairn_port='8080'
 cairn_realm='local'
-cairn_label='Local administrator'
+cairn_label='local-administrator'
 cairn_credential_dir="$HOME/.config/cairn"
 cairn_credential_file="$cairn_credential_dir/${cairn_project}-admin.token"
 
@@ -219,6 +221,10 @@ if ! [[ "$cairn_project" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
 fi
 if ! [[ "$cairn_realm" =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
   printf 'invalid Cairn realm identifier\n' >&2
+  exit 1
+fi
+if ! [[ "$cairn_label" =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  printf 'invalid Cairn administrator label\n' >&2
   exit 1
 fi
 if ! [[ "$cairn_port" =~ ^[0-9]+$ ]] ||

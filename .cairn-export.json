@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "d041186b54e474cb29578f228469637c22062cf6",
+  "source_revision": "a350394962bc079c1082ce47b3e7be9e06ecb381",
   "release_configuration": {
-    "files.json": "c1248aff8243ccc182440595da5aea5e7ff6a25696a5a9f15cd469da6b40c404",
+    "files.json": "61ce27a1ba211889e5cded88a9566683345434b3a08b91faf13904dab8aca322",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
-    "overlay_set_sha256": "7d1f427f75b5bd035b9acf924d7f3e24ab50441eab1598042d15086cd9ef6008"
+    "overlay_set_sha256": "7d3e10b26dc6ea75c2041dd293f67a20d6a5d00bbcff46bd71df588c0b2c502e"
   },
   "files": {
     ".dockerignore": {
@@ -282,7 +282,7 @@
       "mode": 420
     },
     "deploy/compose/README.md": {
-      "sha256": "9697d57e433eb22370dfe9e45ef0727f2dfa5b3cb8d7927d152fca7e8810abdc",
+      "sha256": "c784258f7b7d01623880af45257ea940b6645fa252860ab0a6c1cc01c6c31929",
       "mode": 420
     },
     "deploy/compose/compose.graphiti.yaml": {
@@ -846,7 +846,7 @@
       "mode": 420
     },
     "src/cairn/bootstrap/procedures.py": {
-      "sha256": "b6ff4f55d4ead00f74dd5f009349214fa933a17e918bddfcc35fd52746c06301",
+      "sha256": "c66cf73ae8c1255a372154ae66239add50e328490a981ffb7c70a3dd3603174c",
       "mode": 420
     },
     "src/cairn/catalogue/__init__.py": {
@@ -2110,7 +2110,7 @@
       "mode": 420
     },
     "tests/runtime/test_bootstrap_cli.py": {
-      "sha256": "72d55e71a8a04b12b6eb5d5e7230fddb9449d98b3563bad7630f02a4d143a644",
+      "sha256": "2929602affd3a8d1d39f331905dc276ea3f517cba8aa69cb9304041d2019f4a5",
       "mode": 420
     },
     "tests/runtime/test_catalogue_cli.py": {

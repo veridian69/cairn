@@ -38,6 +38,7 @@ from uuid import UUID
 
 from cairn.authority.credentials import DATA_OPERATIONS, GrantOperation, PrincipalKind
 from cairn.authority.credentials import mint_token as _mint_token
+from cairn.authority.gate import validate_label
 from cairn.catalogue.audit import (
     ZERO_HASH,
     ActionKind,
@@ -94,6 +95,9 @@ def bootstrap_realm(
     uuid_factory: Callable[[], UUID],
     entropy: Callable[[int], bytes],
 ) -> BootstrapResult:
+    if validate_label(label) is not None:
+        raise BootstrapError("invalid_label")
+
     lease = DataDirectoryLease(config.paths.data, config.instance_id)
     lease.acquire()
     try:
@@ -214,6 +218,8 @@ def recover_realm(
 ) -> RecoveryResult:
     if (principal_id is None) == (label is None):
         raise BootstrapError("invalid_selector")
+    if label is not None and validate_label(label) is not None:
+        raise BootstrapError("invalid_label")
 
     lease = DataDirectoryLease(config.paths.data, config.instance_id)
     lease.acquire()

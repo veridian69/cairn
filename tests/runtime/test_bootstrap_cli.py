@@ -1033,3 +1033,98 @@ def test_bootstrap_cli_refuses_serving_instance(
         "status": "error",
     }
     assert captured.out == ""
+
+
+@pytest.mark.parametrize("command", ["bootstrap", "recover"])
+@pytest.mark.parametrize(
+    "label",
+    ["Local administrator", "", "1admin", "-admin", "admin-", "a" * 64, "admin\n"],
+)
+def test_cli_invalid_label_is_explicit_and_leaves_catalogue_unchanged(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    label: str,
+) -> None:
+    cli = importlib.import_module("cairn.runtime.cli")
+    config = _migrated(tmp_path)
+    if command == "recover":
+        _bootstrap(config)
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, config)
+    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+        before = tuple(connection.iterdump())
+
+    result = cli.main(
+        [command, "--config", str(config_path), "--realm", _REALM, f"--label={label}"]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 4
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"status": "error", "code": "invalid_label"}
+    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+        assert tuple(connection.iterdump()) == before
+
+
+@pytest.mark.parametrize("command", ["bootstrap", "recover"])
+@pytest.mark.parametrize("label", ["a", "local-administrator", "a" * 63])
+def test_cli_accepts_valid_label_boundaries(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    label: str,
+) -> None:
+    cli = importlib.import_module("cairn.runtime.cli")
+    config = _migrated(tmp_path)
+    if command == "recover":
+        _bootstrap(config)
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, config)
+
+    result = cli.main(
+        [command, "--config", str(config_path), "--realm", _REALM, "--label", label]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert TOKEN_PATTERN.fullmatch(payload["token"]) is not None
+    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+        assert connection.execute(
+            "SELECT label FROM principals WHERE principal_id = ?",
+            (payload["principal_id"],),
+        ).fetchone() == (label,)
+
+
+@pytest.mark.parametrize("command", ["bootstrap", "recover"])
+def test_cli_invalid_label_is_rejected_before_catalogue_lease(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    cli = importlib.import_module("cairn.runtime.cli")
+    config = _migrated(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path, config)
+    lease = DataDirectoryLease(config.paths.data, config.instance_id)
+    lease.acquire()
+    try:
+        result = cli.main(
+            [
+                command,
+                "--config",
+                str(config_path),
+                "--realm",
+                _REALM,
+                "--label",
+                "Local administrator",
+            ]
+        )
+    finally:
+        lease.release()
+    captured = capsys.readouterr()
+    assert result == 4
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"status": "error", "code": "invalid_label"}
