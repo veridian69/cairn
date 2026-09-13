@@ -61,7 +61,10 @@ HOST_FUNCTIONS = {
         "test_simultaneous_admission_has_one_winner",
         "test_stderr_is_bounded_discarded_and_never_replayed",
     ],
-    "test_host_workflow_runtime.py": ["test_actual_wheel_cli_inside_nested_sandbox"],
+    "test_host_workflow_runtime.py": [
+        "test_actual_wheel_cli_inside_nested_sandbox",
+        "test_cli_runtime_does_not_use_host_python",
+    ],
     "test_host_workflow_bridge.py": [
         "test_active_sdk_cancel_jailed_main_preserves_session",
         "test_actual_jailed_sdk_bridge_and_nested_wheel_cli",
@@ -99,7 +102,7 @@ class SplitTests(unittest.TestCase):
                 self.assertEqual(path.parent, ROOT / "tests/client")
                 actual[path.name] = sorted(marked)
         self.assertEqual(actual, {p: sorted(n) for p, n in HOST_FUNCTIONS.items()})
-        self.assertEqual(sum(map(len, actual.values())), 43)
+        self.assertEqual(sum(map(len, actual.values())), 44)
 
     def test_ordinary_gate_is_automatic_and_selector_is_step_local(self):
         doc = workflow("check.yml")
