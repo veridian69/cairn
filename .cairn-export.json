@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "f26c619cc23064513cab5ae2bb9f0f435137fd87",
+  "source_revision": "7e2d2848ede64cd6a5ad5560b91e3b266ee0684b",
   "release_configuration": {
-    "files.json": "bce0ccf19752c41fd1e4c4e4aa01fad630ff051b8ce8baaa5475d6ddf2066d73",
+    "files.json": "5ec6fbc9e9a2bba66ba622442bb2b95665d5def5716a4bc024a0716efd8413b8",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
-    "overlay_set_sha256": "6f04b712bab8aba00dfc22432aae84af0e672d0ecad0bcecc8e4dcfb44ebdf58"
+    "overlay_set_sha256": "86ba600ef4c4bbe434ce317831ae6f7bd22fcac645d0d7d748c9ed87032c74d7"
   },
   "files": {
     ".dockerignore": {
@@ -558,7 +558,7 @@
       "mode": 420
     },
     "docs/operations/backup-restore.md": {
-      "sha256": "39d5961be83982110569d53156f1d3fd2ca470005d22f0f3a8b4120b0327febf",
+      "sha256": "d5a130e66b1dc34c1ebc12d8dfad64f143f0bc5e98883528ef2e7104d911a001",
       "mode": 420
     },
     "docs/operations/cairn-mcp-relay.md": {
@@ -566,7 +566,7 @@
       "mode": 420
     },
     "docs/operations/deployment.md": {
-      "sha256": "f15850a3ef90db0b64d327623ac3cc7d02102bbe1725fa4efde90b296ff5136f",
+      "sha256": "da4f9af201ffc494a9b2bde949c355cab5f172dfba1a75e9e4bcbcda484e3367",
       "mode": 420
     },
     "docs/operations/migration.md": {

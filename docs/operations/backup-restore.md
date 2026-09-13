@@ -722,7 +722,12 @@ component rather than hand-copying a target workload. Save this
 `components` at the pinned, vendored Cairn source, replace the site values and
 add the same target-specific FalkorDB security patch used by the site's
 production overlay. The suffix creates a distinct Service, StatefulSet and
-fresh `data-falkordb-candidate-0` claim:
+fresh `data-falkordb-candidate-0` claim. The explicit patches below replace
+only existing instance-label values and add the recovery discriminator only to
+the candidate's labels and intended internal selector relationships. Do not
+substitute a broad `labels` transformation with `includeSelectors: true`; see
+[the instance-label render checks](deployment.md#customise-instance-labels-without-changing-external-destinations).
+External DNS/gateway peers and their namespace selectors must remain unchanged:
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -731,12 +736,69 @@ namespace: REPLACE_WITH_INSTANCE_NAMESPACE
 components:
   - REPLACE_WITH_PINNED_CAIRN_SOURCE/deploy/kustomize/components/falkordb
 nameSuffix: -candidate
-labels:
-  - pairs:
-      app.kubernetes.io/instance: REPLACE_WITH_INSTANCE_NAME
-      cairn.example.invalid/recovery: candidate
-    includeSelectors: true
 patches:
+  - target:
+      kind: Service
+      name: falkordb
+    patch: |-
+      - {op: test, path: /metadata/labels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /metadata/labels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /metadata/labels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/selector/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/selector/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/selector/cairn.example.invalid~1recovery, value: candidate}
+  - target:
+      kind: StatefulSet
+      name: falkordb
+    patch: |-
+      - {op: test, path: /metadata/labels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /metadata/labels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /metadata/labels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/selector/matchLabels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/selector/matchLabels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/selector/matchLabels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/template/metadata/labels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/template/metadata/labels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/template/metadata/labels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/volumeClaimTemplates/0/metadata/labels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/volumeClaimTemplates/0/metadata/labels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/volumeClaimTemplates/0/metadata/labels/cairn.example.invalid~1recovery, value: candidate}
+  - target:
+      kind: NetworkPolicy
+      name: cairn-allow-index-egress
+    patch: |-
+      - {op: test, path: /metadata/labels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /metadata/labels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /metadata/labels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/egress/0/to/0/podSelector/matchLabels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/egress/0/to/0/podSelector/matchLabels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/egress/0/to/0/podSelector/matchLabels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/podSelector/matchLabels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/podSelector/matchLabels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/podSelector/matchLabels/cairn.example.invalid~1recovery, value: candidate}
+  - target:
+      kind: NetworkPolicy
+      name: falkordb-allow-cairn-ingress
+    patch: |-
+      - {op: test, path: /metadata/labels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /metadata/labels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /metadata/labels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/ingress/0/from/0/podSelector/matchLabels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/ingress/0/from/0/podSelector/matchLabels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/ingress/0/from/0/podSelector/matchLabels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/podSelector/matchLabels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/podSelector/matchLabels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/podSelector/matchLabels/cairn.example.invalid~1recovery, value: candidate}
+  - target:
+      kind: NetworkPolicy
+      name: falkordb-default-deny
+    patch: |-
+      - {op: test, path: /metadata/labels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /metadata/labels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /metadata/labels/cairn.example.invalid~1recovery, value: candidate}
+      - {op: test, path: /spec/podSelector/matchLabels/app.kubernetes.io~1instance, value: cairn}
+      - {op: replace, path: /spec/podSelector/matchLabels/app.kubernetes.io~1instance, value: REPLACE_WITH_INSTANCE_NAME}
+      - {op: add, path: /spec/podSelector/matchLabels/cairn.example.invalid~1recovery, value: candidate}
   - target:
       kind: StatefulSet
       name: falkordb
