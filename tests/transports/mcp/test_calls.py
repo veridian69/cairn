@@ -660,6 +660,7 @@ def test_the_read_audit_identity_is_the_rest_routes() -> None:
     """
     assert READ_ACTIONS == {
         "read-audit-events": ("audit-read", ActionKind.ADMINISTRATION),
+        "read-evidence": ("read-evidence", ActionKind.DATA),
         "retrieve": ("retrieve", ActionKind.DATA),
     }
     assert set(READ_ACTIONS) | {INSTANCE_TOOL} == {

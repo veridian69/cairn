@@ -125,6 +125,11 @@ class RevokeGrantRequest(WireModel):
     reason_code: str
 
 
+class ReadEvidenceRequest(WireModel):
+    scope: ScopeBody
+    evidence_id: str
+
+
 class RetrieveRequest(WireModel):
     """I-71/P-44. ``trust_filters`` empty or absent means the I-80
     ``validated`` default; duplicates are rejected by strict parsing rather

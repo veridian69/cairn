@@ -45,6 +45,7 @@ from cairn.authority.custody import (
     PromotedProvenance,
     SourceType,
 )
+from cairn.authority.evidence_read import EvidenceReadResult, ReadEvidence
 from cairn.authority.grants import ProposedGrant
 from cairn.authority.mutations import (
     AssertionIngested,
@@ -77,6 +78,7 @@ from cairn.transports.v1.requests import (
     IssueCredentialRequest,
     PromoteRequest,
     ReadAuditEventsRequest,
+    ReadEvidenceRequest,
     RetrieveRequest,
     RevokeCredentialRequest,
     RevokeGrantRequest,
@@ -92,6 +94,7 @@ from cairn.transports.v1.responses import (
     PromoteResult,
     PromotionPairBody,
     ReadAuditEventsResult,
+    ReadEvidenceResult,
     RetrievedFactBody,
     RetrieveResult,
     RevokeCredentialResult,
@@ -366,6 +369,23 @@ def revoke_grant_result(value: GrantRevoked) -> RevokeGrantResult:
     return RevokeGrantResult(
         grant_id=encode_uuid(value.grant_id),
         revoked_at=encode_timestamp(value.revoked_at),
+    )
+
+
+def read_evidence_command(model: ReadEvidenceRequest) -> ReadEvidence:
+    return ReadEvidence(
+        scope=_scope(model.scope, "scope"),
+        evidence_id=_uuid(model.evidence_id, "evidence_id"),
+    )
+
+
+def read_evidence_result(value: EvidenceReadResult) -> ReadEvidenceResult:
+    return ReadEvidenceResult(
+        evidence_id=encode_uuid(value.evidence_id),
+        payload=value.payload,
+        sha256=value.sha256,
+        byte_length=value.byte_length,
+        media_type=value.media_type,
     )
 
 

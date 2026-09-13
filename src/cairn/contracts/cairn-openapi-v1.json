@@ -641,6 +641,8 @@
               "secret_rejected",
               "not_found",
               "idempotency_conflict",
+              "evidence_pending",
+              "evidence_corrupt",
               "index_pending",
               "stale_index",
               "dependency_unavailable",
@@ -1393,6 +1395,58 @@
         "title": "ReadAuditEventsResult",
         "type": "object"
       },
+      "ReadEvidenceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeBody"
+          }
+        },
+        "required": [
+          "scope",
+          "evidence_id"
+        ],
+        "title": "ReadEvidenceRequest",
+        "type": "object"
+      },
+      "ReadEvidenceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_length": {
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "payload": {
+            "title": "Payload",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "payload",
+          "sha256",
+          "byte_length",
+          "media_type"
+        ],
+        "title": "ReadEvidenceResult",
+        "type": "object"
+      },
       "RetrieveRequest": {
         "additionalProperties": false,
         "description": "I-71/P-44. ``trust_filters`` empty or absent means the I-80\n``validated`` default; duplicates are rejected by strict parsing rather\nthan silently collapsed. No classification ceiling field exists — it is\nderived from the caller's grants server-side and a caller may not ask\nfor one it does not hold.",
@@ -2056,7 +2110,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -2075,7 +2129,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -2317,7 +2371,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -2336,7 +2390,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -2578,7 +2632,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -2597,7 +2651,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -2782,7 +2836,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -2801,7 +2855,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3043,7 +3097,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -3062,7 +3116,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3304,7 +3358,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -3323,7 +3377,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3565,7 +3619,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -3584,7 +3638,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3817,7 +3871,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -3836,7 +3890,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3855,6 +3909,258 @@
           }
         },
         "summary": "Read audit events under a scope prefix. A POST because scope paths must never appear in a URL."
+      }
+    },
+    "/v1/read-evidence": {
+      "post": {
+        "description": "This is a read: supplying an Idempotency-Key header is invalid_request. The header is required on all eight mutations and refused on both reads.",
+        "operationId": "read_evidence",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadEvidenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadEvidenceResult"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read exact UTF-8 evidence from authenticated Cairn custody."
       }
     },
     "/v1/retrieve": {
@@ -4069,7 +4375,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -4088,7 +4394,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -4330,7 +4636,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -4349,7 +4655,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -4591,7 +4897,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -4610,7 +4916,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",

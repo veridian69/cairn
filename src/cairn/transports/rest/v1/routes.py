@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse
 from cairn.administration.audit_read import AuditEventPage, read_audit_events
 from cairn.administration.commands import CairnAdministration
 from cairn.authority.credentials import CredentialAuthenticator
+from cairn.authority.evidence_read import EvidenceReadResult
 from cairn.authority.gate import Actor
 from cairn.authority.mutations import CairnAuthority
 from cairn.authority.retrieval import RetrievalResult
@@ -62,6 +63,7 @@ from cairn.transports.v1.requests import (
     IssueCredentialRequest,
     PromoteRequest,
     ReadAuditEventsRequest,
+    ReadEvidenceRequest,
     RetrieveRequest,
     RevokeCredentialRequest,
     RevokeGrantRequest,
@@ -82,6 +84,8 @@ from cairn.transports.v1.translation import (
     promote_result,
     read_audit_events_command,
     read_audit_events_result,
+    read_evidence_command,
+    read_evidence_result,
     retrieve_command,
     retrieve_result,
     revoke_credential_command,
@@ -335,6 +339,45 @@ def register_v1_routes(
         if isinstance(page, Rejected):
             return failure_response(page.failure, request=request)
         return JSONResponse(read_audit_events_result(page).model_dump(mode="json"))
+
+    @application.post("/v1/read-evidence", name=Operation.READ_EVIDENCE.value)
+    async def read_evidence(request: Request) -> Response:
+        correlation_id: UUID = request.state.correlation_id
+        outcome = await authenticate(
+            request,
+            action_code="read-evidence",
+            action_kind=ActionKind.DATA,
+        )
+        if isinstance(outcome, Rejected):
+            return failure_response(outcome.failure, request=request)
+        try:
+            body = await admit_body(request)
+            forbid_idempotency_key(request.headers)
+            command = read_evidence_command(validated(ReadEvidenceRequest, body))
+        except WireRejection as rejection:
+            return wire_rejection_response(rejection, correlation_id)
+
+        def execute() -> EvidenceReadResult | Rejected:
+            denied = screen_addressing(
+                body,
+                screen=screen,
+                actor=outcome,
+                transactions=transactions,
+                data_path=data_path,
+                action_code="read-evidence",
+                action_kind=ActionKind.DATA,
+                correlation_id=correlation_id,
+            )
+            if denied is not None:
+                return denied
+            return authority.read_evidence(
+                outcome, command, correlation_id=correlation_id
+            )
+
+        result = await anyio.to_thread.run_sync(execute)
+        if isinstance(result, Rejected):
+            return failure_response(result.failure, request=request)
+        return JSONResponse(read_evidence_result(result).model_dump(mode="json"))
 
     @application.post("/v1/retrieve", name=Operation.RETRIEVE.value)
     async def retrieve(request: Request) -> Response:

@@ -97,7 +97,9 @@ def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def granted_credential(data_path: Path, *, operations: list[str]) -> Issue:
+def granted_credential(
+    data_path: Path, *, operations: list[str], expires_at: str | None = None
+) -> Issue:
     """One principal with one grant over ``acme/repo:cairn`` carrying
     exactly the named operations, and credentials against it on demand."""
     timestamp = canonical_timestamp(NOW)
@@ -154,7 +156,7 @@ def granted_credential(data_path: Path, *, operations: list[str]) -> Issue:
                     str(PRINCIPAL_ID),
                     minted.verifier,
                     timestamp,
-                    None,
+                    expires_at,
                 ),
             )
             connection.commit()
@@ -462,3 +464,166 @@ async def test_a_secret_bearing_scope_on_retrieve_is_screened_too(
         "rule": AWS_RULE,
         "field_path": "scope.segments[0].identifier",
     }
+
+
+@pytest.mark.anyio
+async def test_exact_evidence_round_trip_rest_mcp_and_restart(tmp_path: Path) -> None:
+    from cairn.evidence.attic import SqliteAttic
+    from cairn.evidence.delivery import deliver_evidence_outbox
+    from cairn.runtime.config import AtticConfig, GraphitiConfig
+
+    config = make_config(tmp_path).model_copy(
+        update={
+            "attic": AtticConfig(enabled=True),
+            "graphiti": GraphitiConfig(enabled=False),
+        }
+    )
+    token = granted_credential(config.paths.data, operations=["ingest", "retrieve"])()
+    payload = "Synthetic source\nGrüezi, Zürich — café.\n"
+    args = ingest_arguments(KEY_ONE, "synthetic evidence assertion")
+    args["evidence_payload"] = payload
+    async with running(build_application(config)) as client:
+        ingested = structured(await call(client, token, "ingest", args))
+        evidence_id = ingested["result"]["evidence_id"]
+        deliver_evidence_outbox(
+            CatalogueTransactions(
+                config.paths.data,
+                writer_gate=threading.Lock(),
+                clock=lambda: NOW,
+                uuid_factory=uuid4,
+            ),
+            SqliteAttic(config.paths.data),
+            clock=lambda: NOW,
+        )
+        arguments = {"scope": SCOPE, "evidence_id": evidence_id}
+        expected = {
+            "evidence_id": evidence_id,
+            "payload": payload,
+            "sha256": sha256(payload.encode()).hexdigest(),
+            "byte_length": len(payload.encode()),
+            "media_type": "text/plain; charset=utf-8",
+        }
+        assert (
+            structured(await call(client, token, "read-evidence", arguments))
+            == expected
+        )
+        response = await client.post(
+            "/v1/read-evidence", json=arguments, headers={"Authorization": token}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == expected
+        keyed = await client.post(
+            "/v1/read-evidence",
+            json=arguments,
+            headers={"Authorization": token, "Idempotency-Key": KEY_ONE},
+        )
+        assert keyed.status_code == 400
+        assert (
+            failure_of(
+                await call(
+                    client,
+                    token,
+                    "read-evidence",
+                    {**arguments, "idempotency_key": KEY_ONE},
+                )
+            )["code"]
+            == "invalid_request"
+        )
+        unknown = await client.post(
+            "/v1/read-evidence",
+            json={**arguments, "clearance": "restricted"},
+            headers={"Authorization": token},
+        )
+        assert unknown.status_code == 400
+        unauthenticated = await client.post("/v1/read-evidence", content="{")
+        assert unauthenticated.status_code == 401
+    async with running(build_application(config)) as client:
+        assert (
+            structured(await call(client, token, "read-evidence", arguments))
+            == expected
+        )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "code,status,retry",
+    [("evidence_pending", 503, "after-delay"), ("evidence_corrupt", 500, "never")],
+)
+async def test_exact_evidence_failures_keep_rest_mcp_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str, status: int, retry: str
+) -> None:
+    from cairn.authority.mutations import CairnAuthority
+    from cairn.catalogue.audit import ChainKind
+    from cairn.catalogue.transactions import (
+        AuditReceipt,
+        FailureCode,
+        Rejected,
+        RetryClass,
+        StableFailure,
+    )
+
+    def reject(*args: object, correlation_id: UUID, **kwargs: object) -> Rejected:
+        return Rejected(
+            StableFailure(
+                code=FailureCode(code),
+                safe_message="Evidence unavailable.",
+                correlation_id=correlation_id,
+                retry=RetryClass(retry),
+            ),
+            AuditReceipt(uuid4(), ChainKind.REALM, REALM, 1, NOW, bytes(32)),
+        )
+
+    config = make_config(tmp_path)
+    token = granted_credential(config.paths.data, operations=["retrieve"])()
+    monkeypatch.setattr(CairnAuthority, "read_evidence", reject)
+    arguments: dict[str, object] = {"scope": SCOPE, "evidence_id": KEY_ONE}
+    async with running(build_application(config)) as client:
+        response = await client.post(
+            "/v1/read-evidence", json=arguments, headers={"Authorization": token}
+        )
+        failure = failure_of(await call(client, token, "read-evidence", arguments))
+    assert response.status_code == status
+    assert ("Retry-After" in response.headers) == (status == 503)
+    rest_failure = response.json()["failure"]
+    assert rest_failure["code"] == failure["code"] == code
+    assert rest_failure["retry"] == failure["retry"] == retry
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("revoked", [False, True])
+async def test_exact_evidence_refuses_expired_or_revoked_credentials(
+    tmp_path: Path, revoked: bool
+) -> None:
+    config = make_config(tmp_path)
+    token = granted_credential(
+        config.paths.data,
+        operations=["retrieve"],
+        expires_at=None if revoked else canonical_timestamp(NOW),
+    )()
+    if revoked:
+        with _open_write_connection(config.paths.data, create=False) as connection:
+            connection.execute(
+                "INSERT INTO credential_revocations (credential_id, revoked_at, revoked_by, reason_code) "
+                "SELECT credential_id, ?, principal_id, 'test' FROM credentials",
+                (canonical_timestamp(NOW),),
+            )
+            connection.commit()
+    async with running(build_application(config)) as client:
+        response = await client.post(
+            "/v1/read-evidence", content="{", headers={"Authorization": token}
+        )
+        mcp = await client.post(
+            MOUNT_PATH,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "read-evidence",
+                    "arguments": {"scope": SCOPE, "evidence_id": KEY_ONE},
+                },
+            },
+            headers={**MCP_HEADERS, "Authorization": token},
+        )
+    assert response.status_code == mcp.status_code == 401
+    assert response.json()["failure"]["code"] == "authentication_failed"

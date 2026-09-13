@@ -6,6 +6,8 @@
     "secret_rejected",
     "not_found",
     "idempotency_conflict",
+    "evidence_pending",
+    "evidence_corrupt",
     "index_pending",
     "stale_index",
     "dependency_unavailable",
@@ -14,6 +16,105 @@
   ],
   "protocolVersion": "2025-11-25",
   "tools": [
+    {
+      "description": "Read exact UTF-8 evidence from authenticated Cairn custody.",
+      "inputSchema": {
+        "$defs": {
+          "ScopeBody": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "title": "Realm",
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/SegmentBody"
+                },
+                "title": "Segments",
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "title": "ScopeBody",
+            "type": "object"
+          },
+          "SegmentBody": {
+            "additionalProperties": false,
+            "properties": {
+              "identifier": {
+                "title": "Identifier",
+                "type": "string"
+              },
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier"
+            ],
+            "title": "SegmentBody",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/$defs/ScopeBody"
+          }
+        },
+        "required": [
+          "scope",
+          "evidence_id"
+        ],
+        "title": "ReadEvidenceRequest",
+        "type": "object"
+      },
+      "name": "read-evidence",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_length": {
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "payload": {
+            "title": "Payload",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "payload",
+          "sha256",
+          "byte_length",
+          "media_type"
+        ],
+        "title": "ReadEvidenceResult",
+        "type": "object"
+      }
+    },
     {
       "description": "Ingest an assertion into a scope as candidate memory.",
       "inputSchema": {

@@ -259,6 +259,14 @@ class RetrievedFactBody(WireModel):
     invalidated_at: str | None = None
 
 
+class ReadEvidenceResult(WireModel):
+    evidence_id: str
+    payload: str
+    sha256: str
+    byte_length: int
+    media_type: str
+
+
 class RetrieveResult(WireModel):
     """I-77's bare result: a read returns no mutation envelope, as on the
     other two read routes. ``budget_exhausted`` distinguishes "that is

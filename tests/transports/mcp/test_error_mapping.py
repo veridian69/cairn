@@ -677,6 +677,7 @@ def test_the_screened_tool_names_are_the_advertised_registry() -> None:
         "ingest",
         "promote",
         "invalidate",
+        "read-evidence",
         "retrieve",
         "create-principal",
         "issue-credential",

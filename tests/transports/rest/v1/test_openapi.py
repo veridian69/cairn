@@ -76,11 +76,13 @@ ROUTE_MAP = {
     ("post", "/v1/create-grant"),
     ("post", "/v1/revoke-grant"),
     ("post", "/v1/read-audit-events"),
+    ("post", "/v1/read-evidence"),
     ("post", "/v1/retrieve"),
     ("get", "/v1/instance"),
 }
 MUTATION_PATHS = {path for method, path in ROUTE_MAP} - {
     "/v1/read-audit-events",
+    "/v1/read-evidence",
     "/v1/retrieve",
     "/v1/instance",
 }
@@ -97,6 +99,7 @@ SUCCESS_SCHEMAS = {
     "/v1/create-grant": "CreateGrantResultEnvelope",
     "/v1/revoke-grant": "RevokeGrantResultEnvelope",
     "/v1/read-audit-events": "ReadAuditEventsResult",
+    "/v1/read-evidence": "ReadEvidenceResult",
     "/v1/retrieve": "RetrieveResult",
     "/v1/instance": "InstanceResult",
 }
@@ -350,7 +353,7 @@ def test_every_request_schema_forbids_unknown_fields() -> None:
     generated client cannot offer a field Cairn will reject."""
     request_names = [name for name in schemas() if name.endswith("Request")]
 
-    assert len(request_names) == 10
+    assert len(request_names) == 11
     for name in request_names:
         assert schemas()[name]["additionalProperties"] is False
 

@@ -15,7 +15,7 @@ recovery procedure.
 
 ## Image and contract boundary
 
-`CAIRN_IMAGE=cairn:v0.1.0` in `../images.lock` is a local build tag, not a
+`CAIRN_IMAGE=cairn:v0.1.0-rc.2` in `../images.lock` is a local build tag, not a
 published image. Use the reviewed local build produced below or a separately
 reviewed registry digest and record its exact identity.
 
@@ -26,8 +26,8 @@ Expected SHA-256 values:
 
 | Contract | SHA-256 |
 | --- | --- |
-| REST/OpenAPI | `0e4dc424225a7bb12f3b0c1c2008a5bf30415c840a6fc60247079f986d7b4bf3` |
-| MCP tools | `b75f3fa736c6f4285b180e4795945fdc0d145a8ce6bcf60884f118b9636e74ca` |
+| REST/OpenAPI | `16a6d8b6f81182bc29ea3df0c3f68408a124a06ebc7bc33d03913f1e8cb8f045` |
+| MCP tools | `691a3603c9368b8386b3546ea04a02a924aa8d4fe5bfab594cfa71a395f825fb` |
 
 After first boot, compare those values and the expected instance UUID through
 authenticated `GET /v1/instance` using the
@@ -121,8 +121,8 @@ repository root, verify the contracts, build the image named by
 ```sh
 (cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-make image IMAGE=cairn:v0.1.0
-docker image inspect --format '{{.Id}}' cairn:v0.1.0
+make image IMAGE=cairn:v0.1.0-rc.2
+docker image inspect --format '{{.Id}}' cairn:v0.1.0-rc.2
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
@@ -146,7 +146,7 @@ removes an object only when both still match.
 set -eu
 set -o pipefail
 
-preflight_image='cairn:v0.1.0'
+preflight_image='cairn:v0.1.0-rc.2'
 preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 preflight_label_key='io.cairn.compose-preflight'
 preflight_network="cairn-preflight-$preflight_id"
@@ -607,6 +607,25 @@ volume. A normal start uses `up -d` with the existing `.env`, `config.yaml`,
 volume and token. If the only administrator token has been lost, keep the data
 stopped and use the local `cairn recover` incident procedure; ordinary restart
 does not mint replacement credentials.
+
+From `deploy/compose`, return to the repository root with `cd ../..` and run
+the [Attic payload round-trip](../../docs/operations/evidence-verification.md)
+before enabling semantic retrieval. Then restart from the Compose directory:
+
+```bash
+(cd deploy/compose && docker compose --env-file ../images.lock --env-file .env \
+  -f compose.yaml restart cairn)
+for attempt in $(seq 1 60); do
+  if curl --disable --silent --show-error --fail --noproxy '*' --max-time 5 \
+    "$base_url/health/ready"; then break; fi
+  test "$attempt" -lt 60 || { printf 'Cairn did not become ready after restart\n' >&2; exit 1; }
+  sleep 2
+done
+```
+
+Repeat only the saved evidence-read command from the repository root. Keep the
+same `.env`, configuration, volumes and credential. This checks exact evidence
+retention without FalkorDB or a provider.
 
 ## Optional semantic retrieval
 

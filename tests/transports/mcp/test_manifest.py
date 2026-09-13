@@ -81,6 +81,7 @@ INITIALIZE = {
 # I-84's surface, verbatim, and I-89's licence in full: these three keys
 # and these four per-tool keys are what the document may carry.
 TOOL_NAMES = [
+    "read-evidence",
     "ingest",
     "promote",
     "invalidate",
@@ -104,6 +105,8 @@ FAILURE_CODES = [
     "secret_rejected",
     "not_found",
     "idempotency_conflict",
+    "evidence_pending",
+    "evidence_corrupt",
     "index_pending",
     "stale_index",
     "dependency_unavailable",

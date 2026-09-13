@@ -11,7 +11,7 @@ This guide deploys one Cairn v0.1 instance. Read the
 
 ## Image and contract boundary
 
-`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.1.0`. This is a
+`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.1.0-rc.2`. This is a
 local build tag, not evidence of a published or registry-verified image. Build
 from a trusted checkout or supply an operator-controlled immutable image
 reference. Record the image digest with the rendered deployment manifest. Do

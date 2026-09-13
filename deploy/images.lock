@@ -8,12 +8,12 @@
 
 # The Cairn image the base renders. NOT yet digest-pinned, and
 # deliberately so: nothing is published to a registry, the package
-# version is VCS-derived (0.1.0.dev*), and pinning a locally built digest
+# version is 0.1.0rc2, and pinning a locally built digest
 # would rewrite every committed render on every rebuild — the render gate
 # would then fail for changes that have nothing to do with deployment.
-# The tag names the version this slice builds toward. Slice 9 owns the
-# release, and digest-pinning this line is part of it.
-CAIRN_IMAGE=cairn:v0.1.0
+# The tag names the RC2 source build. Release publication owns the
+# signed digest; this local build tag is not a registry release claim.
+CAIRN_IMAGE=cairn:v0.1.0-rc.2
 
 # P-63: the per-instance FalkorDB workload, included by choice (I-91).
 FALKORDB_IMAGE=falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62

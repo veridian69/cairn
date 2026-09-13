@@ -15,7 +15,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: probe
-      image: cairn:v0.1.0
+      image: cairn:v0.1.0-rc.2
       command: [sleep, infinity]
       readinessProbe:
         exec:
@@ -43,7 +43,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: probe
-      image: cairn:v0.1.0
+      image: cairn:v0.1.0-rc.2
       command: [sleep, infinity]
       volumeMounts:
         - name: token

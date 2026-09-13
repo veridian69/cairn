@@ -70,6 +70,8 @@ def test_the_status_table_is_exactly_the_i73_table() -> None:
         FailureCode.SECRET_REJECTED: 400,
         FailureCode.NOT_FOUND: 404,
         FailureCode.IDEMPOTENCY_CONFLICT: 409,
+        FailureCode.EVIDENCE_PENDING: 503,
+        FailureCode.EVIDENCE_CORRUPT: 500,
         FailureCode.INDEX_PENDING: 503,
         FailureCode.STALE_INDEX: 503,
         FailureCode.DEPENDENCY_UNAVAILABLE: 503,

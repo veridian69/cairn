@@ -33,7 +33,7 @@ RUN apt-get update \
         perl-base \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
-ARG VERSION=0.1.0.dev0
+ARG VERSION=v0.1.0-rc.2
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/veridian69/cairn" \
       org.opencontainers.image.documentation="https://github.com/veridian69/cairn" \

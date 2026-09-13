@@ -239,6 +239,7 @@ def test_the_registered_routes_are_exactly_the_expected_set(tmp_path: Path) -> N
         "/v1/create-grant",
         "/v1/revoke-grant",
         "/v1/read-audit-events",
+        "/v1/read-evidence",
         "/v1/retrieve",
         "/v1/instance",
         # Slice 7 Task 3: the I-84 MCP transport. One route inside `/v1`

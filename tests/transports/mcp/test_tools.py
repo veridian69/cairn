@@ -56,6 +56,7 @@ TOOL_NAMES = {
     "ingest",
     "promote",
     "invalidate",
+    "read-evidence",
     "retrieve",
     "create-principal",
     "issue-credential",
@@ -65,7 +66,12 @@ TOOL_NAMES = {
     "read-audit-events",
     "instance",
 }
-MUTATION_TOOLS = TOOL_NAMES - {"retrieve", "read-audit-events", "instance"}
+MUTATION_TOOLS = TOOL_NAMES - {
+    "read-evidence",
+    "retrieve",
+    "read-audit-events",
+    "instance",
+}
 
 
 @pytest.fixture
@@ -143,7 +149,7 @@ async def test_the_advertised_surface_is_exactly_the_eleven_tools(
     tools = await listed_tools(tmp_path)
 
     assert {tool["name"] for tool in tools} == TOOL_NAMES
-    assert len(tools) == 11
+    assert len(tools) == 12
 
 
 @pytest.mark.anyio

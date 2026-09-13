@@ -7,6 +7,8 @@
     "secret_rejected",
     "not_found",
     "idempotency_conflict",
+    "evidence_pending",
+    "evidence_corrupt",
     "index_pending",
     "stale_index",
     "dependency_unavailable",

@@ -103,7 +103,7 @@ FALKORDB_DIGEST = (
     "sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62"
 )
 RETRIEVAL_RENDER_SHA256 = (
-    "48b1fb9e1acc38fb063b3a1df18c155a602c82060e40b8ee1df02b3ef11c37ba"
+    "a7b89311eba09e14efa403aad933c8084cc14e523e2364d1a7f4507619408602"
 )
 GATEWAY_RENDER_SHA256 = (
     "e08d3c0bbe343e1c662b75f6cb10aea43fa1475059bf9a7a39ce89d662afe8f1"
@@ -900,7 +900,7 @@ else:
         '*task11-cilium.json) if [ "${FAKE_KUBE_FIXTURE:-}" = stale-task11-report ]; then '
         "value=0000000000000000000000000000000000000000000000000000000000000000; "
         "else value=eb5c9251fc8e994b030cf7fc8c5da2aa7e3f5224c8f44390fb046c8270480da0; fi ;;\n"
-        "*kubernetes-retrieval.yaml) value=48b1fb9e1acc38fb063b3a1df18c155a602c82060e40b8ee1df02b3ef11c37ba ;;\n"
+        "*kubernetes-retrieval.yaml) value=a7b89311eba09e14efa403aad933c8084cc14e523e2364d1a7f4507619408602 ;;\n"
         "*egress-gateway-reference.yaml) value=e08d3c0bbe343e1c662b75f6cb10aea43fa1475059bf9a7a39ce89d662afe8f1 ;;\n"
         "*) value=a2e984a18a0c063279d692533031c1eff93a262afcc0afdc517375432d060989 ;;\n"
         "esac\n"

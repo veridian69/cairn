@@ -380,3 +380,146 @@ def test_real_request_ignores_environment_proxy(
     assert len(received) == 1
     assert proxied == []
     assert os.environ["http_proxy"] == proxy
+
+
+def test_evidence_round_trip_checks_exact_utf8_and_digest(
+    verifier: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    payload = "Cairn Attic check: café.\nExact second line.\n".encode()
+    seen = []
+
+    def request(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return (
+            200,
+            {},
+            json.dumps(
+                {
+                    "evidence_id": FACT,
+                    "payload": payload.decode(),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "byte_length": len(payload),
+                    "media_type": "text/plain; charset=utf-8",
+                }
+            ).encode(),
+        )
+
+    monkeypatch.setattr(verifier, "request", request)
+    result = verifier.verify(
+        "http://127.0.0.1:8080", TOKEN, FACT, 5, 2, 3, evidence_payload=payload
+    )
+    assert result["status"] == "verified"
+    assert result["evidence_id"] == FACT
+    assert seen[0]["operation"] == "read-evidence"
+    assert seen[0]["request_body"]["evidence_id"] == FACT
+    assert "payload" not in result
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("payload", "changed"),
+        ("sha256", "0" * 64),
+        ("byte_length", True),
+        ("byte_length", 1),
+        ("evidence_id", "22222222-2222-4222-8222-222222222222"),
+        ("media_type", "text/html"),
+    ],
+)
+def test_evidence_verification_refuses_mismatched_success(
+    verifier: Any, monkeypatch: pytest.MonkeyPatch, field: str, value: Any
+) -> None:
+    import hashlib
+
+    payload = b"synthetic evidence\n"
+    response = {
+        "evidence_id": FACT,
+        "payload": payload.decode(),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "byte_length": len(payload),
+        "media_type": "text/plain; charset=utf-8",
+    }
+    response[field] = value
+    monkeypatch.setattr(
+        verifier, "request", lambda *a, **kw: (200, {}, json.dumps(response).encode())
+    )
+    with pytest.raises(verifier.VerificationError, match="evidence"):
+        verifier.verify(
+            "http://127.0.0.1:8080", TOKEN, FACT, 5, 2, 3, evidence_payload=payload
+        )
+
+
+def test_evidence_pending_honours_retry_and_does_not_repeat_ingest(
+    verifier: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    elapsed = [0.0]
+    monkeypatch.setattr(verifier.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(
+        verifier.time, "sleep", lambda n: elapsed.__setitem__(0, elapsed[0] + n)
+    )
+    seen = []
+
+    def request(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs["operation"])
+        return failure("evidence_pending", delay="2")
+
+    monkeypatch.setattr(verifier, "request", request)
+    with pytest.raises(verifier.VerificationError, match="attempt limit"):
+        verifier.verify(
+            "http://127.0.0.1:8080",
+            TOKEN,
+            FACT,
+            10,
+            2,
+            2,
+            evidence_payload=b"synthetic",
+        )
+    assert elapsed[0] == 2
+    assert seen == ["read-evidence", "read-evidence"]
+
+
+@pytest.mark.parametrize(
+    "code,status",
+    [("evidence_corrupt", 500), ("index_pending", 503), ("not_found", 404)],
+)
+def test_evidence_refusals_are_not_indexing_delay(
+    verifier: Any, monkeypatch: pytest.MonkeyPatch, code: str, status: int
+) -> None:
+    monkeypatch.setattr(
+        verifier, "request", lambda *a, **kw: failure(code, status=status)
+    )
+    with pytest.raises(verifier.VerificationError, match="without retry"):
+        verifier.verify(
+            "http://127.0.0.1:8080", TOKEN, FACT, 5, 2, 3, evidence_payload=b"synthetic"
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"a" * 1_048_576, b"\x01" * 1_048_576],
+    ids=["ascii-limit", "escaped-limit"],
+)
+def test_evidence_http_response_allows_json_expansion(
+    verifier: Any, payload: bytes
+) -> None:
+    import hashlib
+
+    body = json.dumps(
+        {
+            "evidence_id": FACT,
+            "payload": payload.decode(),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "byte_length": len(payload),
+            "media_type": "text/plain; charset=utf-8",
+        }
+    ).encode()
+    with local_server([(200, {}, body)]) as (url, received):
+        result = verifier.verify(url, TOKEN, FACT, 10, 5, 1, evidence_payload=payload)
+    assert result["status"] == "verified"
+    assert received[0]["path"] == "/v1/read-evidence"
+    assert json.loads(received[0]["body"]) == {
+        "scope": verifier.REQUEST["scope"],
+        "evidence_id": FACT,
+    }

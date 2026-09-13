@@ -4,7 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "drystane-cairn"
-dynamic = ["version"]
+# A release candidate has the same identity in source and history-free exports.
+version = "0.1.0rc2"
 description = "A scoped, evidence-aware memory authority"
 readme = "README.md"
 requires-python = "==3.12.*"
@@ -104,12 +105,6 @@ dev = [
   "ruff==0.16.0",
   "types-PyYAML==6.0.12.20260724",
 ]
-
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.version.raw-options]
-fallback_version = "0.1.0.dev0"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cairn"]

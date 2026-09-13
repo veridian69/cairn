@@ -346,4 +346,4 @@ def test_the_v1_route_inventory_is_unchanged_by_the_mount(
     assert "/v1/ingest" in paths
     # Eleven operation routes plus the transport endpoint, which I-84
     # states adds no operation — the count is what holds it to that.
-    assert len({path for path in paths if path.startswith("/v1/")}) == 12
+    assert len({path for path in paths if path.startswith("/v1/")}) == 13

@@ -80,6 +80,7 @@ class Operation(StrEnum):
     INGEST = "ingest"
     PROMOTE = "promote"
     INVALIDATE = "invalidate"
+    READ_EVIDENCE = "read_evidence"
     RETRIEVE = "retrieve"
     CREATE_PRINCIPAL = "create_principal"
     ISSUE_CREDENTIAL = "issue_credential"

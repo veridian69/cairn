@@ -201,7 +201,7 @@ validation; do not assume the Kubernetes result proves OpenShift support.
   are needed locally only if you build the Cairn image yourself.
 - A reviewed Cairn image available to the workers by immutable digest, including
   any registry pull credentials under the cluster's normal policy. The checkout's
-  `cairn:v0.1.0` tag is a local build tag, not a published registry image. See the
+  `cairn:v0.1.0-rc.2` tag is a local build tag, not a published registry image. See the
   [image boundary](operations/deployment.md).
 - A dedicated namespace and an approved CSI StorageClass supporting
   `ReadWriteOncePod`, reliable POSIX locks and `fsync`. NFS and other shared or
@@ -270,7 +270,17 @@ in this order. All site-specific values must be chosen before applying anything:
    creates the persistent claim, runs migration, stops serving for exclusive
    bootstrap, retains the one-time credential safely and restarts Cairn. Bootstrap
    is not a normal restart step; retain the same UUID, claims and credential.
-5. Check authenticated instance identity and, with semantic retrieval enabled,
+5. Check authenticated instance identity and run the
+   [Attic payload round-trip](operations/evidence-verification.md), including
+   its read after restarting the StatefulSet and restoring the port-forward.
+   From the repository root, use the namespace selected for the installation:
+
+   ```sh
+   build/tools/kubectl rollout restart -n "$namespace" statefulset/cairn
+   build/tools/kubectl rollout status -n "$namespace" statefulset/cairn --timeout=420s
+   ```
+
+   With semantic retrieval enabled,
    perform the [bounded synthetic write/read check](clients.md#bounded-ingest-and-retrieval-verification).
    A committed ingest proves custody; indexing can complete later. Retain the
    saved fact ID for the same read-only check after a restart.

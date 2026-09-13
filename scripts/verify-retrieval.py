@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Verify the client guide's already committed synthetic fact; never ingest."""
+"""Verify an already committed synthetic fact or exact evidence; never ingest."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -97,16 +98,29 @@ def read_credential(path: Path) -> str:
 
 
 def request(
-    base_url: str, token: str, seconds: float
+    base_url: str,
+    token: str,
+    seconds: float,
+    *,
+    operation: str = "retrieve",
+    request_body: dict[str, object] | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
     """Curl enforces a whole-request timeout; its default config/proxy are disabled."""
     url = endpoint(base_url)
+    if operation not in {"retrieve", "read-evidence"}:
+        raise VerificationError("unsupported verification operation")
+    url = url.removesuffix("retrieve") + operation
+    response_limit = (
+        6 * 1_048_576 + 4096 if operation == "read-evidence" else MAX_RESPONSE_BYTES
+    )
     with tempfile.TemporaryDirectory(prefix="cairn-retrieval-check-") as directory:
         root = Path(directory)
         for name in ("request", "headers", "body"):
             fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             os.close(fd)
-        (root / "request").write_text(json.dumps(REQUEST))
+        (root / "request").write_text(
+            json.dumps(REQUEST if request_body is None else request_body)
+        )
         try:
             result = subprocess.run(
                 [
@@ -127,7 +141,7 @@ def request(
                     "--connect-timeout",
                     str(min(5, seconds)),
                     "--max-filesize",
-                    str(MAX_RESPONSE_BYTES),
+                    str(response_limit),
                     "--request",
                     "POST",
                     "--header",
@@ -177,7 +191,7 @@ def request(
                 else:
                     headers[lowered] = stripped
         body = (root / "body").read_bytes()
-        if len(body) > MAX_RESPONSE_BYTES:
+        if len(body) > response_limit:
             raise VerificationError(
                 "retrieval response exceeded the verification size limit"
             )
@@ -259,8 +273,14 @@ def verify(
     seconds: float,
     request_seconds: float,
     max_attempts: int,
+    *,
+    evidence_payload: bytes | None = None,
 ) -> dict[str, str]:
     endpoint(base_url)
+    evidence_mode = evidence_payload is not None
+    retry_codes = (
+        {"evidence_pending", "dependency_unavailable"} if evidence_mode else RETRY_CODES
+    )
     deadline = time.monotonic() + seconds
     last = "no HTTP response"
     attempts = 0
@@ -269,7 +289,18 @@ def verify(
         if remaining <= 0:
             break
         attempts += 1
-        status, headers, raw = request(base_url, token, min(request_seconds, remaining))
+        if evidence_mode:
+            status, headers, raw = request(
+                base_url,
+                token,
+                min(request_seconds, remaining),
+                operation="read-evidence",
+                request_body={"scope": REQUEST["scope"], "evidence_id": fact_id},
+            )
+        else:
+            status, headers, raw = request(
+                base_url, token, min(request_seconds, remaining)
+            )
         try:
             body = json.loads(raw.decode("utf-8"))
         except (UnicodeError, ValueError) as error:
@@ -277,6 +308,28 @@ def verify(
                 f"HTTP {status} returned malformed JSON; "
                 + response_context(status, headers, token)
             ) from error
+        if status == 200 and evidence_mode:
+            assert evidence_payload is not None
+            try:
+                actual = body.get("payload") if isinstance(body, dict) else None
+                if not isinstance(actual, str):
+                    raise ValueError("payload is not text")
+                actual_bytes = actual.encode("utf-8")
+                digest = hashlib.sha256(evidence_payload).hexdigest()
+                if (
+                    body.get("evidence_id") != fact_id
+                    or actual_bytes != evidence_payload
+                    or body.get("sha256") != digest
+                    or type(body.get("byte_length")) is not int
+                    or body["byte_length"] != len(evidence_payload)
+                    or body.get("media_type") != "text/plain; charset=utf-8"
+                ):
+                    raise ValueError("evidence differs")
+            except (ValueError, UnicodeError) as error:
+                raise VerificationError(
+                    "evidence success did not match the saved bytes, ID, digest, length and media type"
+                ) from error
+            return {"status": "verified", "evidence_id": fact_id, "sha256": digest}
         if status == 200:
             if (
                 not isinstance(body, dict)
@@ -313,7 +366,7 @@ def verify(
         last = response_context(status, headers, token, failure)
         if (
             status != 503
-            or failure.get("code") not in RETRY_CODES
+            or failure.get("code") not in retry_codes
             or failure.get("retry") != "after-delay"
         ):
             raise VerificationError(
@@ -344,7 +397,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
     parser.add_argument("--credential-file", required=True, type=Path)
-    parser.add_argument("--fact-id", required=True, type=UUID)
+    identity = parser.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--fact-id", type=UUID)
+    identity.add_argument("--evidence-id", type=UUID)
+    parser.add_argument(
+        "--payload-file",
+        type=Path,
+        help="saved UTF-8 input for --evidence-id; never sent to the server",
+    )
     parser.add_argument("--deadline", type=float, default=120)
     parser.add_argument("--request-timeout", type=float, default=10)
     parser.add_argument("--max-attempts", type=int, default=30)
@@ -355,16 +415,28 @@ def main() -> int:
         )
     if not 1 <= args.max_attempts <= 1000:
         parser.error("use a max-attempts value from 1 to 1000")
+    if (args.evidence_id is not None) != (args.payload_file is not None):
+        parser.error("--evidence-id requires --payload-file; --fact-id forbids it")
     try:
+        payload = None
+        if args.payload_file is not None:
+            with args.payload_file.open("rb") as stream:
+                payload = stream.read(1_048_577)
+            if not 1 <= len(payload) <= 1_048_576:
+                raise VerificationError(
+                    "expected evidence must be from 1 byte to 1 MiB"
+                )
+            payload.decode("utf-8")
         result = verify(
             args.base_url,
             read_credential(args.credential_file),
-            str(args.fact_id),
+            str(args.evidence_id if args.evidence_id is not None else args.fact_id),
             args.deadline,
             args.request_timeout,
             args.max_attempts,
+            evidence_payload=payload,
         )
-    except VerificationError as error:
+    except (VerificationError, OSError, UnicodeError) as error:
         print(json.dumps({"verification_failed": str(error)}), file=sys.stderr)
         return 1
     print(json.dumps(result))

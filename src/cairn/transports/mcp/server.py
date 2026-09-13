@@ -89,6 +89,7 @@ from cairn.transports.v1.requests import (
     IssueCredentialRequest,
     PromoteRequest,
     ReadAuditEventsRequest,
+    ReadEvidenceRequest,
     RetrieveRequest,
     RevokeCredentialRequest,
     RevokeGrantRequest,
@@ -114,6 +115,8 @@ from cairn.transports.v1.translation import (
     promote_result,
     read_audit_events_command,
     read_audit_events_result,
+    read_evidence_command,
+    read_evidence_result,
     retrieve_command,
     retrieve_result,
     revoke_credential_command,
@@ -605,6 +608,8 @@ OUTCOME_BY_FAILURE_CODE: dict[FailureCode, OutcomeCode] = {
     FailureCode.SECRET_REJECTED: OutcomeCode.INVALID_REQUEST,
     FailureCode.NOT_FOUND: OutcomeCode.INVALID_REQUEST,
     FailureCode.IDEMPOTENCY_CONFLICT: OutcomeCode.INVALID_REQUEST,
+    FailureCode.EVIDENCE_PENDING: OutcomeCode.UNAVAILABLE,
+    FailureCode.EVIDENCE_CORRUPT: OutcomeCode.UNAVAILABLE,
     FailureCode.INDEX_PENDING: OutcomeCode.UNAVAILABLE,
     FailureCode.STALE_INDEX: OutcomeCode.UNAVAILABLE,
     FailureCode.DEPENDENCY_UNAVAILABLE: OutcomeCode.UNAVAILABLE,
@@ -750,6 +755,7 @@ MUTATION_ACTIONS: dict[str, tuple[str, ActionKind]] = {
 # mount under ``mcp-frame`` (P-54).
 READ_ACTIONS: dict[str, tuple[str, ActionKind]] = {
     "read-audit-events": ("audit-read", ActionKind.ADMINISTRATION),
+    "read-evidence": ("read-evidence", ActionKind.DATA),
     "retrieve": ("retrieve", ActionKind.DATA),
 }
 
@@ -954,6 +960,14 @@ def register_calls(
             ),
             read_audit_events_result,
             gated=True,
+        ),
+        "read-evidence": _Read(
+            lambda body: read_evidence_command(validated(ReadEvidenceRequest, body)),
+            lambda actor, command, cid: authority.read_evidence(
+                actor, command, correlation_id=cid
+            ),
+            read_evidence_result,
+            gated=False,
         ),
         "retrieve": _Read(
             lambda body: retrieve_command(validated(RetrieveRequest, body)),

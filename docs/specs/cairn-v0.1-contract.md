@@ -1,6 +1,6 @@
 # Cairn v0.1 contract
 
-This is the repository-local Cairn contract. It was extracted from section 6 of the frozen Drystane specification at `43dcbd5ecfba4b754a6f4d79f466a7de923de201`; the normative wording below is preserved.
+This is the repository-local Cairn contract. It was extracted from section 6 of the frozen Drystane specification at `43dcbd5ecfba4b754a6f4d79f466a7de923de201`; the normative wording below includes the explicitly recorded RC2 evidence-read amendment.
 
 ## The Cairn contract (load-bearing)
 
@@ -21,7 +21,14 @@ record's identity, scope, classification and provenance; Attic stores exact
 evidence payloads and their FTS representation. Only Cairn may invoke it.
 Writes pass authentication, grant evaluation and secret screening before
 Attic custody, and every candidate read is reconciled against the catalogue
-before return. Attic exposes no direct REST or MCP operation.
+before return. Attic exposes no direct REST or MCP operation. RC2 adds Cairn's
+`read-evidence(scope, evidence_id)` custody operation through REST and MCP;
+clients address catalogue identities, never the adapter. It requires a live
+`retrieve` grant and discloses only same-realm evidence at the requested scope
+or an ancestor within derived read clearance. It returns exact UTF-8 payload,
+SHA-256, byte length and `text/plain; charset=utf-8`, after verifying catalogue
+metadata. Source inspection is independent of semantic indexing and associated
+fact trust or invalidation; it does not assert factual validity.
 See `docs/m0/cairn-productisation-gap-analysis.md`.
 
 ### 6.2 Scope model
@@ -172,6 +179,7 @@ superseded it, and why).
 | Operation | Contract |
 |---|---|
 | `retrieve(scope, query, budget)` | Scope-filtered semantic, graph and enabled exact-evidence retrieval within a token budget; results carry provenance and trust class. Attic candidates are returned only after catalogue reconciliation. Retrieval defaults to `validated`; `candidate` and `failed-approach` require explicit trust filters. Cairn has no special "own run" bypass — consumers express it through paths and filters. |
+| `read-evidence(scope, evidence_id)` | Authenticated exact source custody read under the existing retrieve grant. Same-realm ancestor scope and clearance checks precede Attic access; unknown, inaccessible and external-reference evidence share `not_found`. `evidence_pending` is retryable after delay; `evidence_corrupt` is non-retryable. No semantic index is required. |
 | `ingest(scope, facts[], provenance)` | Durable, journaled write; lands as candidate unless the caller holds promotion rights. When configured, exact source evidence is also placed in Attic under the catalogue-owned assertion/evidence identity after the same authority and secret screens. Asynchronous extraction is acceptable; the ACK confirms custody, not searchability. |
 | `promote(fact_ids[], evidence_ref, target_scope?, target_classification?)` | Creates a new validated fact at the same scope, or at an ancestor scope for widening. It requires evidence and records `derived_from` plus promoting principal; the source is unchanged. Classification is inherited by default and may be raised only when allowed by `write_classifications`; lowering is forbidden in v0.1. Descendant, sibling and cross-realm targets are forbidden. Verification-gated in Drystane. |
 | `invalidate(fact_ids[], reason, superseded_by?)` | Ends validity without deletion; history is preserved. |

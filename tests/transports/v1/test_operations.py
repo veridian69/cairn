@@ -40,6 +40,7 @@ I70 = {
     ("revoke-grant", Operation.REVOKE_GRANT, "post", True),
     ("read-audit-events", Operation.READ_AUDIT_EVENTS, "post", False),
     ("retrieve", Operation.RETRIEVE, "post", False),
+    ("read-evidence", Operation.READ_EVIDENCE, "post", False),
     ("instance", Operation.INSTANCE, "get", False),
 }
 PATHS = {f"/v1/{tool}" for tool, _, _, _ in I70}
@@ -75,7 +76,7 @@ def test_the_table_holds_exactly_the_eleven_i70_operations() -> None:
         for entry in OPERATIONS
     }
 
-    assert len(OPERATIONS) == 11
+    assert len(OPERATIONS) == 12
     assert entries == I70
 
 
@@ -85,7 +86,7 @@ def test_every_entry_names_an_operation_member_exactly_once() -> None:
     operations wearing one name."""
     identities = [entry.operation for entry in OPERATIONS]
 
-    assert len(set(identities)) == 11
+    assert len(set(identities)) == 12
     assert set(identities) <= set(Operation)
 
 
@@ -108,6 +109,7 @@ def test_eight_operations_are_mutations_and_three_are_reads() -> None:
     assert {entry.tool for entry in reads} == {
         "read-audit-events",
         "retrieve",
+        "read-evidence",
         "instance",
     }
 

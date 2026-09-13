@@ -310,6 +310,11 @@ Use those values to pin contract digests and run scoped ingest and audit
 checks. With Graphiti disabled, do not treat an absent semantic result as a
 failed custody check or claim this procedure verified search.
 
+Before enabling semantic retrieval, run the [Attic payload round-trip](evidence-verification.md).
+Restart with `systemctl --user restart cairn.service`, wait for the readiness
+check above, and repeat only its saved evidence-read command. This verifies
+native custody and restart retention without a semantic provider.
+
 ## Optional semantic retrieval
 
 BI-2 acceptance includes saving a synthetic fact, restarting the instance and

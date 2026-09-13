@@ -41,6 +41,8 @@ STATUS_BY_FAILURE_CODE: dict[FailureCode, int] = {
     FailureCode.SECRET_REJECTED: 400,
     FailureCode.NOT_FOUND: 404,
     FailureCode.IDEMPOTENCY_CONFLICT: 409,
+    FailureCode.EVIDENCE_PENDING: 503,
+    FailureCode.EVIDENCE_CORRUPT: 500,
     FailureCode.INDEX_PENDING: 503,
     FailureCode.STALE_INDEX: 503,
     FailureCode.DEPENDENCY_UNAVAILABLE: 503,
@@ -57,6 +59,7 @@ RETRY_AFTER_SECONDS = 1
 
 _RETRY_AFTER_CODES = frozenset(
     {
+        FailureCode.EVIDENCE_PENDING,
         FailureCode.INDEX_PENDING,
         FailureCode.STALE_INDEX,
         FailureCode.DEPENDENCY_UNAVAILABLE,

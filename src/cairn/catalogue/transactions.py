@@ -140,6 +140,8 @@ class FailureCode(StrEnum):
     SECRET_REJECTED = "secret_rejected"
     NOT_FOUND = "not_found"
     IDEMPOTENCY_CONFLICT = "idempotency_conflict"
+    EVIDENCE_PENDING = "evidence_pending"
+    EVIDENCE_CORRUPT = "evidence_corrupt"
     INDEX_PENDING = "index_pending"
     STALE_INDEX = "stale_index"
     DEPENDENCY_UNAVAILABLE = "dependency_unavailable"

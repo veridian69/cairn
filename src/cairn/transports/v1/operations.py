@@ -26,6 +26,7 @@ from cairn.transports.v1.requests import (
     IssueCredentialRequest,
     PromoteRequest,
     ReadAuditEventsRequest,
+    ReadEvidenceRequest,
     RetrieveRequest,
     RevokeCredentialRequest,
     RevokeGrantRequest,
@@ -39,6 +40,7 @@ from cairn.transports.v1.responses import (
     IssueCredentialResult,
     PromoteResult,
     ReadAuditEventsResult,
+    ReadEvidenceResult,
     RetrieveResult,
     RevokeCredentialResult,
     RevokeGrantResult,
@@ -71,6 +73,17 @@ class OperationEntry:
 
 
 OPERATIONS: tuple[OperationEntry, ...] = (
+    OperationEntry(
+        Operation.READ_EVIDENCE,
+        "read-evidence",
+        "post",
+        "/v1/read-evidence",
+        "Read exact UTF-8 evidence from authenticated Cairn custody.",
+        ReadEvidenceRequest,
+        ReadEvidenceResult,
+        ReadEvidenceResult,
+        False,
+    ),
     OperationEntry(
         Operation.INGEST,
         "ingest",

@@ -15,8 +15,8 @@ The generated contracts are the wire authority:
 
 | Surface | Artefact | SHA-256 |
 | --- | --- | --- |
-| REST | [`contracts/cairn-openapi-v1.json`](../contracts/cairn-openapi-v1.json) | `0e4dc424225a7bb12f3b0c1c2008a5bf30415c840a6fc60247079f986d7b4bf3` |
-| MCP | [`contracts/cairn-mcp-tools-v1.json`](../contracts/cairn-mcp-tools-v1.json) | `b75f3fa736c6f4285b180e4795945fdc0d145a8ce6bcf60884f118b9636e74ca` |
+| REST | [`contracts/cairn-openapi-v1.json`](../contracts/cairn-openapi-v1.json) | `16a6d8b6f81182bc29ea3df0c3f68408a124a06ebc7bc33d03913f1e8cb8f045` |
+| MCP | [`contracts/cairn-mcp-tools-v1.json`](../contracts/cairn-mcp-tools-v1.json) | `691a3603c9368b8386b3546ea04a02a924aa8d4fe5bfab594cfa71a395f825fb` |
 
 Verify a checkout before generating a client or accepting its schemas:
 
@@ -316,6 +316,30 @@ for the restart test: restart Cairn using your installation guide and rerun this
 same read-only command. Do not filter an error response through a success-only
 `jq '{hits, budget_consumed, budget_exhausted}'` projection: that hides the reason
 for failure behind null fields.
+
+## Read exact evidence
+
+`POST /v1/read-evidence` and MCP `read-evidence` take `scope` and the
+`evidence_id` returned by ingest. They require a live `retrieve` grant covering
+the requested scope. The catalogue permits only evidence in the same realm,
+at that scope or an ancestor, within the caller's read clearance. Reads reject
+idempotency keys. Attic remains private; clients never address its database.
+
+The flat result contains `evidence_id`, `payload`, `sha256`, `byte_length` and
+`media_type`. Payload is the exact UTF-8 text accepted by `evidence_payload`;
+SHA-256 and byte length describe its UTF-8 bytes. The fixed media type is
+`text/plain; charset=utf-8`. This does not introduce binary uploads. The server
+checks the stored bytes against the catalogue before disclosing them.
+
+Exact reads inspect source custody, independently of semantic indexing and
+associated facts' trust or invalidation. Returned source text is not a validated
+fact claim. Unknown, inaccessible and external-reference evidence all return
+`not_found`. Queued delivery returns `evidence_pending` (503, `after-delay`);
+corruption returns `evidence_corrupt` (500, `never`). Infrastructure failure or
+missing stored bytes without queued delivery returns `dependency_unavailable`.
+
+Follow the [Attic payload round-trip](operations/evidence-verification.md) for
+literal ingest, bounded byte/hash comparison and restart verification commands.
 
 ## Failures and retry policy
 

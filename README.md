@@ -29,6 +29,12 @@ become established truth merely because it was remembered.
 - [Docker Compose](deploy/compose/README.md) — recommended for beginners.
 - [Kubernetes](docs/install.md#kubernetes-installation) — advanced installation.
 
+RC2 (`v0.1.0-rc.2`, Python package `0.1.0rc2`) adds authenticated exact
+evidence reads through REST `/v1/read-evidence` and MCP `read-evidence`.
+The response preserves accepted UTF-8 source bytes with their SHA-256 digest,
+independently of semantic indexing. Scope, grants and classification still
+govern access; reading source evidence does not validate its claims.
+
 ## Interfaces
 
 Cairn exposes two compatible API families over one catalogue:

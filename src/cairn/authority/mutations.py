@@ -126,6 +126,7 @@ from cairn.screening import (
 )
 
 if TYPE_CHECKING:
+    from cairn.authority.evidence_read import EvidenceReadResult, ReadEvidence
     from cairn.authority.retrieval import RetrievalResult, Retrieve
 
 _AUTHORITY_SCHEMA = "cairn.authority/v1"
@@ -1146,6 +1147,29 @@ class CairnAuthority:
             screen=self._screen,
             correlation_id=correlation_id,
             clock=self._clock,
+            attic=self._attic,
+            metrics=self._metrics,
+            logger=self._logger,
+        )
+
+    def read_evidence(
+        self,
+        actor: Actor,
+        command: "ReadEvidence",
+        *,
+        correlation_id: UUID,
+    ) -> "EvidenceReadResult | Rejected":
+        """Read catalogue-authorised exact source evidence without an index."""
+        from cairn.authority.evidence_read import read_evidence
+
+        return read_evidence(
+            self._data_path,
+            self._transactions,
+            actor,
+            command,
+            correlation_id=correlation_id,
+            clock=self._clock,
+            enabled=self._exact_evidence_enabled,
             attic=self._attic,
             metrics=self._metrics,
             logger=self._logger,

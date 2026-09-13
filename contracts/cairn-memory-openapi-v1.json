@@ -523,6 +523,8 @@
               "secret_rejected",
               "not_found",
               "idempotency_conflict",
+              "evidence_pending",
+              "evidence_corrupt",
               "index_pending",
               "stale_index",
               "dependency_unavailable",
@@ -2714,7 +2716,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -2733,7 +2735,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -2966,7 +2968,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -2985,7 +2987,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3227,7 +3229,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -3246,7 +3248,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3479,7 +3481,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -3498,7 +3500,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3744,7 +3746,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -3763,7 +3765,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -3996,7 +3998,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -4015,7 +4017,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -4248,7 +4250,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -4267,7 +4269,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -4513,7 +4515,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -4532,7 +4534,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -4778,7 +4780,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -4797,7 +4799,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -5030,7 +5032,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -5049,7 +5051,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -5291,7 +5293,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -5310,7 +5312,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -5552,7 +5554,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -5571,7 +5573,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -5813,7 +5815,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -5832,7 +5834,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -6065,7 +6067,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -6084,7 +6086,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -6317,7 +6319,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -6336,7 +6338,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -6578,7 +6580,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -6597,7 +6599,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -6839,7 +6841,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -6858,7 +6860,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -7100,7 +7102,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -7119,7 +7121,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -7361,7 +7363,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -7380,7 +7382,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -7622,7 +7624,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -7641,7 +7643,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
@@ -7883,7 +7885,7 @@
                 }
               }
             },
-            "description": "Failure: internal_error.",
+            "description": "Failure: evidence_corrupt, internal_error.",
             "headers": {
               "X-Correlation-ID": {
                 "description": "The correlation identifier for this request.",
@@ -7902,7 +7904,7 @@
                 }
               }
             },
-            "description": "Failure: dependency_unavailable, index_pending, stale_index.",
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying.",
