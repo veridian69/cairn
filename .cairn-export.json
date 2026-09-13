@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "87f2b40fa8e24bc957ce6364e589f950ca8a0c23",
+  "source_revision": "6cf7c4b8fe2063ab361edd95811b0141c7f2ad85",
   "release_configuration": {
-    "files.json": "46d24f92fe1f74a8e970dd183fd01555f59eea159276880a58f8d5bee06a3897",
+    "files.json": "c1248aff8243ccc182440595da5aea5e7ff6a25696a5a9f15cd469da6b40c404",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
-    "overlay_set_sha256": "6eba88417a5b5eb5a72b7cbdb0e34d8f27463a4b6e1ad49b4a42a636fb91caad"
+    "overlay_set_sha256": "7d1f427f75b5bd035b9acf924d7f3e24ab50441eab1598042d15086cd9ef6008"
   },
   "files": {
     ".dockerignore": {
@@ -566,7 +566,7 @@
       "mode": 420
     },
     "docs/operations/deployment.md": {
-      "sha256": "a4acabb08cd20db9a0c9b514c12b83eb2e63afbeff5843b8dfc19348522ad058",
+      "sha256": "3b5244ecaafb6c2c4a742d6595c0a6127dbbb493320faa2f5157074130654226",
       "mode": 420
     },
     "docs/operations/kubernetes-gateway.md": {

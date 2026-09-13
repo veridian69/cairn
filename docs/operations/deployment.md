@@ -320,10 +320,11 @@ Cairn may reach only cluster DNS, its FalkorDB service and that proxy. Squid
 enforces the FQDN allow-list because portable `NetworkPolicy` cannot safely
 express it.
 
-Edit only `allowed_fqdns` in
-[`configmap.yaml`](../../deploy/kustomize/overlays/egress-gateway/configmap.yaml),
-then render and apply the complete gateway overlay before the Cairn instance.
-Do not add unrestricted TCP/443 egress to Cairn Pods. Cluster-specific policy
+Follow the [gateway site-manifest procedure](kubernetes-gateway.md#render-and-validate-locally)
+to set `allowed_fqdns`, generate a separate site manifest, and review and commit
+it before applying the gateway. The default allow-list is `api.openai.com`;
+keep the repository's source ConfigMap unchanged. Apply the gateway before the
+Cairn instance. Do not add unrestricted TCP/443 egress to Cairn Pods. Cluster-specific policy
 extensions require validation on that cluster.
 
 ### First boot
