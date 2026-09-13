@@ -76,6 +76,10 @@ For each instance:
 7. Configure any ingress or Route explicitly, using TLS. Edge authentication
    does not replace Cairn bearer authentication.
 
+For a complete installation, start with the [cluster preflight](kubernetes-preflight.md)
+and [complete site overlay](kubernetes-site.md). The label-only example below
+is a focused explanation of the selector safeguard.
+
 ### Customise instance labels without changing external destinations
 
 Replace **only existing** `app.kubernetes.io/instance: cairn` values with your
@@ -253,6 +257,8 @@ The portable base permits no ingress. A published instance also needs narrow
 selectors for its ingress controller; do not replace default-deny with broad
 namespace or CIDR access.
 
+### Namespace and render preparation
+
 Before any namespaced operation, an administrator must provision the dedicated
 namespace and its instance label. The overlays do not create that namespace.
 Replace both values below with the site's namespace and instance name. For a new
@@ -298,6 +304,10 @@ Use `oc` for corresponding OpenShift commands only after validating the
 target's security, storage, network-policy and routing behaviour.
 
 ### Credentials and retrieval egress
+
+Use the [shared gateway installation procedure](kubernetes-gateway.md) for exact
+namespace, portable/Cilium overlay, render, apply and readiness commands.
+
 
 Supply credentials as a Secret at deployment time; never render or commit
 them. For retrieval, follow the

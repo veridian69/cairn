@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "90a5ef505795ac4e009cc17a49f48d515f64d45b",
+  "source_revision": "57c937fdd2a11f8ecd62b61251b547188bb73957",
   "release_configuration": {
-    "files.json": "7f8fdab837485ebfc219d2196ec0643b685ce582d6f6b29f65fb6544414bb57d",
+    "files.json": "1ac5939e76fdc9862cf9cf4a843105b39bb8b00200e848c2bcdca58925a8dcff",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
-    "overlay_set_sha256": "b0e051ff558ae8b7128c772fae64858743011a9c70f015c7e95145ec887bafae"
+    "overlay_set_sha256": "19b303d303e85c5cc5279b5ef891fd93064fabf12bd9362b9ea7658b62a93ca4"
   },
   "files": {
     ".dockerignore": {
@@ -546,7 +546,7 @@
       "mode": 420
     },
     "docs/install.md": {
-      "sha256": "dc2475d4358a86df40d46246f3e6c82c29158055473fcf8c2c0540364f11f1c1",
+      "sha256": "6d9dbc32df0aa93590aec57840bed247b94e9e407fccd735b8ea54c6f8e4ddfc",
       "mode": 420
     },
     "docs/memory-connection-profiles.md": {
@@ -566,7 +566,19 @@
       "mode": 420
     },
     "docs/operations/deployment.md": {
-      "sha256": "6fd4bb8305bac042ac860b620fc6ac2547b70c3d980c4e8ce832c27c4729ddf5",
+      "sha256": "a4acabb08cd20db9a0c9b514c12b83eb2e63afbeff5843b8dfc19348522ad058",
+      "mode": 420
+    },
+    "docs/operations/kubernetes-gateway.md": {
+      "sha256": "8647aa5b2f07648c96cfa0a683d2754de2d3d2eda434beedc902bdd628634d43",
+      "mode": 420
+    },
+    "docs/operations/kubernetes-preflight.md": {
+      "sha256": "d66f21d9589fdf89fcde4b56a4c43bc6f9edae2112b0b0bc3eb138ea2512bffc",
+      "mode": 420
+    },
+    "docs/operations/kubernetes-site.md": {
+      "sha256": "2364ed2b3a19b2f430609e4f8cf3ec692b13a5ea4958b41febc3b59dd8b6094e",
       "mode": 420
     },
     "docs/operations/migration.md": {

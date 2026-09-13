@@ -243,20 +243,26 @@ RBAC refusal by granting yourself cluster-admin.
 
 ### Installation sequence
 
-Follow the [Kubernetes deployment procedure](operations/deployment.md#kubernetes-and-openshift)
+Run the [cluster preflight](operations/kubernetes-preflight.md) inventory first;
+it identifies missing prerequisites without repairing the cluster. Follow the
+[Kubernetes deployment procedure](operations/deployment.md#kubernetes-and-openshift)
 in this order. All site-specific values must be chosen before applying anything:
 
 1. Select `kubernetes` for Attic-backed custody without semantic search, or
    `kubernetes-retrieval` for the complete FalkorDB and gateway path. Use the
    [overlay inventory](../deploy/kustomize/overlays/README.md); `kind` is a test
    environment, not the production installation path.
-2. Create a reviewed site overlay with the dedicated namespace, stable instance
-   UUID, immutable image digest and approved storage class. Use the
+2. Generate the [complete site overlay](operations/kubernetes-site.md) with the
+   dedicated namespace, stable instance UUID, registry-published image digest and
+   approved storage class, then complete namespace preparation and the
+   preflight probes. The image must be published to a registry first; a local
+   containerd import alone is not this installation path. Use the
    [targeted instance-label example](operations/deployment.md#customise-instance-labels-without-changing-external-destinations)
    to replace existing labels. Verify DNS/gateway destination selectors and
    namespace selectors remain intact and retain both default-deny directions.
 3. Supply the required credential Secret from protected files and, for retrieval,
-   have the shared gateway installed once per cluster. Follow
+   follow the [exact shared gateway procedure](operations/kubernetes-gateway.md)
+   once per cluster, choosing its portable or Cilium variant as appropriate. Follow
    [credentials and retrieval egress](operations/deployment.md#credentials-and-retrieval-egress).
    Never put provider keys in a rendered manifest or Git.
 4. Render and inspect the complete site configuration, run server-side dry run,
