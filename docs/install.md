@@ -7,13 +7,15 @@ and data on Linux storage, not `/mnt/c`. Other platforms and architectures
 have not completed this installation acceptance exercise.
 
 Passing developer tests is separate from following these instructions as a new
-user. Kubernetes installation and cluster repair are outside this guide.
+user. The Kubernetes path installs Cairn into an existing cluster; creating or
+repairing the cluster is separate work.
 
 | Purpose | Follow this procedure | What remains afterwards |
 | --- | --- | --- |
 | Try the native service | [Disposable quickstart](quickstart.md) | Nothing: the script stops the server and deletes its temporary data and credential. |
 | Keep a native instance | [Persistent native installation](operations/native-installation.md) | Stable identity, owner-controlled data and credential, a systemd user service and backup procedure. |
 | Run Cairn with Attic and optional semantic search | [Docker Compose installation](../deploy/compose/README.md) | Persistent volumes, protected credentials and a managed container stack. |
+| Deploy Cairn to an existing cluster | [Kubernetes installation](#kubernetes-installation) | A dedicated namespace, persistent claims, restricted workloads and network policies. |
 | Develop Cairn | [Full developer validation](#full-developer-validation) | A development environment; this does not install a persistent service. |
 
 ## Obtain a trusted checkout
@@ -171,6 +173,119 @@ volumes; configuration and credential files remain on the host. The
 verify daemon access and versions before changing files. Follow that guide
 from beginning to end, including its choice of base or semantic lifecycle
 commands. `down` and volume deletion have different retention consequences.
+
+## Kubernetes installation
+
+Use this path to install Cairn into an **existing conformant Kubernetes cluster**.
+It includes Attic, with semantic retrieval optional. Cluster creation, CNI/CSI
+installation and cluster repair are administrator prerequisites. OpenShift has a
+separate overlay and requires its own admission, SCC, storage and network-policy
+validation; do not assume the Kubernetes result proves OpenShift support.
+
+### Prerequisites and access
+
+- A Linux x86_64 operator checkout and Linux workers able to run the reviewed
+  image. The recorded reference deployment used Kubernetes 1.35.0 with Cilium
+  1.19.6. The repository pins kubectl 1.35.0 and Kustomize 5.7.1; other target
+  versions need their own compatibility and admission checks.
+- Bash, Git, GNU coreutils, `awk`, curl 8.4.0+, jq 1.6+, Python 3.12 and uv 0.12.0.
+  The locked Python environment supplies YAML support for generating and checking
+  manifests. Go and Bubblewrap are not installation requirements. Docker and make
+  are needed locally only if you build the Cairn image yourself.
+- A reviewed Cairn image available to the workers by immutable digest, including
+  any registry pull credentials under the cluster's normal policy. The checkout's
+  `cairn:v0.1.0` tag is a local build tag, not a published registry image. See the
+  [image boundary](operations/deployment.md).
+- A dedicated namespace and an approved CSI StorageClass supporting
+  `ReadWriteOncePod`, reliable POSIX locks and `fsync`. NFS and other shared or
+  network filesystems are unsuitable for the SQLite WAL catalogue.
+- A CNI that enforces the rendered NetworkPolicies, functioning cluster DNS, and
+  namespace-scoped authority to manage the documented workloads, ConfigMaps,
+  Secrets, Services, ServiceAccounts, PVCs and policies. Bootstrap also requires
+  Pod create/delete, rollout/scale and `pods/exec` access. Namespace creation and
+  the shared egress gateway may require separate administrator authority.
+- For semantic retrieval: the pinned FalkorDB image, provider credentials supplied
+  as Secret files, and the shared egress gateway with its approved provider
+  allow-list. Provider calls can incur charges. The index-free path requires none
+  of those semantic dependencies.
+
+Resolve missing local tools using [the prerequisite instructions](#get-missing-prerequisites).
+From the repository root, install the locked manifest tooling and put the pinned
+kubectl first on PATH for this terminal:
+
+```sh
+set -eu
+for tool in bash git awk curl jq uv sha256sum; do
+  command -v "$tool" || exit 1
+done
+uv --version
+curl --version
+jq --version
+uv sync --locked
+./scripts/fetch-kubectl
+export PATH="$PWD/build/tools:$PATH"
+kubectl version --client
+kubectl config current-context
+```
+
+Expect uv 0.12.0, curl at least 8.4.0, jq at least 1.6, and kubectl v1.35.0 with
+Kustomize v5.7.1. The final command must name the intended cluster context; stop
+if no context is configured or the selected context is wrong. Obtain a kubeconfig
+and the required permissions from the cluster administrator. Do not solve an
+RBAC refusal by granting yourself cluster-admin.
+
+### Installation sequence
+
+Follow the [Kubernetes deployment procedure](operations/deployment.md#kubernetes-and-openshift)
+in this order. All site-specific values must be chosen before applying anything:
+
+1. Select `kubernetes` for Attic-backed custody without semantic search, or
+   `kubernetes-retrieval` for the complete FalkorDB and gateway path. Use the
+   [overlay inventory](../deploy/kustomize/overlays/README.md); `kind` is a test
+   environment, not the production installation path.
+2. Create a reviewed site overlay with the dedicated namespace, stable instance
+   UUID, immutable image digest and approved storage class. Use the
+   [targeted instance-label example](operations/deployment.md#customise-instance-labels-without-changing-external-destinations)
+   to replace existing labels. Verify DNS/gateway destination selectors and
+   namespace selectors remain intact and retain both default-deny directions.
+3. Supply the required credential Secret from protected files and, for retrieval,
+   have the shared gateway installed once per cluster. Follow
+   [credentials and retrieval egress](operations/deployment.md#credentials-and-retrieval-egress).
+   Never put provider keys in a rendered manifest or Git.
+4. Render and inspect the complete site configuration, run server-side dry run,
+   then follow [first boot](operations/deployment.md#first-boot). That procedure
+   creates the persistent claim, runs migration, stops serving for exclusive
+   bootstrap, retains the one-time credential safely and restarts Cairn. Bootstrap
+   is not a normal restart step; retain the same UUID, claims and credential.
+5. Check authenticated instance identity and, with semantic retrieval enabled,
+   perform the [bounded synthetic write/read check](clients.md#bounded-ingest-and-retrieval-verification).
+   A committed ingest proves custody; indexing can complete later. Retain the
+   saved fact ID for the same read-only check after a restart.
+6. Before relying on the instance, follow the [backup and recovery runbook](operations/backup-restore.md)
+   and record the site's restart, storage and policy results. Restarting Pods
+   preserves their claims; deleting a namespace or PVC is not a restart procedure
+   and can destroy data depending on the StorageClass reclaim policy.
+
+### Connect locally for verification
+
+The default Service is `ClusterIP`; it does not publish Cairn to the internet.
+In a separate terminal opened at the repository root, use the namespace and
+Service name from your reviewed
+render (the defaults below assume `cairn-example` and `cairn`):
+
+```sh
+export PATH="$PWD/build/tools:$PATH"
+namespace=cairn-example
+kubectl port-forward --address 127.0.0.1 -n "$namespace" service/cairn 8080:8000
+```
+
+Leave that terminal running. In the client terminal, set
+`base_url=http://127.0.0.1:8080` and `credential_file` to the owner-only file
+retained by first boot, then follow the [client credential setup](clients.md#credentials)
+and verification commands. Port forwarding also needs the administrator-approved
+`pods/portforward` permission. It provides a local API check, not proof of an
+external ingress path or cross-node CNI isolation. External publication remains
+an explicit TLS-only ingress/proxy configuration.
 
 ## Full developer validation
 

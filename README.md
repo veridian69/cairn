@@ -22,7 +22,7 @@ become established truth merely because it was remembered.
 - **Was it saved?** Mutations return durable receipts. Replaying an identical operation with the same idempotency key does not create another write.
 - **Can search cross those boundaries?** Retrieval candidates are reconciled against the authoritative catalogue before disclosure.
 
-[Install Cairn](docs/install.md) — disposable native quickstart, persistent native service, or Docker Compose.
+[Install Cairn](docs/install.md) — disposable native quickstart, persistent native service, Docker Compose, or Kubernetes.
 
 ## Interfaces
 

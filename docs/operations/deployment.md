@@ -253,18 +253,45 @@ The portable base permits no ingress. A published instance also needs narrow
 selectors for its ingress controller; do not replace default-deny with broad
 namespace or CIDR access.
 
-Render, hash, validate and apply the chosen overlay:
+Before any namespaced operation, an administrator must provision the dedicated
+namespace and its instance label. The overlays do not create that namespace.
+Replace both values below with the site's namespace and instance name. For a new
+namespace, the administrator runs:
 
 ```sh
-site_overlay=/path/to/site-overlay
-instance=cairn-example
 namespace=cairn-example
-render="cairn-$instance.yaml"
+instance=cairn-example
+kubectl create namespace "$namespace"
+kubectl label namespace "$namespace" cairn.example.invalid/instance="$instance"
+```
 
+For an existing namespace, the administrator checks its ownership and adds the
+label only if absent; do not overwrite a conflicting instance label. The
+installation operator then sets the same two values in their terminal and
+verifies the namespace before continuing:
+
+```sh
+namespace=cairn-example
+instance=cairn-example
+kubectl get namespace "$namespace" -o json |
+  jq -e --arg instance "$instance" '.metadata.labels["cairn.example.invalid/instance"] == $instance'
+```
+
+Expect `true`. This namespace label admits the instance to the shared gateway;
+it does not replace the workload's `app.kubernetes.io/instance` labels or add
+labels to external destination selectors. Namespace read access is required for
+this check; ask the administrator to supply it if necessary.
+
+Render, hash and validate the reviewed site overlay. Replace `site_overlay`
+with its actual path. This block does not start the workloads; the real apply
+is in First boot, after credential and gateway preparation:
+
+```sh
+site_overlay=/path/to/reviewed/site-overlay
+render="cairn-$instance.yaml"
 kubectl kustomize "$site_overlay" > "$render"
 sha256sum "$render" > "$render.sha256"
 kubectl apply --dry-run=server -n "$namespace" -f "$render"
-kubectl apply -n "$namespace" -f "$render"
 ```
 
 Use `oc` for corresponding OpenShift commands only after validating the
@@ -291,70 +318,277 @@ extensions require validation on that cluster.
 
 ### First boot
 
-The StatefulSet's `migrate` init container is idempotent. Bootstrap is a
-one-time operation and refuses an existing realm.
+Bootstrap is a deliberate one-off operation. The StatefulSet's `migrate` init
+container is idempotent; `bootstrap` is not, and a repeat refuses with
+`realm_exists`. Run the following blocks in one shell from the repository root.
+They never put the one-time token in a Pod log or command argument.
 
-1. Apply the instance at one replica and wait for its init container to finish.
-   For retrieval, wait for FalkorDB first:
+1. Set every operator-owned value explicitly. `site_render` must be the final
+   reviewed render for this instance, not an unreviewed base or test overlay.
+   Keep the credential outside the checkout and do not reuse an existing path:
 
    ```sh
-   namespace=cairn-example
-   render=./cairn-cairn-example.yaml
+   set -eu
+   namespace='REPLACE_WITH_INSTANCE_NAMESPACE'
+   site_render='/absolute/path/to/REPLACE_WITH_REVIEWED_RENDER.yaml'
+   realm='REPLACE_WITH_REALM'
+   label='REPLACE_WITH_INITIAL_OPERATOR_LABEL'
+   credential_file="$HOME/.config/cairn/credentials/REPLACE_WITH_INSTANCE.token"
+   bootstrap_manifest="$(dirname "$site_render")/cairn-bootstrap.yaml"
 
-   kubectl apply -n "$namespace" -f "$render"
+   test -f "$site_render"
+   case "$namespace:$site_render:$realm:$label:$credential_file" in
+     *REPLACE_WITH_*) printf '%s\n' 'Replace every operator value first.' >&2; exit 1 ;;
+   esac
+   case "$credential_file" in
+     /*) ;;
+     *) printf '%s\n' 'credential_file must be absolute.' >&2; exit 1 ;;
+   esac
+   test ! -e "$credential_file" && test ! -L "$credential_file"
+   test ! -e "$bootstrap_manifest" && test ! -L "$bootstrap_manifest"
+
+   repository_root="$(realpath -e "$(git rev-parse --show-toplevel)")"
+   credential_dir="$(dirname "$credential_file")"
+   install -d -m 0700 "$credential_dir"
+   credential_dir="$(realpath -e "$credential_dir")"
+   credential_file="$credential_dir/$(basename "$credential_file")"
+   test -O "$credential_dir"
+   test "$(stat -c '%a' "$credential_dir")" = 700
+   case "$credential_file" in
+     "$repository_root"|"$repository_root"/*)
+       printf '%s\n' 'credential_file must be outside Git.' >&2
+       exit 1
+       ;;
+   esac
+   ```
+
+2. Generate the holding Pod from that exact StatefulSet. This preserves its
+   image, Pod labels and annotations, service account, Pod and container
+   security contexts (including any reviewed UID, GID or `fsGroup`), scheduling
+   fields, and the `config`, `credentials` and `tmp` volumes and mounts. It maps
+   the StatefulSet's `data` claim template to the existing `data-cairn-0` PVC,
+   removes the migration init container and serving probes, and replaces the
+   image entrypoint with a harmless `/bin/sh` sleep loop. The generator refuses
+   renamed workloads, extra application containers or an unexpected storage
+   shape instead of guessing how to adapt them.
+
+   ```sh
+   uv run --locked --no-dev python - "$site_render" "$bootstrap_manifest" "$namespace" <<'PY'
+   import copy
+   import sys
+   from pathlib import Path
+
+   import yaml
+
+   render_path = Path(sys.argv[1])
+   output_path = Path(sys.argv[2])
+   namespace = sys.argv[3]
+   documents = [
+       document
+       for document in yaml.safe_load_all(render_path.read_text(encoding="utf-8"))
+       if document
+   ]
+   statefulsets = [
+       document
+       for document in documents
+       if document.get("apiVersion") == "apps/v1"
+       and document.get("kind") == "StatefulSet"
+       and document.get("metadata", {}).get("name") == "cairn"
+   ]
+   if len(statefulsets) != 1:
+       raise SystemExit("reviewed render must contain exactly one StatefulSet/cairn")
+
+   statefulset = statefulsets[0]
+   rendered_namespace = statefulset.get("metadata", {}).get("namespace")
+   if rendered_namespace not in (None, namespace):
+       raise SystemExit("namespace does not match the reviewed StatefulSet")
+   retention = statefulset["spec"].get("persistentVolumeClaimRetentionPolicy", {})
+   if retention.get("whenScaled", "Retain") != "Retain":
+       raise SystemExit("StatefulSet whenScaled PVC retention must be Retain")
+   template = statefulset["spec"]["template"]
+   template_spec = template["spec"]
+   containers = template_spec.get("containers", [])
+   if len(containers) != 1 or containers[0].get("name") != "cairn":
+       raise SystemExit("reviewed StatefulSet must have one container named cairn")
+
+   claim_templates = statefulset["spec"].get("volumeClaimTemplates", [])
+   data_claims = [
+       claim
+       for claim in claim_templates
+       if claim.get("metadata", {}).get("name") == "data"
+   ]
+   if len(claim_templates) != 1 or len(data_claims) != 1:
+       raise SystemExit("reviewed StatefulSet must have only one data claim template")
+   claim_name = f'data-{statefulset["metadata"]["name"]}-0'
+   if claim_name != "data-cairn-0":
+       raise SystemExit("unexpected StatefulSet PVC name")
+
+   pod_spec = copy.deepcopy(template_spec)
+   pod_spec.pop("initContainers", None)
+   container = copy.deepcopy(containers[0])
+   for field in ("startupProbe", "readinessProbe", "livenessProbe", "ports"):
+       container.pop(field, None)
+   container["command"] = ["/bin/sh", "-c"]
+   container["args"] = ["trap 'exit 0' TERM INT; while :; do sleep 5; done"]
+   pod_spec["containers"] = [container]
+   pod_spec["restartPolicy"] = "Never"
+
+   volumes = copy.deepcopy(template_spec.get("volumes", []))
+   if any(volume.get("name") == "data" for volume in volumes):
+       raise SystemExit("reviewed Pod volumes already contain data")
+   volumes.insert(
+       0,
+       {"name": "data", "persistentVolumeClaim": {"claimName": claim_name}},
+   )
+   pod_spec["volumes"] = volumes
+
+   required = {"data", "config", "credentials", "tmp"}
+   mounts = {mount["name"] for mount in container.get("volumeMounts", [])}
+   volume_names = {volume["name"] for volume in volumes}
+   if not required <= mounts or not required <= volume_names:
+       raise SystemExit("reviewed StatefulSet lacks a required mount or volume")
+   if pod_spec.get("securityContext") != template_spec.get("securityContext"):
+       raise SystemExit("Pod security context was not preserved")
+   if container.get("securityContext") != containers[0].get("securityContext"):
+       raise SystemExit("container security context was not preserved")
+   if container.get("image") != containers[0].get("image"):
+       raise SystemExit("reviewed image was not preserved")
+
+   metadata = copy.deepcopy(template.get("metadata", {}))
+   metadata.pop("generateName", None)
+   metadata["name"] = "cairn-bootstrap"
+   metadata["namespace"] = namespace
+   pod = {"apiVersion": "v1", "kind": "Pod", "metadata": metadata, "spec": pod_spec}
+   with output_path.open("x", encoding="utf-8") as output:
+       yaml.safe_dump(pod, output, sort_keys=False)
+   PY
+   ```
+
+   Review `cairn-bootstrap.yaml` beside the site render. It contains no token.
+   If a platform mutates Pods at admission, inspect the server-side dry-run
+   below as part of that platform's review.
+
+3. Apply the reviewed instance at one replica. This creates `data-cairn-0` and
+   runs `migrate`. For the retrieval overlay, wait for FalkorDB before Cairn;
+   omit only that first rollout command for the index-free overlay:
+
+   ```sh
+   kubectl apply -n "$namespace" -f "$site_render"
+   # Retrieval overlay only:
    kubectl rollout status -n "$namespace" statefulset/falkordb --timeout=420s
    kubectl rollout status -n "$namespace" statefulset/cairn --timeout=420s
-   kubectl get -n "$namespace" pod/cairn-0 \
-     -o jsonpath='{.status.initContainerStatuses[?(@.name=="migrate")].state.terminated.reason}{"\n"}'
-   ```
+   migration_state="$(
+     kubectl get -n "$namespace" pod/cairn-0 \
+       -o jsonpath='{.status.initContainerStatuses[?(@.name=="migrate")].state.terminated.reason}'
+   )"
+   test "$migration_state" = Completed
 
-   Require `Completed`, then stop Cairn so bootstrap has exclusive access to
-   its data claim:
-
-   ```sh
    kubectl scale -n "$namespace" statefulset/cairn --replicas=0
-   kubectl wait -n "$namespace" --for=delete pod/cairn-0 --timeout=120s
+   kubectl wait -n "$namespace" --for=delete pod/cairn-0 --timeout=180s
    ```
 
-2. Create a one-off Pod from the same image, service account, ConfigMap,
-   optional Secret and `data-cairn-0` claim as the StatefulSet. Give it the
-   arguments below and retain the workload's security context:
+   Leave FalkorDB running when it is present. Waiting for `cairn-0` to be
+   deleted preserves exclusive ownership of the Cairn data claim and its lease.
 
-   ```yaml
-   args:
-     - bootstrap
-     - --config
-     - /etc/cairn/config.yaml
-     - --realm
-     - REPLACE_WITH_REALM
-     - --label
-     - REPLACE_WITH_LABEL
-   ```
-
-   Validate and run the Pod, then require it to succeed:
+4. Refuse a stale bootstrap Pod, validate the generated manifest through
+   admission, then start the holder and require it to become Ready:
 
    ```sh
-   kubectl apply --dry-run=server -f cairn-bootstrap.yaml
-   kubectl apply -f cairn-bootstrap.yaml
+   if kubectl get -n "$namespace" pod/cairn-bootstrap >/dev/null 2>&1; then
+     printf '%s\n' 'pod/cairn-bootstrap already exists; inspect it first.' >&2
+     exit 1
+   fi
+   kubectl apply --dry-run=server -o yaml -f "$bootstrap_manifest"
+   kubectl apply -f "$bootstrap_manifest"
    kubectl wait -n "$namespace" \
-     --for=jsonpath='{.status.phase}'=Succeeded \
-     pod/cairn-bootstrap --timeout=180s
-   kubectl logs -n "$namespace" pod/cairn-bootstrap
+     --for=condition=Ready pod/cairn-bootstrap --timeout=180s
    ```
 
-3. Capture the JSON line whose `operation` is `bootstrap` and place its token
-   directly into the authorised credential store. Do not retain it in Git,
-   shell history, annotations or long-lived logs.
-4. Delete the bootstrap Pod, restore the StatefulSet to one replica and verify
-   the rollout:
+5. Execute bootstrap inside the holder. Standard output and error go directly
+   to owner-only files beside the final credential, outside Git. The token is
+   validated and hard-linked into the requested path, so an existing path is
+   never overwritten. Nothing prints the JSON or token to the terminal:
+
+   ```sh
+   umask 077
+   bootstrap_stdout="$(mktemp "$credential_dir/.bootstrap.stdout.XXXXXXXX")"
+   bootstrap_stderr="$(mktemp "$credential_dir/.bootstrap.stderr.XXXXXXXX")"
+   token_staging="$(mktemp "$credential_dir/.bootstrap.token.XXXXXXXX")"
+   chmod 0600 "$bootstrap_stdout" "$bootstrap_stderr" "$token_staging"
+
+   if ! kubectl exec -n "$namespace" pod/cairn-bootstrap -- \
+     cairn bootstrap --config /etc/cairn/config.yaml \
+       --realm "$realm" --label "$label" \
+       >"$bootstrap_stdout" 2>"$bootstrap_stderr"; then
+     if grep -Eq '"code"[[:space:]]*:[[:space:]]*"realm_exists"' \
+       "$bootstrap_stderr"; then
+       printf '%s\n' 'The realm already exists; bootstrap was correctly refused.' >&2
+     fi
+     printf 'Retained owner-only evidence: %s %s\n' \
+       "$bootstrap_stdout" "$bootstrap_stderr" >&2
+     exit 1
+   fi
+
+   if ! jq -jers --arg realm "$realm" '
+     select(type == "array" and length == 1) |
+     .[0] |
+     select(
+       .status == "ok" and
+       .operation == "bootstrap" and
+       .realm_id == $realm and
+       (.instance_id | type == "string") and
+       (.principal_id | type == "string") and
+       (.credential_id | type == "string") and
+       (.grant_ids | type == "array")
+     ) |
+     .token |
+     select(
+       type == "string" and
+       test("^cairn1\\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.[A-Za-z0-9_-]{43}$")
+     )
+   ' "$bootstrap_stdout" >"$token_staging"; then
+     printf 'Invalid result retained for recovery: %s %s\n' \
+       "$bootstrap_stdout" "$bootstrap_stderr" >&2
+     exit 1
+   fi
+   if ! ln "$token_staging" "$credential_file"; then
+     printf 'Credential path appeared; result retained at %s\n' \
+       "$bootstrap_stdout" >&2
+     exit 1
+   fi
+   rm -f "$token_staging" "$bootstrap_stdout" "$bootstrap_stderr"
+   test "$(stat -c '%a' "$credential_file")" = 600
+   test -s "$credential_file"
+   printf 'Credential saved to %s\n' "$credential_file"
+   ```
+
+   A transport interruption can occur after the catalogue commits but before
+   the local capture completes. Keep both evidence files and do not blindly
+   rerun bootstrap. A later `realm_exists` result proves that the realm exists;
+   it does not recover the lost token. Use a retained credential if one exists.
+   If access is genuinely lost, an authorised operator can use this same
+   stopped holder and owner-only capture pattern with `cairn recover --config
+   /etc/cairn/config.yaml --realm "$realm" --label
+   REPLACE_WITH_NEW_RECOVERY_LABEL`, validating `operation == "recover"` before
+   installing its replacement token. Recovery appends an audited grant and
+   does not erase old credentials; revoke superseded access through the normal
+   authenticated administration path when policy requires it.
+
+6. Delete the holder before restoring the serving replica, then verify the
+   rollout. Do not scale Cairn up while any Pod still mounts `data-cairn-0`:
 
    ```sh
    kubectl delete -n "$namespace" pod/cairn-bootstrap --wait=true
    kubectl scale -n "$namespace" statefulset/cairn --replicas=1
    kubectl rollout status -n "$namespace" statefulset/cairn --timeout=420s
+   kubectl get -n "$namespace" pod/cairn-0
    ```
 
-Do not start another serving deployment with the same `instance_id`.
+Use `credential_file` for the authenticated client check in the installation
+guide. Then exercise the [Kubernetes backup and recovery
+mechanics](backup-restore.md#kubernetes-or-openshift-mechanics). Do not start a
+second serving deployment with the same `instance_id`; restore retains that
+identity and follows the runbook's quiesce procedure.
 
 ## Docker Compose
 
