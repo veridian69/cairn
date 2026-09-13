@@ -11,6 +11,8 @@ they are corrected and lets different perspectives coexist. Scope,
 classification and grants are enforced by the server; a stored claim does not
 become established truth merely because it was remembered.
 
+[Beginner installation requirements](docs/specs/beginner-installation-requirements.md) — planned native and Docker onboarding; implementation and acceptance are pending.
+
 **Persistence is the starting point. Accountable memory is the point.**
 
 ## What memory has to answer
