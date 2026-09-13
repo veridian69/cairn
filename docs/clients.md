@@ -52,7 +52,9 @@ variables, URLs, logs or traces.
 
 The examples below read a token from an owner-only file without putting it on
 `curl`'s command line. Run them on Linux with curl 8.4.0 or newer, `jq` and
-Python 3 available as `python3`. The bounded helper uses curl's
+Python 3.12–3.14 available as `python3`. The standard-library helper runs
+independently of Cairn's pinned Python 3.12 runtime; the host system interpreter
+does not need replacing. The bounded helper uses curl's
 [`--max-filesize`](https://curl.se/docs/manpage.html#--max-filesize)
 transfer-time limit, which protects unknown-length responses from 8.4.0. Check
 the installed version with `curl --version`. The default credential path

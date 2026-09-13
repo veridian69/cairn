@@ -132,8 +132,9 @@ PY
 Expect an executable path for every tool, curl 7.76 or newer, jq 1.6 or newer,
 Python `3.12.x`, uv `0.12.0`, a Python 3.12 path, writable-directory checks with
 no output, and successful loopback binding with no output. A bind error means
-port 8000 is already in use; stop the conflicting local service or choose the
-persistent procedure's configurable port. Resolve missing tools using
+port 8000 is already in use. Both documented native procedures use port 8000;
+resolve the conflict before continuing, or use the Docker Compose procedure,
+which documents its `cairn_port` setting. Resolve missing tools using
 [missing prerequisites](#get-missing-prerequisites), then repeat the checklist
 before following the [disposable quickstart](quickstart.md). If locked package
 installation cannot reach its configured indexes, ask the network or repository
@@ -157,8 +158,11 @@ or newer; check it with `curl --version` before following the client guide.
 
 Required: Linux x86_64 with systemd, Engine 25.0 or newer, Compose plugin 2.20.2
 or newer, Bash, Git, make, `systemctl`, `sed`, GNU coreutils (`sha256sum`,
-`install`, `realpath`, `stat` and `tr`), curl 8.4.0+, jq 1.6+ and Python 3.12.x
-as `python3` for the verification helper. Curl 8.4.0 is required because its
+`install`, `realpath`, `stat` and `tr`), curl 8.4.0+, jq 1.6+ and Python 3.12–3.14
+as `python3` for the standard-library verification helper. Cairn itself uses
+its pinned Python 3.12 runtime inside the image; the helper does not import
+Cairn or its installed dependencies. Keep the host's system interpreter: Python
+3.14 does not need replacing. Curl 8.4.0 is required because its
 [`--max-filesize`](https://curl.se/docs/manpage.html#--max-filesize) limit also
 guards unknown-length responses during transfer. Semantic retrieval additionally needs
 OpenSSL, a provider API key, outbound provider access, the FalkorDB image and

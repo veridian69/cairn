@@ -51,7 +51,7 @@ Required runtime and command-line tools are:
 - Bash, `git`, `make`, `systemctl`, `sed`, and GNU coreutils including
   `sha256sum`, `install`, `realpath`, `stat` and `tr` for the local build,
   service check and safe file preparation; and
-- curl 8.4.0 or newer, `jq` and `python3` for bootstrap and the bounded client
+- curl 8.4.0 or newer, `jq` and Python 3.12–3.14 as `python3` for bootstrap and the bounded client
   checks. The helper uses curl's [`--max-filesize`](https://curl.se/docs/manpage.html#--max-filesize)
   transfer-time limit, which protects unknown-length responses from 8.4.0;
   `openssl` and privilege through `sudo` or an existing root session are
@@ -77,14 +77,31 @@ If you plan to enable semantic retrieval, run its additional checks before
 creating the instance:
 
 ```bash
-command -v openssl
-if (( EUID != 0 )); then command -v sudo; fi
+command -v openssl || exit 1
+(
+  cd deploy/compose || exit 1
+if (( EUID != 0 )); then
+  command -v sudo || exit 1
+  sudo -v || exit 1
+  sudo -l -- chown 65532:0 credentials/falkordb-password credentials/openai-api-key >/dev/null || exit 1
+  sudo -l -- chmod 0400 credentials/falkordb-password credentials/openai-api-key >/dev/null || exit 1
+  sudo -l -- chown 10001:0 falkordb.conf >/dev/null || exit 1
+  sudo -l -- chmod 0400 falkordb.conf >/dev/null || exit 1
+fi
+) || exit 1
 ```
 
 The expected results are `Linux`, `x86_64`, Engine client and server versions
 of at least 25.0, Compose v2.20.2 or newer, `daemon=linux/x86_64`, `enabled`,
 curl 8.4.0 or newer, and one absolute executable path per required tool. The semantic checks must
-also print the OpenSSL path and, for a non-root operator, the `sudo` path. If a
+also print the OpenSSL path and, for a non-root operator, the `sudo` path.
+`sudo -v` must authenticate successfully, and each `sudo -l -- COMMAND` must
+confirm permission to run that exact ownership or mode command as root. Merely
+having sudo installed is insufficient. A refusal means stop and ask the host
+administrator to arrange the required access; do not stop Cairn or create
+credentials first. These checks do not change file ownership. Cairn runs on
+Python 3.12 inside its image; the host helper uses only the standard library
+and does not require replacing the system Python. If a
 command is absent or below the
 minimum version, follow the installation guide's platform instructions, then
 repeat the complete checklist. If `docker version` or `docker info` reports a
@@ -348,10 +365,22 @@ does not mint replacement credentials.
 Semantic retrieval adds Graphiti, a project-private FalkorDB index and outbound
 OpenAI API calls. It is optional; Attic remains enabled either way. Two halves
 are required: the overlay adds FalkorDB, and `config.yaml` tells Cairn to use
-it. Stop Cairn before changing the configuration.
+it. Recheck privileged access immediately before stopping Cairn, even if the
+initial preflight passed. Run this block from `deploy/compose`; a failed
+authentication or command-permission check exits before shutdown or credential
+creation. Stop Cairn before changing the configuration.
 
 ```bash
 set -eu
+
+if (( EUID != 0 )); then
+  command -v sudo || exit 1
+  sudo -v || exit 1
+  sudo -l -- chown 65532:0 credentials/falkordb-password credentials/openai-api-key >/dev/null || exit 1
+  sudo -l -- chmod 0400 credentials/falkordb-password credentials/openai-api-key >/dev/null || exit 1
+  sudo -l -- chown 10001:0 falkordb.conf >/dev/null || exit 1
+  sudo -l -- chmod 0400 falkordb.conf >/dev/null || exit 1
+fi
 
 docker compose --env-file ../images.lock --env-file .env \
   -f compose.yaml stop cairn
