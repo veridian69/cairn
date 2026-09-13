@@ -6,8 +6,6 @@ requires a working systemd user manager. Keep the checkout, Python environment
 and data on Linux storage, not `/mnt/c`. Other platforms and architectures
 have not completed this installation acceptance exercise.
 
-The guides are implemented; **fresh-user acceptance remains pending** under the
-[beginner installation requirements](specs/beginner-installation-requirements.md).
 Passing developer tests is separate from following these instructions as a new
 user. Kubernetes installation and cluster repair are outside this guide.
 

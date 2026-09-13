@@ -11,9 +11,6 @@ they are corrected and lets different perspectives coexist. Scope,
 classification and grants are enforced by the server; a stored claim does not
 become established truth merely because it was remembered.
 
-[Install Cairn](docs/install.md) — disposable native quickstart, persistent native service, or Docker Compose.
-[Beginner installation requirements and acceptance](docs/specs/beginner-installation-requirements.md): fresh-user acceptance remains pending.
-
 **Persistence is the starting point. Accountable memory is the point.**
 
 ## What memory has to answer
@@ -24,6 +21,8 @@ become established truth merely because it was remembered.
 - **What disagrees?** Disagreements retain both attributed endpoints; recording one does not decide who is right.
 - **Was it saved?** Mutations return durable receipts. Replaying an identical operation with the same idempotency key does not create another write.
 - **Can search cross those boundaries?** Retrieval candidates are reconciled against the authoritative catalogue before disclosure.
+
+[Install Cairn](docs/install.md) — disposable native quickstart, persistent native service, or Docker Compose.
 
 ## Interfaces
 

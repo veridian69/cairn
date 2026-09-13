@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "7e2d2848ede64cd6a5ad5560b91e3b266ee0684b",
+  "source_revision": "73a726d5b60b749976c474b6ad5a84997c31d7f3",
   "release_configuration": {
-    "files.json": "5ec6fbc9e9a2bba66ba622442bb2b95665d5def5716a4bc024a0716efd8413b8",
+    "files.json": "231ad1dc50e7b3991ff7bb98b574e6806bf490c79903a49d3e50b10a6aee501f",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "f0ce7e0e3f0e92defee41cba0793dbd913f424a60bceba3b7db177338957b76b",
-    "overlay_set_sha256": "86ba600ef4c4bbe434ce317831ae6f7bd22fcac645d0d7d748c9ed87032c74d7"
+    "overlay_set_sha256": "5706eecd888b2ff4c1036c174740fc0d4191dece34409a9d8e2abd2285d54675"
   },
   "files": {
     ".dockerignore": {
@@ -78,7 +78,7 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "ec97d800a99b3988a392137a28ffe180baa06938a31ed76235b6bfc7227aeec9",
+      "sha256": "728b9fd94a3fb8a68dd2ec07495bda19491e85d618d16a25086a037b4f8ef58a",
       "mode": 420
     },
     "cairn-mcp/.gitignore": {
@@ -546,7 +546,7 @@
       "mode": 420
     },
     "docs/install.md": {
-      "sha256": "d7df5be58c28ca7722e306f4526b7f5807778266d9d01dc65ddd4817b4a226bc",
+      "sha256": "f91dc32c7e8eda4d94f22ae177d75a950321a5b2d14bca87851b716941604b55",
       "mode": 420
     },
     "docs/memory-connection-profiles.md": {
@@ -595,10 +595,6 @@
     },
     "docs/shared-memory.md": {
       "sha256": "55eb5e38d92493ce5b1f958e450c597eccea28ceeb3ee6ca0c21653a7ff0e342",
-      "mode": 420
-    },
-    "docs/specs/beginner-installation-requirements.md": {
-      "sha256": "8c5db20844f096490937065b1575330aa1d2768102dfcd93420e9dba9e50e791",
       "mode": 420
     },
     "docs/specs/cairn-v0.1-contract.md": {
