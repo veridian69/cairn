@@ -103,8 +103,8 @@ file-ownership operations before first boot.
 ## Disposable native quickstart prerequisites
 
 Required: Linux x86_64, Bash, Git, coreutils (including `mktemp`, `chmod`,
-`sha256sum`, `tr` and `rm`), curl 7.76 or newer, jq 1.6 or newer, Python 3.12 and
-uv 0.12.0. You need a writable checkout and `/tmp`, an unused loopback port
+`sha256sum`, `tr` and `rm`), curl 7.76 or newer, jq 1.6 or newer, a system
+Python 3 available as `python3`, and uv 0.12.0 with Cairn’s Python 3.12 runtime. You need a writable checkout and `/tmp`, an unused loopback port
 8000, and network access for locked dependency installation. You do not need
 Go, Bubblewrap, kubectl, Docker or administrator access to run the quickstart.
 
@@ -130,8 +130,11 @@ PY
 ```
 
 Expect an executable path for every tool, curl 7.76 or newer, jq 1.6 or newer,
-Python `3.12.x`, uv `0.12.0`, a Python 3.12 path, writable-directory checks with
-no output, and successful loopback binding with no output. A bind error means
+and uv `0.12.0`. `python3 --version` reports the system Python and may show
+`3.14.x`; it is used here only for the standard-library socket check.
+`uv python find 3.12` must report the separate Python 3.12 interpreter used by
+Cairn. Do not replace the system interpreter. Expect writable-directory checks
+and successful loopback binding to produce no output. A bind error means
 port 8000 is already in use. Both documented native procedures use port 8000;
 resolve the conflict before continuing, or use the Docker Compose procedure,
 which documents its `cairn_port` setting. Resolve missing tools using
