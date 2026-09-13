@@ -37,6 +37,20 @@ def build_cli_runtime(destination: Path) -> RuntimeEvidence:
         os.umask(previous)
 
 
+def write_python_entry(path: Path, body: str, *, sandbox_directory: str) -> None:
+    """Use the staged dependency-matched Python for a synthetic CLI/SDK entry."""
+    script = path.with_name(path.name + ".py")
+    script.write_text(body)
+    script.chmod(0o600)
+    path.write_text(
+        "#!/bin/sh\n"
+        "LD_LIBRARY_PATH=/runtime/cli/python/lib "
+        "exec /runtime/cli/python/bin/python3 -I -S "
+        f'{sandbox_directory}/{script.name} "$@"\n'
+    )
+    path.chmod(0o700)
+
+
 def _stage_python(destination: Path) -> None:
     """Stage the interpreter and standard library that supplied our dependencies."""
     runtime = destination / "python"
@@ -174,23 +188,16 @@ def _build(destination: Path) -> RuntimeEvidence:
                     output.write(wheel.read(wheel_member))
                 target.chmod(0o600)
     _stage_python(destination)
-    main = destination / "main.py"
-    main.write_text(
+    write_python_entry(
+        destination / "entry",
         "import sys\n"
         "sys.path.insert(0, '/runtime/cli/site-packages')\n"
         "from importlib.metadata import distribution\n"
         "entry = next(item for item in distribution('drystane-cairn').entry_points\n"
         "             if item.group == 'console_scripts' and item.name == 'cairn-memory')\n"
-        "entry.load()()\n"
+        "entry.load()()\n",
+        sandbox_directory="/runtime/cli",
     )
-    main.chmod(0o600)
-    entry = destination / "entry"
-    entry.write_text(
-        "#!/bin/sh\n"
-        "LD_LIBRARY_PATH=/runtime/cli/python/lib "
-        'exec /runtime/cli/python/bin/python3 -I -S /runtime/cli/main.py "$@"\n'
-    )
-    entry.chmod(0o700)
     return RuntimeEvidence(
         wheel_sha256,
         hashlib.sha256(requirements).hexdigest(),

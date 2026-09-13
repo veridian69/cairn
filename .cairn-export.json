@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "94f54c4647a5be24a4bf553543b85112cad62ed9",
+  "source_revision": "5bfaccc47884a9cdecac35fec7953b309b39b3ec",
   "release_configuration": {
     "files.json": "52f7491249cff02faf9deb7347f5451b3bcb1d66b9b53c7bd3d1fc4541dd7b59",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
@@ -1634,7 +1634,7 @@
       "mode": 420
     },
     "tests/client/host_workflow_fixture.py": {
-      "sha256": "40ca0d3cfa647257e24faf010bb5709de1f8631551fb774225c85ffb00e05a88",
+      "sha256": "45c3c75a3249ae4f7a4db62c3f8f75f488c1d6359b75bbea81b68d477f57af66",
       "mode": 420
     },
     "tests/client/memory_cli_process_driver.py": {
@@ -1730,7 +1730,7 @@
       "mode": 420
     },
     "tests/client/test_host_workflow_bridge.py": {
-      "sha256": "fba1e0792e97bbf34538c793ae46fd350d6f3b394e670e15b1639273e176bf8f",
+      "sha256": "f166672851f1e33eb1686302b96880bca4905768a18972435bdf616a09eb70ff",
       "mode": 420
     },
     "tests/client/test_host_workflow_native.py": {
@@ -1742,7 +1742,7 @@
       "mode": 420
     },
     "tests/client/test_host_workflow_runtime.py": {
-      "sha256": "d13963c39f58fd194ad66e6375f3cceeaf4124206a3ca69c1ab8fc0fd00cd607",
+      "sha256": "ced10e0faf92fdb6fc988351b02fa08962fd6d4bf77b954a24ac1cbfe6353c4b",
       "mode": 420
     },
     "tests/client/test_host_workflow_sandbox.py": {

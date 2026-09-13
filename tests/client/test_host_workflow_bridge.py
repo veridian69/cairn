@@ -19,6 +19,7 @@ from uuid import uuid4
 import anyio
 import anyio.lowlevel
 import pytest
+from host_workflow_fixture import write_python_entry
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.shared.exceptions import McpError
@@ -722,19 +723,20 @@ def stage_bridge(stage: Path) -> None:
     ):
         shutil.copyfile(ROOT / "scripts" / name, modules / name)
         (modules / name).chmod(0o600)
-    entry = stage / "host-runtime/entry"
-    entry.write_text("#!/usr/bin/python3 -I\n" + textwrap.dedent(SDK_DRIVER))
-    entry.chmod(0o700)
-    bridge_entry = stage / "host-runtime/bridge-entry"
-    bridge_entry.write_text(
-        "#!/usr/bin/python3 -I\n"
+    write_python_entry(
+        stage / "host-runtime/entry",
+        textwrap.dedent(SDK_DRIVER),
+        sandbox_directory="/runtime/host",
+    )
+    write_python_entry(
+        stage / "host-runtime/bridge-entry",
         "import sys\n"
         "sys.path.insert(0, '/runtime/cli/site-packages')\n"
         "sys.path.insert(0, '/runtime/host')\n"
         "from scripts.host_workflow_bridge import main\n"
-        "main()\n"
+        "main()\n",
+        sandbox_directory="/runtime/host",
     )
-    bridge_entry.chmod(0o700)
 
 
 CANCEL_DRIVER = r"""
@@ -838,10 +840,16 @@ def test_active_sdk_cancel_jailed_main_preserves_session(tmp_path: Path) -> None
     build_cli_runtime(stage / "cli-runtime")
     # Synthetic delayed CLI stand-in isolates real nested jail cleanup. The
     # actual main()/SDK/protocol/run_cli paths are unchanged. No custody claim.
-    (stage / "cli-runtime/entry").write_text(
-        "#!/usr/bin/python3 -I\nimport time\ntime.sleep(.7)\nprint('help')\n"
+    write_python_entry(
+        stage / "cli-runtime/entry",
+        "import time\ntime.sleep(.7)\nprint('help')\n",
+        sandbox_directory="/runtime/cli",
     )
-    (stage / "host-runtime/entry").write_text("#!/usr/bin/python3 -I\n" + CANCEL_DRIVER)
+    write_python_entry(
+        stage / "host-runtime/entry",
+        CANCEL_DRIVER,
+        sandbox_directory="/runtime/host",
+    )
     (stage / "host-config/bridge.json").write_text(
         json.dumps(
             {
@@ -858,13 +866,43 @@ def test_active_sdk_cancel_jailed_main_preserves_session(tmp_path: Path) -> None
 
 @pytest.mark.host_isolation
 def test_actual_jailed_sdk_bridge_and_nested_wheel_cli(
-    tmp_path: Path, memory_support: ModuleType, bridge: Any
+    tmp_path: Path,
+    memory_support: ModuleType,
+    bridge: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Run only after Main releases its immutable production runtime fixture.
     # This is scripted SDK acceptance, not Codex/Claude native host discovery.
     builder = importlib.import_module("host_workflow_fixture")
     from scripts.host_workflow_sandbox import run_host, seal
 
+    sandbox = importlib.import_module("scripts.host_workflow_sandbox")
+    original_command = sandbox._command
+    wrong_python = tmp_path / "wrong-host-python"
+    wrong_python.write_text("#!/bin/sh\necho wrong-host-python >&2\nexit 86\n")
+    wrong_python.chmod(0o700)
+
+    def without_host_python(
+        mounts: tuple[tuple[Path, str], ...], host: bool, argv: tuple[str, ...]
+    ) -> list[str]:
+        command: list[str] = original_command(mounts, host, argv)
+        offset = command.index("--remount-ro")
+        command[offset:offset] = [
+            "--ro-bind",
+            str(wrong_python),
+            str(Path("/usr/bin/python3").resolve(strict=True)),
+        ]
+        return command
+
+    monkeypatch.setattr(sandbox, "_command", without_host_python)
+    control_command = without_host_python((), False, ())
+    boundary = control_command.index("--") + 1
+    control = subprocess.run(
+        [*control_command[:boundary], "/usr/bin/python3", "--version"],
+        capture_output=True,
+        timeout=30,
+    )
+    assert control.returncode == 86 and b"wrong-host-python" in control.stderr
     stage = tmp_path / "stage"
     stage.mkdir(mode=0o700)
     stage_bridge(stage)

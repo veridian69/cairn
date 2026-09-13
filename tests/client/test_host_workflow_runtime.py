@@ -36,9 +36,8 @@ def test_actual_wheel_cli_inside_nested_sandbox(
     assert evidence.distributions
     assert not tuple((stage / "cli-runtime").rglob("*.pth"))
     assert not tuple((stage / "cli-runtime").rglob("*.pyc"))
-    entry = stage / "host-runtime/entry"
-    entry.write_text(
-        "#!/usr/bin/python3 -I\n"
+    builder.write_python_entry(
+        stage / "host-runtime/entry",
         "import json, sys\n"
         "sys.path.insert(0, '/runtime/host')\n"
         "from sandbox import run_cli\n"
@@ -47,9 +46,9 @@ def test_actual_wheel_cli_inside_nested_sandbox(
         "    result = run_cli(tuple(item['argv']), stdin=item['stdin'].encode())\n"
         "    results.append({'code': result.returncode, 'stdout': result.stdout.decode(),\n"
         "                    'stderr': result.stderr.decode()})\n"
-        "print(json.dumps(results))\n"
+        "print(json.dumps(results))\n",
+        sandbox_directory="/runtime/host",
     )
-    entry.chmod(0o700)
     assert sandbox.__file__ is not None
     shutil.copyfile(Path(sandbox.__file__), stage / "host-runtime/sandbox.py")
     (stage / "host-runtime/sandbox.py").chmod(0o600)
@@ -130,7 +129,7 @@ def test_cli_runtime_does_not_use_host_python(
     command[command.index("--remount-ro") : command.index("--remount-ro")] = [
         "--ro-bind",
         str(wrong_python),
-        "/usr/bin/python3",
+        str(Path("/usr/bin/python3").resolve(strict=True)),
     ]
     boundary = command.index("--") + 1
     control = subprocess.run(
