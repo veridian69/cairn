@@ -29,6 +29,8 @@ Start with the guided installer from the root of a trusted checkout on Linux
 back or remove what it installed:
 
 ```sh
+git clone https://github.com/veridian69/cairn.git
+cd cairn
 ./cairn-install
 ```
 
@@ -191,3 +193,10 @@ plane that prompted its design.
 </p>
 
 <p align="center"><sub>Built by Jon, Val and Spike, with a little support from Zen.</sub></p>
+
+## Project information
+
+- [RC2 release notes](docs/releases/v0.1.0-rc.2.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security reporting](SECURITY.md)
+- [Apache License 2.0](LICENSE.md) and [notices](NOTICE.md)
