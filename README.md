@@ -15,8 +15,8 @@ own Linux machine or server and connects through REST or MCP.
 ## Pick up where you left off
 
 Suppose you plan a workshop with one agent, then work with another tomorrow.
-The venue changes in between. With both agents connected to Cairn and the
-relevant updates saved, the second can retrieve the revised plan. The earlier
+The venue changes in between. With the updates saved in Cairn and both agents
+permitted to read them, the second can retrieve the revised plan. The earlier
 venue remains in the correction history, with attribution and the reason for
 the change.
 

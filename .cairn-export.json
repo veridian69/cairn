@@ -2,11 +2,11 @@
   "format": 1,
   "source_revision": "627a9e5e7cadabde3f935538220408bc94c23acc",
   "release_configuration": {
-    "files.json": "17eb6c58a42faac7021af4fffdbc5435e34953d078a83100200a8c51ca6713d5",
+    "files.json": "1817ea1aed5fd5ac82497c6fdc1a50a9100e0330ba5894a2e91b8f00e8acc73c",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "d17326aa5687abc943d402520c04bd200399ea37e437f7493a25480e025e1b4f",
-    "overlay_set_sha256": "3ca9ddf56832f3b4c376d87673064288be0d560c7caa651487e3149d0d35a282"
+    "overlay_set_sha256": "6c577d94f74d397fe1b6d5bca73a7a7646deccab2a4c5101d580396afdec53c2"
   },
   "files": {
     ".dockerignore": {
@@ -82,7 +82,7 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "dcd5b24d603e486b0b273de12fc7b2913c0c14d3656c27ef615f4510fd382224",
+      "sha256": "2f44b3e708ba921cb4d1ae8d77e3eea4e5f376144623e30c03eda41d949192ad",
       "mode": 420
     },
     "SECURITY.md": {
