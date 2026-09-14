@@ -3,24 +3,39 @@
   <img src="docs/assets/hero-light.png#gh-light-mode-only" alt="Cairn — Small steps. Solid foundations. A balanced cairn above a mountain lake at sunset." width="100%">
 </p>
 
-## A perfect memory can still be wrong.
+# Cairn
 
-Cairn is a Linux-native shared memory service for humans, agents and
-automation. It keeps attributed observations, preserves earlier beliefs when
-they are corrected and lets different perspectives coexist. Scope,
-classification and grants are enforced by the server; a stored claim does not
-become established truth merely because it was remembered.
+**Shared memory for people and AI agents that remembers who said what, keeps the record when it is corrected, and lets disagreements stand.**
 
-**Persistence is the starting point. Accountable memory is the point.**
+Switching agents or starting a fresh session shouldn't mean explaining the
+whole project again. Cairn gives your tools a shared place to save decisions,
+plans and observations, then retrieve them when you return. It runs on your
+own Linux machine or server and connects through REST or MCP.
 
-## What memory has to answer
+## Pick up where you left off
 
-- **Who said this?** Facts retain provenance and a trust class.
-- **Who may rely on it?** Realm and path scope, grants and classification govern every read and write.
-- **What changed?** Correction and invalidation preserve history rather than silently replacing it.
-- **What disagrees?** Disagreements retain both attributed endpoints; recording one does not decide who is right.
-- **Was it saved?** Mutations return durable receipts. Replaying an identical operation with the same idempotency key does not create another write.
-- **Can search cross those boundaries?** Retrieval candidates are reconciled against the authoritative catalogue before disclosure.
+Suppose you plan a workshop with one agent, then work with another tomorrow.
+The venue changes in between. With the updates saved in Cairn and both agents
+permitted to read them, the second can retrieve the revised plan. The earlier
+venue remains in the correction history, with attribution and the reason for
+the change.
+
+That is the kind of continuity Cairn is built for:
+
+- **Share useful context.** Connected agents can retrieve saved information
+  they have permission to read.
+- **Follow what changed.** Corrections preserve the earlier record. If two
+  sources disagree, Cairn can record both sides without declaring a winner.
+- **Check what was saved.** Writes return durable receipts.
+- **Keep access under control.** The server checks scope, grants and
+  classification when information is read or written.
+
+A perfect memory can still be wrong. Cairn keeps claims attributable;
+remembering something does not make it true. Agents must explicitly save
+useful context—Cairn does not automatically capture all your conversations.
+
+Self-hosted · [Apache-2.0](LICENSE.md) · REST and MCP ·
+[Release candidate v0.1.0-rc.2](docs/releases/v0.1.0-rc.2.md)
 
 ## Install Cairn
 
@@ -39,6 +54,11 @@ for the two persistent modes whether you want **Attic only** or **Attic plus
 semantic search**. The [quick install](docs/install.md#quick-install-with-the-guided-installer)
 lists the prerequisites, non-interactive commands and expected result.
 
+For a first try, choose **disposable**: it checks Attic-only memory without
+an OpenAI key. **Optional semantic search requires an OpenAI API key.**
+The installer reads that key from a protected file; see
+[supplying the key](docs/operations/guided-installation.md#supply-the-openai-key-without-exposing-it).
+
 - [Guided installer reference](docs/operations/guided-installation.md) — every
   flag, stage, recovery path and the key-file procedure for semantic search.
 - [Disposable quickstart](docs/quickstart.md) — throwaway Attic-only check,
@@ -49,22 +69,10 @@ lists the prerequisites, non-interactive commands and expected result.
 - [Kubernetes](docs/install.md#kubernetes-installation) — separate manual
   operator path; the installer does not cover clusters.
 
-RC2 (`v0.1.0-rc.2`, Python package `0.1.0rc2`) adds authenticated exact
-evidence reads through REST `/v1/read-evidence` and MCP `read-evidence`.
-The response preserves accepted UTF-8 source bytes with their SHA-256 digest,
-independently of semantic indexing. Scope, grants and classification still
-govern access; reading source evidence does not validate its claims.
-
-**Semantic search requires an OpenAI API key.** Installation and the Attic
-write/read checks work without one. The installer takes the key from a
-protected file, never from a command argument; see
-[supplying the key](docs/operations/guided-installation.md#supply-the-openai-key-without-exposing-it).
-The manual [Compose](deploy/compose/README.md#optional-semantic-retrieval) and
-[native](docs/operations/native-installation.md#optional-semantic-retrieval)
-procedures have their own credential steps. The OpenAI key is separate from
-your Cairn administrator credential.
-
 ## Interfaces
+
+Cairn is not a vector store with a chat wrapper. It is a memory *authority*:
+the thing that decides what is on record, for whom, and how it got there.
 
 Cairn exposes two compatible API families over one catalogue:
 
@@ -78,6 +86,11 @@ Generated [OpenAPI](contracts/cairn-memory-openapi-v1.json) and
 surface. The original [OpenAPI](contracts/cairn-openapi-v1.json) and
 [MCP tool](contracts/cairn-mcp-tools-v1.json) documents remain authoritative
 for `/v1`.
+
+RC2 adds authenticated exact evidence reads through REST `/v1/read-evidence`
+and MCP `read-evidence`. These return accepted UTF-8 source bytes with their
+SHA-256 digest, independently of semantic indexing and subject to the same
+access controls. Reading evidence does not validate its claims.
 
 ```mermaid
 flowchart LR
