@@ -5,7 +5,7 @@
 
 # Cairn
 
-**Shared memory for people and AI agents, with a record of who said what and what changed.**
+**Shared memory for people and AI agents that remembers who said what, keeps the record when it is corrected, and lets disagreements stand.**
 
 Switching agents or starting a fresh session shouldn't mean explaining the
 whole project again. Cairn gives your tools a shared place to save decisions,
