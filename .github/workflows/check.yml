@@ -9,17 +9,48 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: check-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: check-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
-  ordinary:
-    name: Ordinary checks
+  lightweight:
+    name: Lightweight policy and wheel checks
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: "0.12.0"
+          enable-cache: true
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - name: Offline CI policy and selection contracts
+        run: |
+          uv run --locked python -B .github/ci/test_bwrap_policy.py
+          uv run --locked python -B .github/ci/test_private_namespace_canary.py
+          uv run --locked python -B .github/ci/test_ci_split.py
+      # uv build has no --locked option; build backends are pinned in pyproject.
+      - run: uv build --wheel
+      - name: State automatic coverage boundary
+        if: always()
+        run: |
+          echo '### Automatic checks: full repository check skipped' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This PR/main gate checks offline CI policy contracts and builds the wheel. It does not run make check or certify the repository test suite.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Run the Check workflow manually on the required branch for the hosted make check; local verification remains separate.' >> "$GITHUB_STEP_SUMMARY"
+
+  full_check:
+    name: Full repository check (on demand)
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     # The hosted runner reached 97% before the former 15-minute job limit.
     # This changes only the CI envelope, not test or benchmark deadlines.
@@ -43,19 +74,20 @@ jobs:
       - run: uv build --wheel
       # make check verifies pinned renders and client-only Compose config too.
       - run: ./scripts/fetch-kubectl
-      - name: Check ordinary suite with existing coverage reporting
+      - name: Run repository check with existing coverage reporting
         env:
           PYTEST_ADDOPTS: "-m 'not host_isolation'"
         run: make check
       - name: State coverage boundary
         if: always()
         run: |
-          echo '### Ordinary checks: host isolation excluded' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Only marked real Bubblewrap/namespace tests are excluded; all other tests and existing branch-coverage reporting remain enabled.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'This job does not certify host isolation or full host acceptance. Manual diagnostics are separate; local make check still runs the full suite.' >> "$GITHUB_STEP_SUMMARY"
+          echo '### On-demand repository check: host isolation excluded' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The make check step is configured with only marked real Bubblewrap/namespace tests excluded; all other tests and existing branch-coverage reporting remain enabled when that step runs.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This run does not certify the complete test suite, host isolation or full host acceptance. Run local make check for the complete suite; manual host diagnostics remain separate.' >> "$GITHUB_STEP_SUMMARY"
 
   image:
     name: Image gate
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

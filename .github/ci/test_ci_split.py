@@ -104,33 +104,66 @@ class SplitTests(unittest.TestCase):
         self.assertEqual(actual, {p: sorted(n) for p, n in HOST_FUNCTIONS.items()})
         self.assertEqual(sum(map(len, actual.values())), 44)
 
-    def test_ordinary_gate_is_automatic_and_selector_is_step_local(self):
+    def test_automatic_gate_is_lightweight_and_full_check_is_manual(self):
         doc = workflow("check.yml")
-        self.assertEqual(set(doc["on"]), {"schedule", "pull_request", "push"})
+        self.assertEqual(
+            set(doc["on"]),
+            {"schedule", "pull_request", "push", "workflow_dispatch"},
+        )
         self.assertEqual(doc["on"]["push"]["branches"], ["main"])
         self.assertEqual(doc["on"]["schedule"], [{"cron": "17 3 * * *"}])
         self.assertNotIn("env", doc)
         jobs = doc["jobs"]
-        self.assertEqual(set(jobs), {"ordinary", "image"})
-        job = jobs["ordinary"]
-        self.assertEqual(job["name"], "Ordinary checks")
+        self.assertEqual(set(jobs), {"lightweight", "full_check", "image"})
+
+        lightweight = jobs["lightweight"]
+        self.assertEqual(lightweight["name"], "Lightweight policy and wheel checks")
+        self.assertEqual(
+            lightweight["if"],
+            "${{ github.event_name == 'pull_request' || github.event_name == 'push' }}",
+        )
+        self.assertNotIn("env", lightweight)
+        self.assertNotIn("needs", lightweight)
+        light_commands = "\n".join(step.get("run", "") for step in lightweight["steps"])
+        for required in (
+            "uv sync --locked",
+            "uv build --wheel",
+            ".github/ci/test_bwrap_policy.py",
+            ".github/ci/test_private_namespace_canary.py",
+            ".github/ci/test_ci_split.py",
+        ):
+            self.assertIn(required, light_commands)
+        for forbidden in ("fetch-kubectl", "PYTEST_ADDOPTS"):
+            self.assertNotIn(forbidden, light_commands)
+        self.assertFalse(
+            any(step.get("run") == "make check" for step in lightweight["steps"])
+        )
+        self.assertIn("does not run make check", light_commands)
+        self.assertIn(
+            "does not run make check or certify the repository test suite",
+            light_commands,
+        )
+
+        job = jobs["full_check"]
+        self.assertEqual(job["name"], "Full repository check (on demand)")
+        self.assertEqual(job["if"], "${{ github.event_name == 'workflow_dispatch' }}")
         self.assertEqual(job["timeout-minutes"], "25")
-        self.assertNotIn("if", job)
         self.assertNotIn("env", job)
         self.assertNotIn("needs", job)
         steps = job["steps"]
-        gate = [s for s in steps if s.get("run") == "make check"]
+        gate = [step for step in steps if step.get("run") == "make check"]
         self.assertEqual(len(gate), 1)
         self.assertEqual(gate[0]["env"], {"PYTEST_ADDOPTS": "-m 'not host_isolation'"})
         for step in steps:
             if step is not gate[0]:
                 self.assertNotIn("PYTEST_ADDOPTS", step.get("env", {}))
             self.assertNotIn("continue-on-error", step)
-        commands = "\n".join(s.get("run", "") for s in steps)
+        commands = "\n".join(step.get("run", "") for step in steps)
         for required in (
             "uv sync --locked",
             "uv build --wheel",
             "./scripts/fetch-kubectl",
+            "make check",
             ".github/ci/test_bwrap_policy.py",
             ".github/ci/test_private_namespace_canary.py",
             ".github/ci/test_ci_split.py",
@@ -149,7 +182,34 @@ class SplitTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, commands)
         self.assertIn("host isolation", commands)
+        self.assertIn("does not certify the complete test suite", commands)
         self.assertNotIn("continue-on-error", job)
+
+        make_check_steps = [
+            step
+            for candidate in jobs.values()
+            for step in candidate["steps"]
+            if step.get("run") == "make check"
+        ]
+        self.assertEqual(len(make_check_steps), 1)
+
+    def test_event_routes_and_concurrency_keep_manual_checks_independent(self):
+        doc = workflow("check.yml")
+        concurrency = doc["concurrency"]
+        self.assertIn("github.event_name", concurrency["group"])
+        self.assertEqual(
+            concurrency["cancel-in-progress"],
+            "${{ github.event_name != 'workflow_dispatch' }}",
+        )
+        image = doc["jobs"]["image"]
+        self.assertEqual(image["if"], "${{ github.event_name != 'workflow_dispatch' }}")
+        self.assertEqual(
+            doc["jobs"]["full_check"]["if"],
+            "${{ github.event_name == 'workflow_dispatch' }}",
+        )
+        self.assertNotEqual(
+            doc["jobs"]["lightweight"]["if"], doc["jobs"]["full_check"]["if"]
+        )
 
     def test_makefile_and_default_coverage_remain_intact(self):
         self.assertEqual(
@@ -169,7 +229,7 @@ class SplitTests(unittest.TestCase):
     def test_image_has_no_optional_dependency_or_suppression(self):
         image = workflow("check.yml")["jobs"]["image"]
         self.assertNotIn("needs", image)
-        self.assertNotIn("if", image)
+        self.assertEqual(image["if"], "${{ github.event_name != 'workflow_dispatch' }}")
         self.assertNotIn("continue-on-error", image)
         steps = image["steps"]
         self.assertIn({"run": "make image IMAGE=cairn:ci"}, steps)

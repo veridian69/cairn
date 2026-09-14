@@ -91,6 +91,7 @@ cairn = "cairn.runtime.cli:run"
 cairn-memory = "cairn.client.cli:run"
 cairn-conversation-mcp = "cairn.client.conversation_mcp:run"
 cairn-chat = "cairn.client.chat:run"
+cairn-install = "cairn_install.cli:run"
 
 [dependency-groups]
 dev = [
@@ -107,7 +108,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cairn"]
+packages = ["src/cairn", "src/cairn_install"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "integrations/codex/cairn-memory/SKILL.md" = "cairn/host_workflows/codex/cairn-memory/SKILL.md"

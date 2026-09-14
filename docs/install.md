@@ -15,9 +15,91 @@ Passing developer tests is separate from following these instructions as a new
 user. The Kubernetes path installs Cairn into an existing cluster; creating or
 repairing the cluster is separate work.
 
+## Quick install with the guided installer
+
+Most people should start here. `cairn-install` runs from a
+[trusted checkout](#obtain-a-trusted-checkout), checks prerequisites before
+preparing the runtime, installs one named Cairn, verifies it, and keeps private state
+so it can resume, roll back or remove exactly what it created. It does not
+upgrade or adopt an existing installation and does not install to Kubernetes.
+The [installer reference](operations/guided-installation.md) covers every flag
+and recovery path.
+
+Three modes, two feature choices:
+
+| Mode | What you get | Features |
+| --- | --- | --- |
+| `disposable` | Throwaway check on loopback; process stopped after verification, data retained for inspection | Attic only |
+| `native` | Persistent `systemd --user` service on loopback | Attic only, or Attic plus semantic search |
+| `docker` | Persistent Compose project with volumes | Attic only, or Attic plus semantic search |
+
+Prerequisites, all of which the installer checks itself:
+
+- All modes: Linux `x86_64`, an ordinary non-root user, the checkout on a
+  native Linux filesystem, `python3` 3.12–3.14 to launch the installer, an
+  unused loopback port (default 8000) and access to the locked dependencies.
+- Native modes: [uv 0.12.0](#get-missing-prerequisites). Persistent native
+  also needs a working systemd user manager.
+- Docker mode: Docker Engine 25.0 or newer, Compose 2.20.2 or newer and
+  trusted access to the Docker daemon.
+- Semantic search: an OpenAI API key in a protected file and outbound OpenAI
+  access. Native semantic mode also needs Docker for its FalkorDB index.
+
+Run from the root of the checkout. `./cairn-install` alone asks each question
+interactively; the non-interactive forms below make the same choices explicit
+(port 8000 and Attic only are the defaults):
+
+```sh
+./cairn-install --non-interactive --mode disposable --name trial
+./cairn-install --non-interactive --mode native --name notes --port 8123
+./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
+```
+
+For **Attic plus semantic search**, add `--semantic` to a native or docker
+command. On its first run the installer creates an empty owner-only key file
+under `~/.local/state/cairn-install/NAME/openai-api-key` and stops; put the
+key on one line in that file with a local editor, then run
+`./cairn-install resume --name NAME`. Never pass the key on the command line
+or paste it into a transcript. The
+[key-file procedure](operations/guided-installation.md#supply-the-openai-key-without-exposing-it)
+also shows how to supply a file you protected yourself.
+
+A successful run prints each stage, then a summary ending in `Status: verified`
+with the endpoint, the state file, the administrator credential path and one
+`Transcript:` line. Verified means the authenticated identity, the exact Attic
+bytes, semantic retrieval when chosen, and retention across a restart all
+passed. Persistent modes are left running on `http://127.0.0.1:PORT`;
+disposable mode stops its process. Continue with the
+[client guide](clients.md) using the credential file it named. On any failure,
+fix the reported problem and resume:
+
+```sh
+./cairn-install ls                      # recorded installations, no live probe
+./cairn-install status --name NAME      # configuration, then recorded state JSON
+./cairn-install resume --name NAME      # continue after a fix or interruption
+./cairn-install rollback --name NAME    # stop owned resources, keep all data
+./cairn-install blitz --name NAME       # delete everything owned by NAME
+```
+
+`rollback` is preserving: it stops or disables only resources the installer
+owns and keeps data, volumes, credentials and evidence, so `resume` later
+restores the same instance. `blitz` is destructive: it permanently deletes every
+file, container and volume owned by that name after you type the name to
+confirm, and it cannot be undone. Retry `blitz` if deletion is interrupted. Take a
+[backup](operations/backup-restore.md) first if the data matters. Persistent
+native services start before login only with user lingering, which the
+installer does not set; see
+[login and reboot behaviour](operations/native-installation.md#login-and-reboot-behaviour).
+
+## Manual procedures
+
+The manual procedures below and in the linked guides remain the complete,
+reproducible reference for each path. Use them to understand or reproduce what
+the installer does, to deploy to Kubernetes, or to develop Cairn.
+
 | Purpose | Follow this procedure | What remains afterwards |
 | --- | --- | --- |
-| Try the native service | [Disposable quickstart](quickstart.md) | Nothing: the script stops the server and deletes its temporary data and credential. |
+| Reproduce the disposable check by hand | [Manual disposable script](quickstart.md#manual-disposable-script) | Nothing: the script stops the server and deletes its temporary data and credential. |
 | Keep a native instance | [Persistent native installation](operations/native-installation.md) | Stable identity, owner-controlled data and credential, a systemd user service and backup procedure. |
 | Run Cairn with Attic and optional semantic search | [Docker Compose installation](../deploy/compose/README.md) | Persistent volumes, protected credentials and a managed container stack. |
 | Deploy Cairn to an existing cluster | [Kubernetes installation](#kubernetes-installation) | A dedicated namespace, persistent claims, restricted workloads and network policies. |
@@ -144,7 +226,7 @@ port 8000 is already in use. Both documented native procedures use port 8000;
 resolve the conflict before continuing, or use the Docker Compose procedure,
 which documents its `cairn_port` setting. Resolve missing tools using
 [missing prerequisites](#get-missing-prerequisites), then repeat the checklist
-before following the [disposable quickstart](quickstart.md). If locked package
+before following the [manual disposable script](quickstart.md#manual-disposable-script). If locked package
 installation cannot reach its configured indexes, ask the network or repository
 administrator for the approved access or cache. The runtime installation uses
 only locked runtime dependencies; developer tools are a separate path.

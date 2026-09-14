@@ -6,6 +6,22 @@ and Attic write/read check work without one. Follow the
 in the protected credential file before enabling search. It is separate from
 your Cairn administrator token.
 
+**Prefer the guided installer.** From the checkout root, one command builds
+the image, materialises a private Compose project, bootstraps, verifies and
+leaves the instance running, with `--semantic` adding FalkorDB and OpenAI
+search from a protected key file:
+
+```sh
+./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
+```
+
+See the [quick install](../../docs/install.md#quick-install-with-the-guided-installer)
+for prerequisites and the expected result, and the
+[installer reference](../../docs/operations/guided-installation.md) for every
+flag. This page is the manual Compose procedure behind it, kept complete for
+operators who need to reproduce, upgrade, back up or accept the stack by hand.
+The installer does not adopt a project created by this manual procedure.
+
 One Cairn instance on one host, packaged as a Compose project.
 
 **One project is one instance.** The project name is the instance name,

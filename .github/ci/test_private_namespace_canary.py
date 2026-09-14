@@ -1319,7 +1319,10 @@ class CanaryContractTests(unittest.TestCase):
     def test_ci_split_keeps_policy_offline_and_host_diagnostics_manual(self):
         source = HELPER.parent.parent / "workflows/check.yml"
         text = source.read_text()
-        self.assertIn("name: Ordinary checks", text)
+        self.assertIn("name: Lightweight policy and wheel checks", text)
+        self.assertIn("name: Full repository check (on demand)", text)
+        self.assertIn("workflow_dispatch:", text)
+        self.assertIn("github.event_name == 'workflow_dispatch'", text)
         self.assertIn(".github/ci/test_private_namespace_canary.py", text)
         self.assertIn(".github/ci/test_bwrap_policy.py", text)
         self.assertIn(".github/ci/test_ci_split.py", text)

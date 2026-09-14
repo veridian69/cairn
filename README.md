@@ -24,10 +24,28 @@ become established truth merely because it was remembered.
 
 ## Install Cairn
 
-- [Disposable native quickstart](docs/quickstart.md) — for development and testing.
-- [Persistent native service](docs/operations/native-installation.md) — manual native setup for experienced users.
-- [Docker Compose](deploy/compose/README.md) — recommended for beginners.
-- [Kubernetes](docs/install.md#kubernetes-installation) — advanced installation.
+Start with the guided installer from the root of a trusted checkout on Linux
+`x86_64`. It explains each stage, verifies the result, and can resume, roll
+back or remove what it installed:
+
+```sh
+./cairn-install
+```
+
+It asks for a mode (`disposable`, `native` or `docker`), a name and a port, and
+for the two persistent modes whether you want **Attic only** or **Attic plus
+semantic search**. The [quick install](docs/install.md#quick-install-with-the-guided-installer)
+lists the prerequisites, non-interactive commands and expected result.
+
+- [Guided installer reference](docs/operations/guided-installation.md) — every
+  flag, stage, recovery path and the key-file procedure for semantic search.
+- [Disposable quickstart](docs/quickstart.md) — throwaway Attic-only check,
+  with the manual script behind it.
+- [Persistent native service](docs/operations/native-installation.md) — the
+  manual systemd user-service procedure.
+- [Docker Compose](deploy/compose/README.md) — the manual Compose procedure.
+- [Kubernetes](docs/install.md#kubernetes-installation) — separate manual
+  operator path; the installer does not cover clusters.
 
 RC2 (`v0.1.0-rc.2`, Python package `0.1.0rc2`) adds authenticated exact
 evidence reads through REST `/v1/read-evidence` and MCP `read-evidence`.
@@ -36,9 +54,13 @@ independently of semantic indexing. Scope, grants and classification still
 govern access; reading source evidence does not validate its claims.
 
 **Semantic search requires an OpenAI API key.** Installation and the Attic
-write/read checks work without one. To enable semantic search, follow the
-[provider credential setup](deploy/compose/README.md#optional-semantic-retrieval);
-the OpenAI key is separate from your Cairn administrator credential.
+write/read checks work without one. The installer takes the key from a
+protected file, never from a command argument; see
+[supplying the key](docs/operations/guided-installation.md#supply-the-openai-key-without-exposing-it).
+The manual [Compose](deploy/compose/README.md#optional-semantic-retrieval) and
+[native](docs/operations/native-installation.md#optional-semantic-retrieval)
+procedures have their own credential steps. The OpenAI key is separate from
+your Cairn administrator credential.
 
 ## Interfaces
 
@@ -145,6 +167,19 @@ contracts, deployment renders and dependency audit:
 uv sync --locked
 make check
 ```
+
+The hosted repository check runs only on demand. In GitHub, open **Actions →
+Check → Run workflow**, select the required branch, and run it. The equivalent
+CLI command is:
+
+```sh
+gh workflow run check.yml --ref BRANCH
+```
+
+GitHub excludes the marked real Bubblewrap/namespace tests and states that
+boundary in the run summary. Run local `make check` for the complete suite;
+automatic pull-request and main checks cover CI policy and the wheel, while
+the automatic image gate remains separate.
 
 Cairn is licensed under the [Apache License 2.0](LICENSE.md). It is the memory
 service used by [Drystane](https://github.com/veridian69/drystane), the control

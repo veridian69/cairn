@@ -5,9 +5,24 @@ runs on numeric loopback as a `systemd --user` service, survives ordinary
 restart, and can start again when the user manager starts. It does not expose
 Cairn to another machine.
 
-Use the [disposable source quickstart](../quickstart.md) if you only want a
-temporary demonstration. That script deliberately deletes its instance on
-exit. Use the [Docker Compose procedure](../../deploy/compose/README.md) for a
+**Prefer the guided installer.** The same persistent native shape, with or
+without semantic search, is installed and verified by one command from the
+checkout root; it resumes after a failure and can roll back or remove what it
+created:
+
+```sh
+./cairn-install --non-interactive --mode native --name notes --port 8123
+```
+
+See the [quick install](../install.md#quick-install-with-the-guided-installer)
+for prerequisites and the expected result, and the
+[installer reference](guided-installation.md) for every flag. This page is the
+manual procedure behind it, kept complete so the result can be reproduced and
+understood step by step.
+
+Use the [disposable quickstart](../quickstart.md) if you only want a
+temporary demonstration; its manual script deliberately deletes its instance
+on exit. Use the [Docker Compose procedure](../../deploy/compose/README.md) for a
 complete local semantic-retrieval stack with FalkorDB. This native baseline
 enables Attic evidence custody but leaves semantic retrieval disabled, so its
 verification proves catalogue and evidence custody rather than search.
