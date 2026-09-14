@@ -26,8 +26,7 @@ That is the kind of continuity Cairn is built for:
   they have permission to read.
 - **Follow what changed.** Corrections preserve the earlier record. If two
   sources disagree, Cairn can record both sides without declaring a winner.
-- **Check what was saved.** Writes return durable receipts; exact retries
-  don't create duplicate writes.
+- **Check what was saved.** Writes return durable receipts.
 - **Keep access under control.** The server checks scope, grants and
   classification when information is read or written.
 
