@@ -2,11 +2,11 @@
   "format": 1,
   "source_revision": "627a9e5e7cadabde3f935538220408bc94c23acc",
   "release_configuration": {
-    "files.json": "43303ab104687c7f531fe51a264de91af3895d1659af80e4a39672298d07b118",
+    "files.json": "8226650fa36e388b275288918acb08b8209ebf4963c48da67e0bbc600af6bef4",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "d17326aa5687abc943d402520c04bd200399ea37e437f7493a25480e025e1b4f",
-    "overlay_set_sha256": "c61b6fd5cefac1750120a82a1a0ea16e66ea66481bc474faa0adcd925c40f2ad"
+    "overlay_set_sha256": "82029b2b0d88e6a65fee52c1c5015a66c96a1552a3084c7d2136832eed490f77"
   },
   "files": {
     ".dockerignore": {
@@ -82,7 +82,7 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "405e9659221e430a3f91cb1aa57a1a0f080d68ff2beb0bd4073351cb4bcce5a5",
+      "sha256": "cfbc5eaa5384d20432877ad4435e2a38c2f87f0da6b331a966d944b79fce3fd2",
       "mode": 420
     },
     "SECURITY.md": {
@@ -533,6 +533,14 @@
       "sha256": "cc3cdbcac53978433c8d2e3f3a7b82cdf9ab3833b5a548ccbb9f2acbd4701286",
       "mode": 420
     },
+    "docs/assets/shared-memory-demo.mp4": {
+      "sha256": "3f798de1ad39a51ee030a9e740ac4c1fd02a1799d5964534105fc62f6baf10c0",
+      "mode": 420
+    },
+    "docs/assets/shared-memory-demo.png": {
+      "sha256": "b8e77be2cf8adc3492bcec12d02a3d3d116f6f8b40ce778301e04e14cd1bd87c",
+      "mode": 420
+    },
     "docs/clients.md": {
       "sha256": "90e18f55f25a90cc37ffcf6cdf76680e63ac11b987e108c93cd271c65fa82741",
       "mode": 420
@@ -635,6 +643,10 @@
     },
     "docs/shared-memory-client.md": {
       "sha256": "4e9c24516b705651a0fc9d832976a500ce507508c8c4291f96d9b23dc2268899",
+      "mode": 420
+    },
+    "docs/shared-memory-demo.md": {
+      "sha256": "0beda576106dbe5da1a36878123c3e7e4dd2b15a46133b5b82122b5dd59820ee",
       "mode": 420
     },
     "docs/shared-memory.md": {
