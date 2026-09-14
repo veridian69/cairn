@@ -71,6 +71,9 @@ The installer reads that key from a protected file; see
 
 ## Interfaces
 
+Cairn is not a vector store with a chat wrapper. It is a memory *authority*:
+the thing that decides what is on record, for whom, and how it got there.
+
 Cairn exposes two compatible API families over one catalogue:
 
 - the custody and administration API at REST `/v1` and MCP `/v1/mcp`;
