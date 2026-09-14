@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expected_license=c10095c069d6fbcbeb5680e57f0f2714224ead62be325a19d79c894dbdb2334a
+expected_license=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 expected_full_license=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 actual_license=$(sha256sum LICENSE.md | cut -d' ' -f1)
 actual_full_license=$(sha256sum LICENSE-Apache-2.0.txt | cut -d' ' -f1)
