@@ -37,6 +37,21 @@ useful context—Cairn does not automatically capture all your conversations.
 Self-hosted · [Apache-2.0](LICENSE.md) · REST and MCP ·
 [Release candidate v0.1.0-rc.2](docs/releases/v0.1.0-rc.2.md)
 
+## Watch Claude and Codex share a memory
+
+Claude saves a workshop plan. Codex picks it up and changes the venue.
+When Claude returns, it can see the new plan and explain what changed—with
+the original record still there to check.
+
+[![Watch Claude and Codex use Cairn: one plan, two agents, shared memory](docs/assets/shared-memory-demo.png)](docs/assets/shared-memory-demo.mp4)
+
+**[Watch the 93-second demo](docs/assets/shared-memory-demo.mp4)** ·
+[Read the transcript and history check](docs/shared-memory-demo.md)
+
+These are real agent responses using a disposable Cairn instance and a
+fictional workshop. The layout is re-rendered for readability and waiting
+time is shortened; each turn starts fresh and retrieves its context from Cairn.
+
 ## Install Cairn
 
 Start with the guided installer from the root of a trusted checkout on Linux
