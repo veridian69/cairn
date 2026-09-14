@@ -2,11 +2,11 @@
   "format": 1,
   "source_revision": "627a9e5e7cadabde3f935538220408bc94c23acc",
   "release_configuration": {
-    "files.json": "58859a141746a2de920e5ebf07f961f8a9925b037be0c760bac530ae734c5ce7",
+    "files.json": "7b49ca5e42b9555a1ba4cc79fc03fc92e8cb031af1c7b0ef4a45976b05df1118",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "d17326aa5687abc943d402520c04bd200399ea37e437f7493a25480e025e1b4f",
-    "overlay_set_sha256": "d6fbb2a0e0c1a837b2905785b8abfbaad1a69cc91d5d686b85eeab98953d9465"
+    "overlay_set_sha256": "5a7fd7764eee26e9b15351982cc78792fac38520b5719c8eef42cc4ac1fbab25"
   },
   "files": {
     ".dockerignore": {
@@ -82,7 +82,7 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "0b5578874b8b582d2f5a1875494864617093a8f9e7d8bc9f09262c254749da52",
+      "sha256": "6d1c70453f86c23514d9b68def23c047d3360a1650b359e47ef98192110ee02a",
       "mode": 420
     },
     "SECURITY.md": {
@@ -534,7 +534,7 @@
       "mode": 420
     },
     "docs/assets/shared-memory-demo.mp4": {
-      "sha256": "3f798de1ad39a51ee030a9e740ac4c1fd02a1799d5964534105fc62f6baf10c0",
+      "sha256": "53eb39838244044dd9f99e32b5ee364967be2cf8d8ed3b028573a51d09c1407c",
       "mode": 420
     },
     "docs/assets/shared-memory-demo.png": {

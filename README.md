@@ -43,9 +43,9 @@ Claude saves a workshop plan. Codex picks it up and changes the venue.
 When Claude returns, it can see the new plan and explain what changed—with
 the original record still there to check.
 
-https://github.com/user-attachments/assets/4c36a6d5-ef1e-46c2-91f7-a9a50b9a7c05
+https://github.com/user-attachments/assets/aa46fb2f-4d26-4c57-80c2-06e709b3e540
 
-93 seconds ·
+47 seconds ·
 [Read the transcript and history check](docs/shared-memory-demo.md)
 
 These are real agent responses using a disposable Cairn instance and a
