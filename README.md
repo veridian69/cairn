@@ -43,9 +43,9 @@ Claude saves a workshop plan. Codex picks it up and changes the venue.
 When Claude returns, it can see the new plan and explain what changed—with
 the original record still there to check.
 
-[![Watch Claude and Codex use Cairn: one plan, two agents, shared memory](docs/assets/shared-memory-demo.png)](docs/assets/shared-memory-demo.mp4)
+https://github.com/user-attachments/assets/4c36a6d5-ef1e-46c2-91f7-a9a50b9a7c05
 
-**[Watch the 93-second demo](docs/assets/shared-memory-demo.mp4)** ·
+93 seconds ·
 [Read the transcript and history check](docs/shared-memory-demo.md)
 
 These are real agent responses using a disposable Cairn instance and a
