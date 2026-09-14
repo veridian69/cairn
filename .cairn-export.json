@@ -2,11 +2,11 @@
   "format": 1,
   "source_revision": "627a9e5e7cadabde3f935538220408bc94c23acc",
   "release_configuration": {
-    "files.json": "c7308aba1bf8c07347f5926ccb4a2bd2d41fd12fc9057dcc2a37f7403fa34519",
+    "files.json": "0133e8b1ca26490c26f3138de448e770e60d1daf5b3d40f5b3c195f1e50d8817",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "d17326aa5687abc943d402520c04bd200399ea37e437f7493a25480e025e1b4f",
-    "overlay_set_sha256": "fbba8a6b4f2d503302d3b3c3d91793373796a836da70e6723aa2458abe9474f0"
+    "overlay_set_sha256": "42b1a682c70d2f016a2f3974637821c56a578b084193b8c10908e042498af540"
   },
   "files": {
     ".dockerignore": {
@@ -57,6 +57,10 @@
       "sha256": "7b55f8e67b5623c4bef3fa691288da9437d79d3aba156de48d481db32ac7d16d",
       "mode": 420
     },
+    "CONTRIBUTING.md": {
+      "sha256": "d41367cb661ce216a6611363ead54c8f6db919de3eb98e3a396bbe69109487ae",
+      "mode": 420
+    },
     "Dockerfile": {
       "sha256": "21ed4700f2acf0a82816bed310a54bb7a8932b8bd476b7d7c10795387dcf4d85",
       "mode": 420
@@ -66,7 +70,7 @@
       "mode": 420
     },
     "LICENSE.md": {
-      "sha256": "c10095c069d6fbcbeb5680e57f0f2714224ead62be325a19d79c894dbdb2334a",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
       "mode": 420
     },
     "Makefile": {
@@ -78,7 +82,11 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "c3e468972abd8170791a8afedf59ff823dc2afaf90e025fc8f013da2882dc27b",
+      "sha256": "1b23a456dd5b58ca6c9f8510565a69e016834a85a710d8786359f15e6a4f7f7f",
+      "mode": 420
+    },
+    "SECURITY.md": {
+      "sha256": "cd61c4f1047d88078150b1c22a2cb43ffa54b2f7ba578f35d595ca8dd0d6dbe2",
       "mode": 420
     },
     "cairn-install": {
@@ -615,6 +623,10 @@
     },
     "docs/quickstart.md": {
       "sha256": "6951f14bf80434218c7e7edc318cbef0921a1239f7854950077e9e630a39cd26",
+      "mode": 420
+    },
+    "docs/releases/v0.1.0-rc.2.md": {
+      "sha256": "ac1669add2f41e11914008dc36b4fdaef5d2edaf5e31994c163b336ad47ea82b",
       "mode": 420
     },
     "docs/runbooks/runbook-reference-task11a-posture.md": {
