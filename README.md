@@ -107,6 +107,9 @@ and MCP `read-evidence`. These return accepted UTF-8 source bytes with their
 SHA-256 digest, independently of semantic indexing and subject to the same
 access controls. Reading evidence does not validate its claims.
 
+<details>
+<summary>View the architecture diagram</summary>
+
 ```mermaid
 flowchart LR
     C[Clients and agent hosts] --> T{REST or MCP}
@@ -119,6 +122,8 @@ flowchart LR
     O -. optional .-> P[Semantic projection]
     P -. candidates .-> S
 ```
+
+</details>
 
 ## Use Cairn day to day
 
