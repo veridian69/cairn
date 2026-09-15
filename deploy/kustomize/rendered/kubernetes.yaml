@@ -90,7 +90,7 @@ spec:
         - serve
         - --config
         - /etc/cairn/config.yaml
-        image: cairn:v0.1.0-rc.2
+        image: cairn:v0.5.0-rc.3
         livenessProbe:
           httpGet:
             path: /health/live
@@ -134,7 +134,7 @@ spec:
         - migrate
         - --config
         - /etc/cairn/config.yaml
-        image: cairn:v0.1.0-rc.2
+        image: cairn:v0.5.0-rc.3
         name: migrate
         securityContext:
           allowPrivilegeEscalation: false

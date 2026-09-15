@@ -97,3 +97,39 @@ def test_image_pin_parser_never_executes_shell_values() -> None:
     ]:
         with pytest.raises(module.EnvironmentError, match="image_pin_invalid"):
             module.falkordb_image(value)
+
+
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "ghcr.io/veridian69/cairn-falkordb",
+        "falkordb/falkordb",
+        "falkordb/falkordb-server",
+        "docker.io/falkordb/falkordb",
+        "docker.io/falkordb/falkordb-server",
+    ],
+)
+def test_image_pin_accepts_maintained_and_upstream_repositories(
+    repository: str,
+) -> None:
+    image = f"{repository}:v4.20.4-cairn.1@sha256:{'a' * 64}"
+    assert environment().falkordb_image(f"FALKORDB_IMAGE={image}\n") == image
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1",
+        f"ghcr.io/other/cairn-falkordb:v1@sha256:{'a' * 64}",
+        f"ghcr.io/veridian69/cairn-falkordb:$(touch nope)@sha256:{'a' * 64}",
+        f"ghcr.io/veridian69/cairn-falkordb:v1@sha256:{'a' * 64};touch nope",
+        f"ghcr.io/veridian69/cairn-falkordb:-option@sha256:{'a' * 64}",
+        f"ghcr.io/veridian69/cairn-falkordb:{'a' * 129}@sha256:{'a' * 64}",
+    ],
+)
+def test_image_pin_rejects_untrusted_or_invalid_derivative_references(
+    image: str,
+) -> None:
+    module = environment()
+    with pytest.raises(module.EnvironmentError, match="image_pin_invalid"):
+        module.falkordb_image(f"FALKORDB_IMAGE={image}\n")

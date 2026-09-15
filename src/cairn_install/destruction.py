@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
+import platform
 import re
 import shutil
 from pathlib import Path
@@ -17,7 +19,59 @@ from .core import (
 )
 
 
+class _DarwinStatFS(ctypes.Structure):
+    # Darwin's 64-bit-inode statfs ABI (xnu bsd/sys/mount.h). Use the
+    # INODE64 symbol on Intel: its legacy getfsstat symbol has another layout.
+    _fields_ = [
+        ("block_size", ctypes.c_uint32),
+        ("io_size", ctypes.c_int32),
+        ("counts", ctypes.c_uint64 * 5),
+        ("fsid", ctypes.c_int32 * 2),
+        ("attributes", ctypes.c_uint32 * 4),
+        ("filesystem", ctypes.c_char * 16),
+        ("mountpoint", ctypes.c_char * 1024),
+        ("source", ctypes.c_char * 1024),
+        ("reserved", ctypes.c_uint32 * 8),
+    ]
+
+
+def _darwin_mount_points() -> list[Path]:
+    try:
+        library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        symbol = {
+            "arm64": "getfsstat",
+            "x86_64": "getfsstat$INODE64",
+        }[platform.machine()]
+        query = getattr(library, symbol)
+        query.argtypes = [ctypes.POINTER(_DarwinStatFS), ctypes.c_int, ctypes.c_int]
+        query.restype = ctypes.c_int
+        count = query(None, 0, 2)  # MNT_NOWAIT: inspect without network I/O.
+        if not 0 < count <= 4096:
+            raise ValueError("invalid mount count")
+        capacity = count + 16
+        buffer = (_DarwinStatFS * capacity)()
+        observed = query(buffer, ctypes.sizeof(buffer), 2)
+        if not 0 < observed < capacity:
+            raise ValueError("mount inventory changed or failed")
+        points = []
+        for index in range(observed):
+            raw = ctypes.string_at(
+                ctypes.addressof(buffer[index]) + _DarwinStatFS.mountpoint.offset,
+                1024,
+            )
+            if b"\0" not in raw or not raw.startswith(b"/"):
+                raise ValueError("invalid mount path")
+            points.append(Path(os.fsdecode(raw.split(b"\0", 1)[0])))
+        return points
+    except (AttributeError, KeyError, OSError, ValueError) as error:
+        raise InstallError(
+            "Cannot inspect Darwin mount boundaries for blitz"
+        ) from error
+
+
 def _mount_points() -> list[Path]:
+    if platform.system() == "Darwin":
+        return _darwin_mount_points()
     # st_dev alone misses bind mounts of directories on the same filesystem.
     try:
         lines = Path("/proc/self/mountinfo").read_text().splitlines()
@@ -35,11 +89,31 @@ def _mount_points() -> list[Path]:
     return points
 
 
+def _darwin_mount_within(point: Path, directory: Path) -> bool:
+    # APFS can be case insensitive; firmlinks and symlinks also give the same
+    # directory different spellings. Compare ancestors by filesystem identity.
+    try:
+        owned = directory.stat()
+        expected = (owned.st_dev, owned.st_ino)
+        resolved = point.resolve(strict=True)
+        for ancestor in (resolved, *resolved.parents):
+            observed = ancestor.stat()
+            if (observed.st_dev, observed.st_ino) == expected:
+                return True
+        return False
+    except (OSError, RuntimeError) as error:
+        raise InstallError(
+            "Cannot resolve Darwin mount boundaries for blitz"
+        ) from error
+
+
 def check_instance_tree(ctx: Context) -> None:
     secure_directory(ctx.directory, private=True)
     canonical = ctx.directory.resolve(strict=True)
-    if any(
-        point == canonical or canonical in point.parents for point in _mount_points()
+    mounts = _mount_points()
+    if any(point == canonical or canonical in point.parents for point in mounts) or (
+        platform.system() == "Darwin"
+        and any(_darwin_mount_within(point, canonical) for point in mounts)
     ):
         raise InstallError(
             "Blitz refuses a mounted directory within the instance; unmount it first"

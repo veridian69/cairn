@@ -908,7 +908,7 @@ async def test_the_bulk_seam_leaves_the_cache_kind_to_the_table() -> None:
 
 @pytest.mark.anyio
 async def test_a_transient_failure_is_not_cached_and_a_retry_caches() -> None:
-    # R2: graphiti 0.29.3 swallows provider failures and leaves both
+    # R2: graphiti 0.30.2 swallows provider failures and leaves both
     # fields null. Caching that state would make a temporary failure
     # indistinguishable from a valid "no timestamp" answer and suppress
     # every future retry — so a failed call writes no row, and the next
@@ -1345,6 +1345,55 @@ async def test_the_bulk_override_passes_the_store_through(
     )
 
     assert len(store.rows) == 1
+
+
+@pytest.mark.anyio
+async def test_the_bulk_override_preserves_the_request_scoped_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graphiti 0.30.2 isolates concurrent groups with a per-request
+    driver in this bundle. Replacing it with the instance bundle would
+    send extraction and dedupe reads to whichever graph the instance owns."""
+    calls: list[tuple[str, object]] = []
+
+    async def extract(
+        store: object,
+        clients: object,
+        episode_context: object,
+        **kwargs: object,
+    ) -> tuple[list[list[EntityNode]], list[list[EntityEdge]]]:
+        calls.append(("extract", clients))
+        return [[]], [[]]
+
+    async def dedupe(
+        clients: object,
+        extracted_nodes: object,
+        episode_context: object,
+        entity_types: object,
+    ) -> tuple[dict[str, list[EntityNode]], dict[str, str]]:
+        calls.append(("dedupe", clients))
+        return {}, {}
+
+    monkeypatch.setattr(graphiti_module, "cached_extract_nodes_and_edges_bulk", extract)
+    monkeypatch.setattr(graphiti_bulk_module, "dedupe_nodes_bulk_incremental", dedupe)
+    instance = object.__new__(graphiti_module._CairnGraphiti)
+    instance._cairn_extraction_cache = None
+    instance._cairn_safe_logger = None
+    instance_clients = _clients()
+    request_clients = _clients()
+    instance.clients = instance_clients
+
+    await instance._extract_and_dedupe_nodes_bulk(
+        [(_episode("a"), [])],
+        edge_type_map={},
+        edge_types=None,
+        entity_types=None,
+        excluded_entity_types=None,
+        clients=request_clients,
+    )
+
+    assert calls == [("extract", request_clients), ("dedupe", request_clients)]
+    assert instance.clients is instance_clients
 
 
 def test_construct_graphiti_installs_the_seams(

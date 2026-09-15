@@ -1,6 +1,6 @@
 # Security policy
 
-Cairn `v0.1.0-rc.2` is a release candidate. There is no stable release or
+Cairn `v0.5.0-rc.3` is a release candidate. There is no stable release or
 long-term support policy yet.
 
 ## Report a vulnerability

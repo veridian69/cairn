@@ -18,7 +18,7 @@ def _node(uuid: str, name: str, labels: list[str] | None = None) -> EntityNode:
     )
 
 
-def test_cross_batch_dedupe_preserves_graphiti_0293_results() -> None:
+def test_cross_batch_dedupe_preserves_graphiti_0302_results() -> None:
     """Changing matching order, promotion or UUID compression must fail."""
     acme = _node("acme", "Acme Corporation Holdings")
     observatory = _node("observatory", "Northern Observatory")

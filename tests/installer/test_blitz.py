@@ -31,6 +31,9 @@ class Backend:
     def validate_ownership(self) -> None:
         self.calls.append("validate")
 
+    def close(self) -> None:
+        pass
+
     def blitz(self) -> None:
         self.calls.append("blitz")
         if self.fail:

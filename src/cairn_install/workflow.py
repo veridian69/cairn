@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
@@ -30,19 +31,21 @@ class Adapter(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
     def restart(self) -> None: ...
+    def close(self) -> None: ...
+    def wait_foreground(self) -> None: ...
     def rollback(self) -> None: ...
     def blitz(self) -> None: ...
     def lifecycle_argv(self, operation: str) -> list[str]: ...
 
 
-def backend(ctx: Context) -> Adapter:
+def backend(ctx: Context, *, foreground: bool = False) -> Adapter:
     if ctx.mode == "docker":
         from cairn_install.docker import Backend
 
         return Backend(ctx)
     from cairn_install.native import Backend as NativeBackend
 
-    return NativeBackend(ctx)
+    return NativeBackend(ctx, foreground=foreground)
 
 
 def stage(ctx: Context, key: str, action: Callable[[], object]) -> None:
@@ -73,14 +76,35 @@ def status_install(ctx: Context) -> dict[str, Any]:
     }
 
 
-def run_install(ctx: Context) -> dict[str, Any]:
+def run_install(ctx: Context, *, keep_running: bool = False) -> dict[str, Any]:
+    if keep_running and ctx.mode != "disposable":
+        raise InstallError(
+            "--keep-running requires disposable mode", "invalid_arguments"
+        )
     if ctx.state["status"] == "blitzing":
         raise InstallError("This instance is being deleted; run blitz again to finish")
-    adapter = backend(ctx)
+    adapter = backend(ctx, foreground=True) if keep_running else backend(ctx)
+    try:
+        return _run_install(ctx, adapter, keep_running=keep_running)
+    finally:
+        try:
+            adapter.close()
+        except InstallError as error:
+            if ctx.state["status"] == "verified":
+                ctx.state["verified_recheck"] = True
+            ctx.state["status"] = "failed"
+            ctx.state["last_error"] = ctx.redact(str(error))
+            ctx.save()
+            raise
+
+
+def _run_install(
+    ctx: Context, adapter: Adapter, *, keep_running: bool
+) -> dict[str, Any]:
     previously_verified = (
         ctx.state["status"] == "verified" or ctx.state.get("verified_recheck") is True
     )
-    if previously_verified and ctx.mode == "disposable":
+    if previously_verified and ctx.mode == "disposable" and not keep_running:
         adapter.validate_ownership()
         ctx.note(
             "This installation already passed its checks. Showing the retained result; no new data submitted."
@@ -140,7 +164,7 @@ def run_install(ctx: Context) -> dict[str, Any]:
                 )
 
             stage(ctx, "restart", restart)
-            if ctx.mode == "disposable":
+            if ctx.mode == "disposable" and not keep_running:
                 stage(ctx, "stop", adapter.stop)
                 ctx.note(
                     "Disposable test finished and its process is stopped. Its data and credentials are retained for inspection."
@@ -154,8 +178,19 @@ def run_install(ctx: Context) -> dict[str, Any]:
             + (", semantic retrieval" if ctx.semantic else "")
             + " and restart retention passed."
         )
+        if keep_running:
+            ctx.note(
+                "Cairn is ready at " + f"http://127.0.0.1:{ctx.port}. "
+                "Press Ctrl-C to stop; data and credentials will be retained."
+            )
+            try:
+                adapter.wait_foreground()
+            except KeyboardInterrupt:
+                ctx.note("Stopping the verified foreground instance; data retained.")
         return status_install(ctx)
     except (InstallError, KeyboardInterrupt) as error:
+        if ctx.state["status"] == "verified":
+            ctx.state["verified_recheck"] = True
         ctx.state["status"] = (
             "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
         )
@@ -189,13 +224,19 @@ def blitz_install(ctx: Context) -> dict[str, Any]:
     ctx.state["status"] = "blitzing"
     ctx.save()
     result = {"name": ctx.name, "instance_id": ctx.instance_id, "status": "deleted"}
-    if ctx.state.get("blitz_phase") != "resources_removed":
-        ctx.note("\n=== Remove owned services and storage permanently ===")
-        # Deletion-specific validation permits resources already removed by an
-        # earlier attempt, while rejecting surviving foreign resources.
-        backend(ctx).blitz()
-        ctx.state["blitz_phase"] = "resources_removed"
-        ctx.save()
-    ctx.note(f"Remove instance files, credentials, logs and state: {ctx.directory}")
-    remove_instance_files(ctx)
-    return result
+    adapter = backend(ctx)
+    try:
+        if ctx.state.get("blitz_phase") != "resources_removed" or (
+            ctx.mode == "native" and platform.system() == "Darwin"
+        ):
+            ctx.note("\n=== Remove owned services and storage permanently ===")
+            # Darwin re-establishes service absence and the data lease even on
+            # resumed storage deletion. Keep that lease through rmtree below.
+            adapter.blitz()
+            ctx.state["blitz_phase"] = "resources_removed"
+            ctx.save()
+        ctx.note(f"Remove instance files, credentials, logs and state: {ctx.directory}")
+        remove_instance_files(ctx)
+        return result
+    finally:
+        adapter.close()

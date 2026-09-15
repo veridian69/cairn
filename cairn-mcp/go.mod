@@ -1,5 +1,7 @@
 module github.com/veridian69/cairn/cairn-mcp
 
-go 1.22
+go 1.26.0
 
-require golang.org/x/sys v0.30.0
+toolchain go1.26.8
+
+require golang.org/x/sys v0.48.0

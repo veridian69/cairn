@@ -9,6 +9,9 @@ apiVersion: v1
 data:
   squid.conf: |
     http_port 3128
+    # Container runtimes may inherit billion-entry descriptor limits. Bound
+    # Squid's descriptor table before startup; each CONNECT uses two sockets.
+    max_filedescriptors 65536
 
     # THE OPERATOR-EDITABLE VALUE. Every destination Cairn instances on
     # this cluster may reach, and nothing else is reachable at all — not
@@ -92,7 +95,9 @@ spec:
         - -f
         - /etc/squid/squid.conf
         - -NYC
-        image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+        command:
+        - /usr/sbin/squid-gnutls
+        image: ubuntu/squid:7.2-26.04_edge@sha256:44eee73a21554c4732d6a5daee675f3a33395f36017d7bf7cc8ccb455b1f9665
         livenessProbe:
           periodSeconds: 20
           tcpSocket:

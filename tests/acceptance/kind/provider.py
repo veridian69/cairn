@@ -7,7 +7,10 @@ responses contain the smallest value admitted by the requested JSON schema;
 for extraction schemas that means empty entity and edge lists. The episode is
 still durably written to FalkorDB and remains retrievable through Graphiti's
 episode BM25 path, so ``rebuild-index`` exercises the real production adapter
-without making model quality part of a packaging test.
+without making model quality part of a packaging test. The standalone default
+retains all-zero embeddings for compatibility tests; the graph-backed Kind
+fixture explicitly requests a deterministic non-zero vector because production
+vector validation rejects a zero norm.
 """
 
 from __future__ import annotations
@@ -92,6 +95,7 @@ def value_for_schema(schema: dict[str, Any]) -> Any:
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "cairn-kind-provider/1"
+    valid_embeddings = False
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
         try:
@@ -159,6 +163,9 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(model, str):
             raise ValueError("model is absent")
         count = len(values) if isinstance(values, list) and values else 1
+        embedding = [0.0] * _EMBEDDING_DIMENSIONS
+        if self.valid_embeddings:
+            embedding[0] = 1.0
         return {
             "object": "list",
             "model": model,
@@ -166,7 +173,7 @@ class _Handler(BaseHTTPRequestHandler):
                 {
                     "object": "embedding",
                     "index": index,
-                    "embedding": [0.0] * _EMBEDDING_DIMENSIONS,
+                    "embedding": embedding,
                 }
                 for index in range(count)
             ],
@@ -185,13 +192,23 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
-def make_server(host: str, port: int) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), _Handler)
+def make_server(
+    host: str, port: int, *, valid_embeddings: bool = False
+) -> ThreadingHTTPServer:
+    handler = type(
+        "ConfiguredHandler",
+        (_Handler,),
+        {"valid_embeddings": valid_embeddings},
+    )
+    return ThreadingHTTPServer((host, port), handler)
 
 
 def main(argv: list[str]) -> int:
     port = int(argv[1])
-    server = make_server("0.0.0.0", port)
+    valid_embeddings = len(argv) == 3 and argv[2] == "--valid-embeddings"
+    if len(argv) not in (2, 3) or (len(argv) == 3 and not valid_embeddings):
+        raise ValueError("usage: provider.py PORT [--valid-embeddings]")
+    server = make_server("0.0.0.0", port, valid_embeddings=valid_embeddings)
     print(f"listening on {port}", flush=True)
     try:
         server.serve_forever()

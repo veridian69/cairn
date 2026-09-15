@@ -12,6 +12,7 @@ import hashlib
 import os
 import sqlite3
 import stat
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -244,6 +245,10 @@ def _connect(data_path: Path) -> Iterator[sqlite3.Connection]:
         connection.execute("PRAGMA busy_timeout = 5000")
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA trusted_schema = OFF")
+        # Match catalogue custody: FULL alone does not request Darwin's
+        # stronger flush of drive buffers, and fullfsync is connection-local.
+        if sys.platform == "darwin":
+            connection.execute("PRAGMA fullfsync = ON")
         journal_mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()
         if journal_mode != ("wal",):
             raise AtticStorageError("attic_profile_unavailable")
@@ -302,6 +307,8 @@ def _verify_profile(connection: sqlite3.Connection) -> None:
         "synchronous": 2,
         "trusted_schema": 0,
     }
+    if sys.platform == "darwin":
+        expected["fullfsync"] = 1
     for pragma, value in expected.items():
         if connection.execute(f"PRAGMA {pragma}").fetchone() != (value,):
             raise AtticStorageError("attic_profile_unavailable")

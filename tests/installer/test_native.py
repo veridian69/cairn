@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import platform
 import signal
 import socket
 import subprocess
@@ -88,7 +89,7 @@ class FakeContext:
         if argv[:2] == ["uname", "-m"]:
             return "x86_64\n"
         if argv[:2] == ["uv", "--version"]:
-            return "uv 0.12.0\n"
+            return "uv 0.12.14\n"
         if "is-system-running" in argv:
             return "running\n"
         if argv[:3] == ["docker", "version", "--format"]:
@@ -163,7 +164,7 @@ def test_prepare_installs_locked_runtime_and_stable_configuration(
             "--no-dev",
             "--no-editable",
             "--python",
-            "3.12",
+            "3.14",
         ],
         {
             "cwd": ctx.source,
@@ -522,6 +523,81 @@ def test_fresh_semantic_ownership_validation_does_not_allocate_port(
     assert "native_index_port" not in ctx.state["resources"]
 
 
+@pytest.mark.parametrize(
+    "system,mode",
+    [
+        ("Windows", "disposable"),
+        ("FreeBSD", "disposable"),
+        ("Windows", "native"),
+        ("FreeBSD", "native"),
+    ],
+)
+def test_preflight_rejects_non_linux_before_host_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str, mode: str
+) -> None:
+    ctx = FakeContext(tmp_path, mode=mode)
+    backend = Backend(ctx)  # type: ignore[arg-type]
+    monkeypatch.setattr(platform, "system", lambda: system)
+
+    def unexpected_host_check() -> int:
+        pytest.fail("Unsupported OS reached native host checks")
+
+    monkeypatch.setattr(os, "geteuid", unexpected_host_check)
+
+    with pytest.raises(
+        InstallError, match="Native installation requires Linux or macOS"
+    ):
+        backend.preflight()
+
+    assert ctx.commands == []
+    assert ctx.state["resources"] == {}
+    assert ctx.saved == 0
+
+
+@pytest.mark.parametrize("architecture", ["arm64", "x86_64"])
+def test_darwin_disposable_selects_owned_foreground(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, architecture: str
+) -> None:
+    ctx = FakeContext(tmp_path)
+    original = ctx.command
+
+    def command(argv: list[str], **kwargs: Any) -> str:
+        if argv[:2] == ["uname", "-m"]:
+            return architecture
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(ctx, "command", command)
+    backend = Backend(cast(Context, ctx))
+    monkeypatch.setattr(backend, "_require_available_port", lambda: None)
+    backend.preflight()
+    assert backend.foreground
+    assert not backend.is_running()
+    assert ctx.state["resources"] == {}
+
+
+def test_darwin_semantic_refuses_before_host_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    backend = Backend(cast(Context, ctx))
+    with pytest.raises(InstallError, match="Attic only"):
+        backend.preflight()
+    assert ctx.commands == []
+
+
+def test_foreground_requires_disposable_and_linux_close_is_noop(tmp_path: Path) -> None:
+    ctx = FakeContext(tmp_path, mode="native")
+    with pytest.raises(InstallError, match="requires disposable"):
+        Backend(cast(Context, ctx), foreground=True)
+    backend = Backend(cast(Context, ctx))
+    backend.close()
+    assert ctx.commands == []
+    assert ctx.saved == 0
+
+
 def test_preflight_accepts_uv_platform_build_detail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -533,7 +609,7 @@ def test_preflight_accepts_uv_platform_build_detail(
     def platform_uv(argv: list[str], **kwargs: Any) -> str:
         if argv[:2] == ["uv", "--version"]:
             ctx.commands.append((argv, kwargs))
-            return "uv 0.12.0 (x86_64-unknown-linux-gnu)\n"
+            return "uv 0.12.14 (x86_64-unknown-linux-gnu)\n"
         return original(argv, **kwargs)
 
     ctx.command = platform_uv  # type: ignore[method-assign]

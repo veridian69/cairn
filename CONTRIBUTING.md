@@ -6,10 +6,11 @@ interface changes in an issue before investing in an implementation.
 
 ## Development setup
 
-Cairn requires Linux, Python 3.12, uv 0.12.0, Go, Docker with the Compose
-plugin, and the other tools listed in the
-[developer prerequisites](docs/install.md#full-developer-validation). From a
-trusted checkout:
+Cairn's source launcher accepts host Python 3.12–3.14. Its locked managed
+application runtime and container use Python 3.14. Development also requires
+Linux, uv 0.12.14, Go, Docker with the Compose plugin, and the other tools
+listed in the [developer prerequisites](docs/install.md#full-developer-validation).
+From a trusted checkout:
 
 ```sh
 uv sync --locked

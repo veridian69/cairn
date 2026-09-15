@@ -111,7 +111,7 @@ spec:
         env:
         - name: HTTPS_PROXY
           value: http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128
-        image: cairn:v0.1.0-rc.2
+        image: cairn:v0.5.0-rc.3
         livenessProbe:
           httpGet:
             path: /health/live
@@ -155,7 +155,7 @@ spec:
         - migrate
         - --config
         - /etc/cairn/config.yaml
-        image: cairn:v0.1.0-rc.2
+        image: cairn:v0.5.0-rc.3
         name: migrate
         securityContext:
           allowPrivilegeEscalation: false
@@ -238,7 +238,7 @@ spec:
           value: "0"
         - name: FALKORDB_ARGS
           value: MAX_QUEUED_QUERIES 200 TIMEOUT 5000 RESULTSET_SIZE 10000
-        image: falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62
+        image: ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578
         livenessProbe:
           periodSeconds: 20
           tcpSocket:

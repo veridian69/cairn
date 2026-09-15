@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 FALKORDB_IMAGE = (
-    "falkordb/falkordb:v4.20.4@sha256:"
-    "adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62"
+    "ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:"
+    "37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578"
 )
 
 _SECRET_INIT = """\

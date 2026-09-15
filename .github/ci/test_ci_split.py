@@ -124,6 +124,13 @@ class SplitTests(unittest.TestCase):
         )
         self.assertNotIn("env", lightweight)
         self.assertNotIn("needs", lightweight)
+        light_setup_python = [
+            step
+            for step in lightweight["steps"]
+            if "actions/setup-python@" in step.get("uses", "")
+        ]
+        self.assertEqual(len(light_setup_python), 1)
+        self.assertEqual(light_setup_python[0]["with"]["python-version"], "3.14")
         light_commands = "\n".join(step.get("run", "") for step in lightweight["steps"])
         for required in (
             "uv sync --locked",
@@ -145,12 +152,30 @@ class SplitTests(unittest.TestCase):
         )
 
         job = jobs["full_check"]
-        self.assertEqual(job["name"], "Full repository check (on demand)")
+        self.assertEqual(
+            job["name"],
+            "Full repository check (Python ${{ matrix.python-version }}, on demand)",
+        )
         self.assertEqual(job["if"], "${{ github.event_name == 'workflow_dispatch' }}")
         self.assertEqual(job["timeout-minutes"], "25")
-        self.assertNotIn("env", job)
+        self.assertEqual(
+            job["strategy"],
+            {
+                "fail-fast": "false",
+                "matrix": {"python-version": ["3.12", "3.13", "3.14"]},
+            },
+        )
+        self.assertEqual(job["env"], {"UV_PYTHON": "${{ matrix.python-version }}"})
         self.assertNotIn("needs", job)
         steps = job["steps"]
+        setup_python = [
+            step for step in steps if "actions/setup-python@" in step.get("uses", "")
+        ]
+        self.assertEqual(len(setup_python), 1)
+        self.assertEqual(
+            setup_python[0]["with"]["python-version"],
+            "${{ matrix.python-version }}",
+        )
         gate = [step for step in steps if step.get("run") == "make check"]
         self.assertEqual(len(gate), 1)
         self.assertEqual(gate[0]["env"], {"PYTEST_ADDOPTS": "-m 'not host_isolation'"})
@@ -261,6 +286,13 @@ class SplitTests(unittest.TestCase):
         )
         self.assertNotIn("continue-on-error", job)
         self.assertEqual(job["timeout-minutes"], "15")
+        setup_python = [
+            step
+            for step in job["steps"]
+            if "actions/setup-python@" in step.get("uses", "")
+        ]
+        self.assertEqual(len(setup_python), 1)
+        self.assertEqual(setup_python[0]["with"]["python-version"], "3.14")
         commands = "\n".join(s.get("run", "") for s in job["steps"])
         self.assertIn('test "$CAIRN_RUNNER_ENVIRONMENT" = github-hosted', commands)
         self.assertIn("pytest -n auto --no-cov -m host_isolation", commands)

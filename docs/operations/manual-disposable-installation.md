@@ -21,8 +21,8 @@ Complete the [disposable native prerequisites](../install.md#disposable-native-q
 before continuing. The path-specific summary is:
 
 - Linux on a native Linux filesystem
-- Python 3.12
-- uv 0.12.0
+- Python 3.12–3.14 as `python3`; uv installs Cairn's managed Python 3.14 runtime
+- uv 0.12.14
 - curl 8.4.0 or newer and `jq`
 
 From the repository root, install the exact locked environment:

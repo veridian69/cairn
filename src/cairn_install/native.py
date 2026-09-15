@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import secrets
 import socket
 import stat
@@ -20,7 +21,7 @@ from .native_index import (
     stop_process,
 )
 
-_UV_VERSION = "0.12.0"
+_UV_VERSION = "0.12.14"
 _PROCESS_RESOURCE = "native_process"
 _PROCESS_STATUS = "native_process_status"
 _UNIT_RESOURCE = "native_unit"
@@ -39,10 +40,40 @@ def _vendor_dropin_directory() -> Path:
 
 
 class Backend:
-    def __init__(self, ctx: Context) -> None:
+    def __init__(self, ctx: Context, *, foreground: bool = False) -> None:
         if ctx.mode not in {"disposable", "native"}:
             raise InstallError(f"Native backend cannot install mode {ctx.mode}")
         self.ctx = ctx
+        if ctx.mode == "native":
+            system = platform.system()
+            keys = ctx.state["resources"]
+            if (
+                system == "Linux"
+                and any(key.startswith("native_launch_agent") for key in keys)
+            ) or (
+                system == "Darwin"
+                and any(key.startswith("native_unit") for key in keys)
+            ):
+                raise InstallError(
+                    "Native service manager receipt belongs to another platform"
+                )
+        if foreground and ctx.mode != "disposable":
+            raise InstallError("Foreground execution requires disposable mode")
+        self.foreground = ctx.mode == "disposable" and (
+            foreground
+            or platform.system() == "Darwin"
+            or "native_foreground" in ctx.state["resources"]
+        )
+        from .foreground import ForegroundProcess
+
+        self._foreground = ForegroundProcess(ctx) if self.foreground else None
+        from .launchd import DarwinLaunchAgent
+
+        self._launch_agent = (
+            DarwinLaunchAgent(ctx)
+            if platform.system() == "Darwin" and ctx.mode == "native"
+            else None
+        )
         self.config_path = ctx.root / "config.yaml"
         self.data_path = ctx.root / "data"
         self.credentials_path = ctx.root / "credentials"
@@ -55,18 +86,25 @@ class Backend:
         return self.runtime_path / "bin" / "python"
 
     def preflight(self) -> None:
+        system = platform.system()
+        if system not in {"Linux", "Darwin"}:
+            raise InstallError("Native installation requires Linux or macOS")
+        if system == "Darwin" and self.ctx.semantic:
+            raise InstallError(
+                "macOS installation currently supports catalogue and Attic only"
+            )
         if not (3, 12) <= sys.version_info[:2] <= (3, 14):
             raise InstallError("The installer needs host Python 3.12–3.14")
         if os.geteuid() == 0:
             raise InstallError(
                 "Run the native installer as its dedicated non-root user"
             )
-        if (
-            self.ctx.command(["uname", "-m"], cwd=self.ctx.directory).strip()
-            != "x86_64"
+        architecture = self.ctx.command(["uname", "-m"], cwd=self.ctx.directory).strip()
+        if architecture not in (
+            {"x86_64", "arm64"} if system == "Darwin" else {"x86_64"}
         ):
             raise InstallError(
-                "Native installation currently supports Linux x86_64 only"
+                "Unsupported native architecture; Linux requires x86_64, macOS requires x86_64 or arm64"
             )
         uv_version = self.ctx.command(
             ["uv", "--version"], cwd=self.ctx.directory
@@ -84,7 +122,9 @@ class Backend:
                 raise InstallError(f"Installer source is missing {path}") from error
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
                 raise InstallError(f"Installer source file is not regular: {path}")
-        if self.ctx.mode == "native":
+        if self._launch_agent is not None:
+            self._launch_agent.preflight()
+        elif self.ctx.mode == "native":
             state = self.ctx.command(
                 ["systemctl", "--user", "is-system-running"],
                 cwd=self.ctx.directory,
@@ -107,7 +147,7 @@ class Backend:
             secure_directory(directory, private=True)
         self.ctx.state["resources"].setdefault(
             "native_runtime",
-            {"path": str(self.runtime_path), "python": "3.12", "uv": _UV_VERSION},
+            {"path": str(self.runtime_path), "python": "3.14", "uv": _UV_VERSION},
         )
         self.ctx.save()
         self.ctx.command(
@@ -118,7 +158,7 @@ class Backend:
                 "--no-dev",
                 "--no-editable",
                 "--python",
-                "3.12",
+                "3.14",
             ],
             cwd=self.ctx.source,
             env={"UV_PROJECT_ENVIRONMENT": str(self.runtime_path)},
@@ -131,11 +171,15 @@ class Backend:
             self._index.prepare()
 
     def validate_ownership(self) -> None:
+        if self._foreground is not None:
+            self._foreground.validate()
         if self.config_path.exists() or self.config_path.is_symlink():
             self.ctx.check_file(self.config_path)
         elif self._file_was_recorded(self.config_path):
             raise InstallError("Owned native configuration disappeared")
-        if self.ctx.mode == "native":
+        if self._launch_agent is not None:
+            self._launch_agent.validate_ownership()
+        elif self.ctx.mode == "native":
             receipt = self.ctx.state["resources"].get(_UNIT_RESOURCE)
             if receipt is not None:
                 unit_path, _ = self._validated_unit_receipt(receipt)
@@ -155,6 +199,10 @@ class Backend:
             self._index.validate_ownership()
 
     def is_running(self) -> bool:
+        if self._launch_agent is not None:
+            return self._launch_agent.is_running()
+        if self._foreground is not None:
+            return self._foreground.running()
         if self.ctx.mode == "native":
             receipt = self.ctx.state["resources"].get(_UNIT_RESOURCE)
             if receipt is None or receipt.get("status") == "removed":
@@ -190,14 +238,36 @@ class Backend:
         return False
 
     def start(self) -> None:
+        if self._launch_agent is not None:
+            self._launch_agent.start()
+            return
         if self._index is not None:
             self._index.start()
-        if self.ctx.mode == "native":
+        if self._foreground is not None:
+            if not self._foreground.running():
+                self._require_available_port()
+            self._foreground.start(
+                [
+                    str(self.runtime_python),
+                    str(self.runtime_path / "bin" / "cairn"),
+                    "serve",
+                    "--config",
+                    str(self.config_path),
+                ],
+                self.service_log,
+            )
+        elif self.ctx.mode == "native":
             self._start_unit()
         else:
             self._start_process()
 
     def stop(self) -> None:
+        if self._launch_agent is not None:
+            self._launch_agent.stop()
+            return
+        if self._foreground is not None:
+            self._foreground.stop()
+            return
         if self.ctx.mode == "native":
             receipt = self.ctx.state["resources"].get(_UNIT_RESOURCE)
             if receipt is None or receipt.get("status") == "removed":
@@ -234,6 +304,9 @@ class Backend:
         self.ctx.save()
 
     def restart(self) -> None:
+        if self._launch_agent is not None:
+            self._launch_agent.restart()
+            return
         if self.ctx.mode == "native":
             receipt = self.ctx.state["resources"].get(_UNIT_RESOURCE)
             if receipt is None or receipt.get("status") == "removed":
@@ -252,8 +325,26 @@ class Backend:
         self.stop()
         self.start()
 
+    def close(self) -> None:
+        if self._launch_agent is not None:
+            self._launch_agent.close()
+        if self._foreground is not None:
+            self._foreground.close()
+
+    def wait_foreground(self) -> None:
+        if self._foreground is None:
+            raise InstallError(
+                "Foreground waiting requires a parent-owned disposable process"
+            )
+        self._foreground.wait()
+
     def rollback(self) -> None:
-        if self.ctx.mode == "native":
+        if self._launch_agent is not None:
+            try:
+                self._launch_agent.remove()
+            finally:
+                self._launch_agent.close()
+        elif self.ctx.mode == "native":
             receipt = self.ctx.state["resources"].get(_UNIT_RESOURCE)
             if receipt is not None and receipt.get("status") != "removed":
                 unit_path, service = self._validated_unit_receipt(receipt)
@@ -309,6 +400,11 @@ class Backend:
     def blitz(self) -> None:
         """Remove all proved-owned native runtime resources and semantic data."""
         resources = self.ctx.state["resources"]
+        if self._launch_agent is not None:
+            self._launch_agent.remove()
+            resources["native_blitz"] = "complete"
+            self.ctx.save()
+            return
         resources["native_blitz_intent"] = "remove_all_owned_resources"
         self.ctx.save()
 
@@ -324,7 +420,7 @@ class Backend:
                 self._blitz_unit(*unit)
         else:
             self.stop()
-            receipt = self._current_process()
+            receipt = self._current_process() if self._foreground is None else None
             if receipt is not None and process_identity(receipt.pid) == receipt:
                 raise InstallError(
                     "Owned disposable process remains after blitz; refusing data deletion"

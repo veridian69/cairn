@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import platform
 import signal
 import stat
 import sys
@@ -143,6 +144,11 @@ def _parser() -> ArgumentParser:
     parser.add_argument("--name")
     parser.add_argument("--port", type=int)
     parser.add_argument("--semantic", action="store_true")
+    parser.add_argument(
+        "--keep-running",
+        action="store_true",
+        help="keep a verified disposable instance in the foreground until Ctrl-C",
+    )
     parser.add_argument("--provider-key-file", type=Path)
     parser.add_argument(
         "--state-root", type=Path, default=Path("~/.local/state/cairn-install")
@@ -201,6 +207,9 @@ def _prompt_port(non_interactive: bool) -> int:
 def _prompt_semantic(mode: str, non_interactive: bool) -> bool:
     if mode == "disposable":
         print("Features: Attic only (disposable mode keeps semantic search disabled).")
+        return False
+    if mode == "native" and platform.system() == "Darwin":
+        print("Features: Attic only (macOS native does not enable semantic search).")
         return False
     if non_interactive:
         return False
@@ -269,6 +278,10 @@ def _new_configuration(
     args: argparse.Namespace, default_source: Path | None
 ) -> tuple[str, str, int, bool, Path, str]:
     mode = args.mode or _prompt_mode(args.non_interactive)
+    if args.keep_running and mode != "disposable":
+        raise InstallError(
+            "--keep-running requires disposable mode", "invalid_arguments"
+        )
     if mode not in MODES:
         raise InstallError(
             "Mode must be disposable, native or docker", "invalid_arguments"
@@ -292,6 +305,7 @@ def _new_configuration(
             "Disposable mode supports Attic only; semantic search is unavailable.",
             "invalid_arguments",
         )
+    _validate_platform_features(mode, semantic)
     if not args.semantic:
         semantic = _prompt_semantic(mode, args.non_interactive)
     source_value = args.source or default_source
@@ -302,6 +316,14 @@ def _new_configuration(
         )
     source = validate_source(source_value)
     return name, mode, port, semantic, source, source_fingerprint(source)
+
+
+def _validate_platform_features(mode: str, semantic: bool) -> None:
+    if mode == "native" and semantic and platform.system() == "Darwin":
+        raise InstallError(
+            "macOS native supports Attic only; semantic search is unavailable.",
+            "invalid_arguments",
+        )
 
 
 def _assert_immutable(state: dict[str, Any], requested: dict[str, Any]) -> None:
@@ -439,6 +461,10 @@ def _transcript_footer(args: argparse.Namespace | None, *, failed: bool) -> None
 def _run(args: argparse.Namespace, default_source: Path | None) -> None:
     state_root = _absolute_safe_path(args.state_root, purpose="State root")
     operation = args.operation
+    if args.keep_running and operation not in {"install", "resume"}:
+        raise InstallError(
+            "--keep-running is only valid with install or resume", "invalid_arguments"
+        )
     if args.yes and operation != "blitz":
         raise InstallError(
             "--yes is only valid with blitz",
@@ -510,6 +536,10 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
         with open_context(state_root, name) as ctx:
             from . import workflow
 
+            if args.keep_running and ctx.mode != "disposable":
+                raise InstallError(
+                    "--keep-running requires disposable mode", "invalid_arguments"
+                )
             ctx.verbose = args.verbose
             args.transcript_path = ctx.directory / "commands.log"
             source = validate_source(args.source or ctx.source)
@@ -527,10 +557,17 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 source=source,
                 state_root=state_root,
             )
+            _validate_platform_features(ctx.mode, ctx.semantic)
             if ctx.semantic:
                 _prepare_provider_key(ctx, args.provider_key_file)
             _render_result(
-                workflow.run_install(ctx), operation=operation, verbose=args.verbose
+                (
+                    workflow.run_install(ctx, keep_running=True)
+                    if args.keep_running
+                    else workflow.run_install(ctx)
+                ),
+                operation=operation,
+                verbose=args.verbose,
             )
         return
 
@@ -562,7 +599,13 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
         if semantic:
             _prepare_provider_key(ctx, args.provider_key_file)
         _render_result(
-            workflow.run_install(ctx), operation=operation, verbose=args.verbose
+            (
+                workflow.run_install(ctx, keep_running=True)
+                if args.keep_running
+                else workflow.run_install(ctx)
+            ),
+            operation=operation,
+            verbose=args.verbose,
         )
 
 

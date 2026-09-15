@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
@@ -23,11 +23,14 @@ def _default(value: object) -> object:
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, datetime):
-        timestamp = canonical_timestamp(value)
-        # The catalogue's fixed-width timestamp format is also the future
-        # custody boundary. Some libc implementations omit year padding;
-        # never accept preparation that cannot survive its restart decoder.
-        if len(timestamp) != 27:
+        # Preparation retains the accepted UTC year boundary even when a
+        # newer interpreter pads early years that older runtimes rejected.
+        try:
+            utc = value.astimezone(UTC)
+            timestamp = canonical_timestamp(utc)
+        except (OverflowError, ValueError) as error:
+            raise ValueError("invalid_session_timestamp") from error
+        if utc.year < 1000 or len(timestamp) != 27:
             raise ValueError("invalid_session_timestamp")
         return timestamp
     if isinstance(value, Enum):

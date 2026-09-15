@@ -1,6 +1,6 @@
 """Pinned Graphiti bulk-deduplication compatibility seam.
 
-Graphiti 0.29.3 rebuilds its complete MinHash/LSH candidate index for each
+Graphiti 0.30.2 rebuilds its complete MinHash/LSH candidate index for each
 node in the deterministic cross-batch pass. This module retains that
 release's resolution semantics while adding each canonical candidate to one
 index once. Delete it when the pinned dependency supplies an incremental
@@ -19,7 +19,7 @@ from graphiti_core.utils.maintenance.node_operations import resolve_extracted_no
 from pydantic import BaseModel
 
 _GRAPHITI_CORE_VERSION = version("graphiti-core")
-_GRAPHITI_BULK_COMPATIBILITY_VERSION = "0.29.3"
+_GRAPHITI_BULK_COMPATIBILITY_VERSION = "0.30.2"
 
 
 def _require_graphiti_bulk_compatibility() -> None:
@@ -41,7 +41,7 @@ def _add_candidate(
     indexes: dedup_helpers.DedupCandidateIndexes,
     candidate: EntityNode,
 ) -> None:
-    """Add one canonical node using Graphiti 0.29.3's index rules."""
+    """Add one canonical node using Graphiti 0.30.2's index rules."""
     indexes.existing_nodes.append(candidate)
     normalized = dedup_helpers._normalize_string_exact(candidate.name)
     indexes.normalized_existing[normalized].append(candidate)
@@ -93,7 +93,7 @@ def _dedupe_nodes_across_batch(
             canonical_nodes[node.uuid] = node
             if replacing:
                 # A repeated UUID with a different unmatched name replaces the
-                # canonical value in 0.29.3. Preserve that rare behaviour; it
+                # canonical value in 0.30.2. Preserve that rare behaviour; it
                 # is not the distinct-node path responsible for P-87's O(n²).
                 indexes = dedup_helpers._build_candidate_indexes(
                     list(canonical_nodes.values())
@@ -131,7 +131,7 @@ async def dedupe_nodes_bulk_incremental(
     episode_tuples: list[tuple[EpisodicNode, list[EpisodicNode]]],
     entity_types: dict[str, type[BaseModel]] | None = None,
 ) -> tuple[dict[str, list[EntityNode]], dict[str, str]]:
-    """Graphiti 0.29.3's provider pass followed by the incremental pass."""
+    """Graphiti 0.30.2's provider pass followed by the incremental pass."""
     _require_graphiti_bulk_compatibility()
     first_pass_results = await semaphore_gather(
         *[

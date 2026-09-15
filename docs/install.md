@@ -5,11 +5,11 @@ write/read checks need no OpenAI key. The key is separate from your Cairn
 administrator credential; follow your chosen guide's semantic setup to store
 it securely before enabling search.
 
-Choose one path before installing tools. These instructions target Linux
-`x86_64`, including WSL with a native Linux checkout; the persistent service
-requires a working systemd user manager. Keep the checkout, Python environment
-and data on Linux storage, not `/mnt/c`. Other platforms and architectures
-have not completed this installation acceptance exercise.
+Choose one path before installing tools. Linux `x86_64`, including WSL with a
+native Linux checkout, supports the systemd native service and optional semantic
+search. macOS 26 Intel and Apple Silicon support catalogue memory and Attic
+through either a foreground process or a login-scoped launchd native service. Keep a
+Linux checkout, Python environment and data on Linux storage, not `/mnt/c`.
 
 Passing developer tests is separate from following these instructions as a new
 user. The Kubernetes path installs Cairn into an existing cluster; creating or
@@ -30,16 +30,20 @@ Three modes, two feature choices:
 | Mode | What you get | Features |
 | --- | --- | --- |
 | `disposable` | Throwaway check on loopback; process stopped after verification, data retained for inspection | Attic only |
-| `native` | Persistent `systemd --user` service on loopback | Attic only, or Attic plus semantic search |
+| `native` | Persistent `systemd --user` service on Linux, or per-user launchd service on macOS | Linux: Attic only or Attic plus semantic search; macOS: Attic only |
 | `docker` | Persistent Compose project with volumes | Attic only, or Attic plus semantic search |
 
 Prerequisites, all of which the installer checks itself:
 
-- All modes: Linux `x86_64`, an ordinary non-root user, the checkout on a
+- Linux modes: Linux `x86_64`, an ordinary non-root user, the checkout on a
   native Linux filesystem, `python3` 3.12–3.14 to launch the installer, an
   unused loopback port (default 8000) and access to the locked dependencies.
-- Native modes: [uv 0.12.0](#get-missing-prerequisites). Persistent native
-  also needs a working systemd user manager.
+- macOS memory/Attic modes: an ordinary macOS account, a trusted local checkout,
+  Python 3.12–3.14, an unused numeric-loopback port and the [macOS foreground
+  prerequisites](operations/macos-foreground.md#requirements).
+- Native modes: [uv 0.12.14](#get-missing-prerequisites). Linux persistent
+  native needs a systemd user manager; macOS native needs a logged-in user
+  launchd session.
 - Docker mode: Docker Engine 25.0 or newer, Compose 2.20.2 or newer and
   trusted access to the Docker daemon.
 - Semantic search: an OpenAI API key in a protected file and outbound OpenAI
@@ -55,8 +59,12 @@ interactively; the non-interactive forms below make the same choices explicit
 ./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
 ```
 
-For **Attic plus semantic search**, add `--semantic` to a native or docker
-command. On its first run the installer creates an empty owner-only key file
+For RC3 semantic installs, first download and load the [maintained FalkorDB
+offline image](../deploy/falkordb/README.md#install-the-rc3-offline-image). Its
+loader needs Docker's containerd image store; this image is not yet on GHCR.
+
+For **Attic plus semantic search**, add `--semantic` to a Linux native or docker
+command. macOS native supports Attic only. On its first run the installer creates an empty owner-only key file
 under `~/.local/state/cairn-install/NAME/openai-api-key` and stops; put the
 key on one line in that file with a local editor, then run
 `./cairn-install resume --name NAME`. Never pass the key on the command line
@@ -87,9 +95,10 @@ restores the same instance. `blitz` is destructive: it permanently deletes every
 file, container and volume owned by that name after you type the name to
 confirm, and it cannot be undone. Retry `blitz` if deletion is interrupted. Take a
 [backup](operations/backup-restore.md) first if the data matters. Persistent
-native services start before login only with user lingering, which the
-installer does not set; see
-[login and reboot behaviour](operations/native-installation.md#login-and-reboot-behaviour).
+Linux native services start before login only with user lingering, which the
+installer does not set; see [login and reboot behaviour](operations/native-installation.md#login-and-reboot-behaviour).
+macOS native services are login-scoped LaunchAgents: they start at login and
+stop at logout; see [macOS native installation](operations/macos-native.md).
 
 ## Manual procedures
 
@@ -100,7 +109,8 @@ the installer does, to deploy to Kubernetes, or to develop Cairn.
 | Purpose | Follow this procedure | What remains afterwards |
 | --- | --- | --- |
 | Reproduce the disposable check by hand | [Manual disposable script](quickstart.md#manual-disposable-script) | Nothing: the script stops the server and deletes its temporary data and credential. |
-| Keep a native instance | [Persistent native installation](operations/native-installation.md) | Stable identity, owner-controlled data and credential, a systemd user service and backup procedure. |
+| Keep a Linux native instance | [Persistent Linux native installation](operations/native-installation.md) | Stable identity, owner-controlled data and credential, a systemd user service and backup procedure. |
+| Keep a macOS native instance | [macOS native installation](operations/macos-native.md) | Login-scoped LaunchAgent with catalogue memory and Attic; validated on macOS 26 Intel and Apple Silicon. |
 | Run Cairn with Attic and optional semantic search | [Docker Compose installation](../deploy/compose/README.md) | Persistent volumes, protected credentials and a managed container stack. |
 | Deploy Cairn to an existing cluster | [Kubernetes installation](#kubernetes-installation) | A dedicated namespace, persistent claims, restricted workloads and network policies. |
 | Develop Cairn | [Full developer validation](#full-developer-validation) | A development environment; this does not install a persistent service. |
@@ -157,14 +167,14 @@ requires systemd user services and `loginctl`; installing a package alone does
 not enable a user manager on a host without systemd. The native guide checks
 that manager before writing configuration.
 
-For native paths, install uv 0.12.0 using the
+For native paths, install uv 0.12.14 using the
 [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/)
 with that pinned version. For example, after reviewing the downloaded script:
 
 ```sh
 uv_installer="$(mktemp)"
 curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-  https://astral.sh/uv/0.12.0/install.sh -o "$uv_installer"
+  https://astral.sh/uv/0.12.14/install.sh -o "$uv_installer"
 # Read the downloaded installer before executing it.
 cat "$uv_installer"
 sh "$uv_installer"
@@ -173,11 +183,11 @@ export PATH="$HOME/.local/bin:$PATH"
 uv --version
 ```
 
-Expect `uv 0.12.0`. Add `$HOME/.local/bin` to your shell's normal startup PATH
+Expect `uv 0.12.14`. Add `$HOME/.local/bin` to your shell's normal startup PATH
 if it is not already there. The commands above set it for the current session.
-The disposable path can use `uv python install 3.12` when the distribution has
-no Python 3.12. For the persistent guide's explicit `python3.12` checks, install
-that executable through the host package policy first.
+The disposable path can use `uv python install 3.14` for Cairn's managed
+runtime. The source installer itself accepts the host's `python3` when it is
+Python 3.12–3.14; do not replace the system interpreter.
 
 Docker users should follow the official
 [Engine installation](https://docs.docker.com/engine/install/) and
@@ -191,7 +201,8 @@ file-ownership operations before first boot.
 
 Required: Linux x86_64, Bash, Git, coreutils (including `mktemp`, `chmod`,
 `sha256sum`, `tr` and `rm`), curl 8.4.0 or newer, jq 1.6 or newer, a system
-Python 3 available as `python3`, and uv 0.12.0 with Cairn’s Python 3.12 runtime. You need a writable checkout and `/tmp`, an unused loopback port
+Python 3.12–3.14 available as `python3`, and uv 0.12.14 with Cairn’s managed
+Python 3.14 runtime. You need a writable checkout and `/tmp`, an unused loopback port
 8000, and network access for locked dependency installation. You do not need
 Go, Bubblewrap, kubectl, Docker or administrator access to run the quickstart.
 
@@ -205,7 +216,7 @@ curl --version
 jq --version
 python3 --version
 uv --version
-uv python find 3.12
+uv python find 3.14
 test -w .
 test -w /tmp
 python3 - <<'PY'
@@ -217,9 +228,9 @@ PY
 ```
 
 Expect an executable path for every tool, curl 8.4.0 or newer, jq 1.6 or newer,
-and uv `0.12.0`. `python3 --version` reports the system Python and may show
+and uv `0.12.14`. `python3 --version` reports the system Python and may show
 `3.14.x`; it is used here only for the standard-library socket check.
-`uv python find 3.12` must report the separate Python 3.12 interpreter used by
+`uv python find 3.14` must report the separate Python 3.14 interpreter used by
 Cairn. Do not replace the system interpreter. Expect writable-directory checks
 and successful loopback binding to produce no output. A bind error means
 port 8000 is already in use. Both documented native procedures use port 8000;
@@ -233,7 +244,7 @@ only locked runtime dependencies; developer tools are a separate path.
 
 ## Persistent native prerequisites
 
-Use the disposable checklist plus `python3.12`, systemd with user service
+Use the disposable checklist plus `python3`, systemd with user service
 support, `systemctl`, `systemd-analyze`, `loginctl`, `awk`, `grep`, `df`, `id`,
 `stat`, `install`, `cp`, `mv` and `tar`. These are supplied by the standard
 Linux userland/systemd packages. You need an ordinary non-root account, at least
@@ -250,7 +261,7 @@ Required: Linux x86_64 with systemd, Engine 25.0 or newer, Compose plugin 2.20.2
 or newer, Bash, Git, make, `systemctl`, `sed`, GNU coreutils (`sha256sum`,
 `install`, `realpath`, `stat` and `tr`), curl 8.4.0+, jq 1.6+ and Python 3.12–3.14
 as `python3` for the standard-library verification helper. Cairn itself uses
-its pinned Python 3.12 runtime inside the image; the helper does not import
+its pinned Python 3.14 runtime inside the image; the helper does not import
 Cairn or its installed dependencies. Keep the host's system interpreter: Python
 3.14 does not need replacing. Curl 8.4.0 is required because its
 [`--max-filesize`](https://curl.se/docs/manpage.html#--max-filesize) limit also
@@ -285,15 +296,16 @@ validation; do not assume the Kubernetes result proves OpenShift support.
 
 - A Linux x86_64 operator checkout and Linux workers able to run the reviewed
   image. The recorded reference deployment used Kubernetes 1.35.0 with Cilium
-  1.19.6. The repository pins kubectl 1.35.0 and Kustomize 5.7.1; other target
+  1.19.6. The repository pins kubectl 1.35.8 for rendering and application while
+  retaining Kubernetes 1.35.0 as the recorded target; other target
   versions need their own compatibility and admission checks.
-- Bash, Git, GNU coreutils, `awk`, curl 8.4.0+, jq 1.6+, Python 3.12 and uv 0.12.0.
+- Bash, Git, GNU coreutils, `awk`, curl 8.4.0+, jq 1.6+, Python 3.14 and uv 0.12.14.
   The locked Python environment supplies YAML support for generating and checking
   manifests. Go and Bubblewrap are not installation requirements. Docker and make
   are needed locally only if you build the Cairn image yourself.
 - A reviewed Cairn image available to the workers by immutable digest, including
   any registry pull credentials under the cluster's normal policy. The checkout's
-  `cairn:v0.1.0-rc.2` tag is a local build tag, not a published registry image. See the
+  `cairn:v0.5.0-rc.3` tag is a local build tag, not a published registry image. See the
   [image boundary](operations/deployment.md).
 - A dedicated namespace and an approved CSI StorageClass supporting
   `ReadWriteOncePod`, reliable POSIX locks and `fsync`. NFS and other shared or
@@ -327,7 +339,7 @@ kubectl version --client
 kubectl config current-context
 ```
 
-Expect uv 0.12.0, curl at least 8.4.0, jq at least 1.6, and kubectl v1.35.0 with
+Expect uv 0.12.14, curl at least 8.4.0, jq at least 1.6, and kubectl v1.35.8 with
 Kustomize v5.7.1. The final command must name the intended cluster context; stop
 if no context is configured or the selected context is wrong. Obtain a kubeconfig
 and the required permissions from the cluster administrator. Do not solve an
@@ -479,7 +491,8 @@ explained in the [full round-trip procedure](operations/evidence-verification.md
 ## Full developer validation
 
 This path is for changing or validating Cairn, not a prerequisite for using it.
-It requires the native tools above, Python 3.12, uv 0.12.0, Go 1.22+, make,
+It requires the native tools above, Python 3.12–3.14 (the repository defaults to
+3.14), uv 0.12.14, Go 1.26.8+, make,
 a C compiler for Go race tests, Docker with the Compose plugin, and the pinned
 kubectl fetched below. Bubblewrap at `/usr/bin/bwrap` (verified with 0.9.0),
 `/usr/bin/python3`, merged-`/usr` and permitted unprivileged user/PID/mount

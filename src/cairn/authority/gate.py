@@ -15,7 +15,7 @@ import re
 import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
@@ -102,12 +102,13 @@ def validate_expiry(expires_at: datetime | None) -> str | None:
         return None
     if expires_at.tzinfo is None or expires_at.utcoffset() is None:
         return "invalid_expiry"
-    # canonical_timestamp()'s strftime does not zero-pad years < 1000 (or
-    # reject years > 9999), so a canonical rendering shorter or longer than
-    # the schema's fixed-width CHECK (length = 27) would otherwise reach
-    # SQLite as a raw, unaudited constraint violation instead of a typed
-    # denial.
-    if len(canonical_timestamp(expires_at)) != 27:
+    # Preserve the accepted four-digit UTC year boundary independently of
+    # libc/Python strftime padding (Python 3.14 pads years below 1000).
+    try:
+        utc = expires_at.astimezone(UTC)
+        if utc.year < 1000 or len(canonical_timestamp(utc)) != 27:
+            return "invalid_expiry"
+    except (OverflowError, ValueError):
         return "invalid_expiry"
     return None
 

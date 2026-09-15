@@ -2,8 +2,9 @@
 
 `cairn-install` teaches and runs a new Cairn installation from a trusted source
 checkout. It supports disposable native, persistent native and Docker on Linux
-`x86_64`. Each named installation has durable private state, so an interrupted
-run can reconcile what already happened before it continues.
+`x86_64`; macOS supports foreground and per-user launchd native catalogue/Attic
+installations. Each named installation has durable private state, so an
+interrupted run can reconcile what already happened before it continues.
 
 This installer does not upgrade or adopt an existing installation. It does not
 install Kubernetes or OpenShift. Use the [Kubernetes operator procedure](../install.md#kubernetes-installation)
@@ -11,23 +12,30 @@ for an existing cluster.
 
 ## Requirements
 
-Run as the ordinary user who will own the installation. Keep the checkout and
-state on a native Linux filesystem, rather than a WSL-mounted path such as
-`/mnt/c`. The source launcher needs Python 3.12–3.14. All modes need an unused
-numeric loopback port and access to the locked dependencies.
+Run as the ordinary user who will own the installation. On Linux, keep the
+checkout and state on a native Linux filesystem rather than a WSL-mounted path
+such as `/mnt/c`; on macOS, use a trusted local checkout and local state. The
+source launcher needs Python 3.12–3.14. All modes need an unused numeric
+loopback port and access to the locked dependencies.
 
-Native modes require `uv 0.12.0`. Persistent native mode also requires a
-working systemd user manager. Docker mode requires Docker Engine 25.0 or newer,
+Native modes require `uv 0.12.14`. Linux persistent native mode also requires a
+working systemd user manager. macOS native mode uses the ordinary user's
+launchd session and supports catalogue memory and Attic only. Native acceptance
+passed on macOS 26 Intel and Apple Silicon; see [macOS native installation](macos-native.md). Docker mode requires Docker Engine 25.0 or newer,
 Compose 2.20.2 or newer and trusted access to the Docker daemon. Semantic
 search needs outbound OpenAI access and an OpenAI API key; Attic needs no
 external key. Native semantic mode also needs Docker: its FalkorDB index runs
 in a dedicated container. The installer checks local prerequisites before
 preparing Cairn and proves provider access during semantic verification.
+For RC3, load the [maintained FalkorDB offline archive](../../deploy/falkordb/README.md#install-the-rc3-offline-image)
+before enabling semantic mode; the archive requires Docker's containerd image
+store. The candidate is not yet published to GHCR.
 
-Persistent native mode enables a user service. Running before login and after
-logout also requires user lingering; follow the manual guide's
+Linux persistent native mode enables a systemd user service. Running before
+login and after logout also requires user lingering; follow the manual guide's
 [login and reboot behaviour](native-installation.md#login-and-reboot-behaviour).
-The installer does not change that account-wide policy.
+The installer does not change that account-wide policy. macOS native mode is
+login-scoped: it starts at user login and stops at logout.
 
 For detailed host checks and operational trade-offs, see the
 [installation prerequisites](../install.md#get-missing-prerequisites),
@@ -67,7 +75,7 @@ for stdin. Port 8000 and **Attic only** are the defaults for optional values.
 ./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
 ```
 
-Add `--semantic` for **Attic plus semantic search** in native or Docker mode:
+Add `--semantic` for **Attic plus semantic search** in Linux native or Docker mode:
 
 ```sh
 ./cairn-install --non-interactive --mode docker --name recall \

@@ -8,10 +8,17 @@ from cairn_install import workflow
 from cairn_install.core import InstallError, open_context
 
 
-@pytest.mark.parametrize("mode", ["native", "docker", "disposable"])
+@pytest.mark.parametrize(
+    "mode,keep_running",
+    [("native", False), ("docker", False), ("disposable", False), ("disposable", True)],
+)
 @pytest.mark.parametrize("failure", [False, True])
 def test_verified_resume_checks_live_persistent_service_without_new_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, failure: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    failure: bool,
+    keep_running: bool,
 ) -> None:
     calls: list[str] = []
     receipt = {
@@ -32,6 +39,13 @@ def test_verified_resume_checks_live_persistent_service_without_new_writes(
         def validate_ownership(self) -> None:
             calls.append("ownership")
 
+        def close(self) -> None:
+            pass
+
+        def wait_foreground(self) -> None:
+            calls.append("hold")
+            raise KeyboardInterrupt
+
         def preflight(self) -> None:
             calls.append("preflight")
 
@@ -40,7 +54,7 @@ def test_verified_resume_checks_live_persistent_service_without_new_writes(
             self.running = True
 
     backend = Backend()
-    monkeypatch.setattr(workflow, "backend", lambda ctx: backend)
+    monkeypatch.setattr(workflow, "backend", lambda ctx, **kwargs: backend)
 
     def ready(ctx: Any) -> str:
         assert backend.running
@@ -72,13 +86,16 @@ def test_verified_resume_checks_live_persistent_service_without_new_writes(
         ctx.state["status"] = "verified"
         ctx.state["receipts"]["ingest"] = receipt
         ctx.save()
-        if failure and mode != "disposable":
+        if failure and (mode != "disposable" or keep_running):
             with pytest.raises(InstallError, match="wrong identity"):
-                workflow.run_install(ctx)
+                workflow.run_install(ctx, keep_running=keep_running)
             assert ctx.state["status"] == "failed"
         else:
-            assert workflow.run_install(ctx)["status"] == "verified"
-        if mode == "disposable":
+            assert (
+                workflow.run_install(ctx, keep_running=keep_running)["status"]
+                == "verified"
+            )
+        if mode == "disposable" and not keep_running:
             assert calls == ["ownership"]
         else:
             assert "start" in calls
@@ -86,10 +103,13 @@ def test_verified_resume_checks_live_persistent_service_without_new_writes(
             assert ("reads" in calls) != failure
         assert ctx.state["receipts"]["ingest"] == receipt
 
-    if failure and mode != "disposable":
+    if failure and (mode != "disposable" or keep_running):
         failure = False
         backend.running = False
         with open_context(tmp_path / "state", "demo") as resumed:
-            assert workflow.run_install(resumed)["status"] == "verified"
+            assert (
+                workflow.run_install(resumed, keep_running=keep_running)["status"]
+                == "verified"
+            )
             assert resumed.state["receipts"]["ingest"] == receipt
             assert "reads" in calls

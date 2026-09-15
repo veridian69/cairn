@@ -584,4 +584,5 @@ def test_gateway_proxy_configuration_permits_only_allow_listed_connect_on_443() 
     assert "acl SSL_ports port 443" in directives
     assert "acl allowed_fqdns dstdomain api.openai.com" in directives
     assert "http_port 3128" in directives
+    assert "max_filedescriptors 65536" in directives
     assert "cache deny all" in directives

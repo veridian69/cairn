@@ -15,6 +15,8 @@ from uuid import UUID
 import pytest
 import uvloop
 from graphiti_core.embedder.openai import OpenAIEmbedder
+from graphiti_core.search.search_filters import SearchFilters
+from graphiti_core.search.search_utils import edge_fulltext_search
 from openai import DEFAULT_TIMEOUT
 
 import cairn.projection.graphiti as graphiti_module
@@ -374,57 +376,25 @@ def test_a_bounded_driver_session_shares_the_same_bound() -> None:
     assert fake.peak <= 2
 
 
-_GRAPHITI_0293_EDGE_SEARCH = """CALL db.idx.fulltext.queryRelationships('RELATES_TO', $query)
-    YIELD relationship AS rel, score
-    MATCH (n:Entity)-[e:RELATES_TO {uuid: rel.uuid}]->(m:Entity)
-     WHERE e.group_id IN $group_ids
-    WITH e, score, n, m
-    RETURN e.uuid AS uuid
-    ORDER BY score DESC
-    LIMIT $limit
-    """
-
-
 def test_the_pinned_graphiti_edge_search_uses_the_returned_relationship() -> None:
-    """graphiti-core 0.29.3 re-MATCHes every Falkor full-text hit before
-    applying its result limit (upstream #1272/#1506). The live sweep measured
-    528 full-text hits in 1 ms, the first twenty plus their MATCH in 198 ms,
-    and the shipped query timing out after five seconds. The compatibility
-    seam removes only that exact, pinned fragment and preserves the filters,
-    projection, ordering and limit around it."""
+    """Exercise the dependency boundary that replaced Cairn's old query shim."""
     fake = _CountingFalkorDB()
     driver = BoundedFalkorDriver(falkor_db=fake, concurrency_limit=1)
 
     asyncio.run(
-        driver.execute_query(
-            _GRAPHITI_0293_EDGE_SEARCH,
-            query="opaque",
-            group_ids=["opaque"],
-            limit=20,
+        edge_fulltext_search(
+            driver,
+            "opaque",
+            SearchFilters(),
+            ["opaque"],
+            20,
         )
     )
 
-    assert fake.queries == [
-        _GRAPHITI_0293_EDGE_SEARCH.replace(
-            """YIELD relationship AS rel, score
-    MATCH (n:Entity)-[e:RELATES_TO {uuid: rel.uuid}]->(m:Entity)""",
-            """YIELD relationship AS e, score
-    WITH e, score, startNode(e) AS n, endNode(e) AS m""",
-        )
-    ]
-
-
-def test_the_edge_search_compatibility_refuses_version_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The workaround must become an explicit upgrade decision if a later
-    graphiti-core still emits the defective query, never a permanent silent
-    fork of unknown upstream code."""
-    monkeypatch.setattr(graphiti_module, "_GRAPHITI_CORE_VERSION", "0.29.4")
-    fake = _CountingFalkorDB()
-    driver = BoundedFalkorDriver(falkor_db=fake, concurrency_limit=1)
-
-    with pytest.raises(RuntimeError, match="graphiti_compatibility_version"):
-        asyncio.run(driver.execute_query(_GRAPHITI_0293_EDGE_SEARCH))
-
-    assert fake.calls == 0
+    assert len(fake.queries) == 1
+    query = " ".join(fake.queries[0].split())
+    assert "MATCH (n:Entity)-[e:RELATES_TO {uuid: rel.uuid}]->(m:Entity)" not in query
+    assert "WITH rel AS e, score, startNode(rel) AS n, endNode(rel) AS m" in query
+    assert "WHERE n:Entity AND m:Entity" in query
+    assert "e.group_id IN $group_ids" in query
+    assert "ORDER BY score DESC LIMIT $limit" in query

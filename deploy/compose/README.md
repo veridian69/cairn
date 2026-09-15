@@ -37,7 +37,7 @@ recovery procedure.
 
 ## Image and contract boundary
 
-`CAIRN_IMAGE=cairn:v0.1.0-rc.2` in `../images.lock` is a local build tag, not a
+`CAIRN_IMAGE=cairn:v0.5.0-rc.3` in `../images.lock` is a local build tag, not a
 published image. Use the reviewed local build produced below or a separately
 reviewed registry digest and record its exact identity.
 
@@ -95,6 +95,10 @@ systemctl is-enabled docker
 curl --version
 ```
 
+For RC3 semantic retrieval, first load the [maintained FalkorDB offline
+archive](../falkordb/README.md#install-the-rc3-offline-image) on this Docker host.
+The loader requires Docker's containerd image store; GHCR publication is pending.
+
 If you plan to enable semantic retrieval, run its additional checks before
 creating the instance:
 
@@ -122,7 +126,7 @@ confirm permission to run that exact ownership or mode command as root. Merely
 having sudo installed is insufficient. A refusal means stop and ask the host
 administrator to arrange the required access; do not stop Cairn or create
 credentials first. These checks do not change file ownership. Cairn runs on
-Python 3.12 inside its image; the host helper uses only the standard library
+Python 3.14 inside its image; the host helper uses only the standard library
 and does not require replacing the system Python. If a
 command is absent or below the
 minimum version, follow the installation guide's platform instructions, then
@@ -143,8 +147,8 @@ repository root, verify the contracts, build the image named by
 ```sh
 (cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-make image IMAGE=cairn:v0.1.0-rc.2
-docker image inspect --format '{{.Id}}' cairn:v0.1.0-rc.2
+make image IMAGE=cairn:v0.5.0-rc.3
+docker image inspect --format '{{.Id}}' cairn:v0.5.0-rc.3
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
@@ -168,7 +172,7 @@ removes an object only when both still match.
 set -eu
 set -o pipefail
 
-preflight_image='cairn:v0.1.0-rc.2'
+preflight_image='cairn:v0.5.0-rc.3'
 preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 preflight_label_key='io.cairn.compose-preflight'
 preflight_network="cairn-preflight-$preflight_id"

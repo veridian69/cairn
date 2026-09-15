@@ -533,7 +533,12 @@ class Runner:
                 }
             elif label == "tools-list" and passed:
                 tools = result_map.get("tools")
-                passed = isinstance(tools, list) and len(tools) == 11
+                expected_tools = json.loads(
+                    (REPOSITORY / "contracts" / "cairn-mcp-tools-v1.json").read_text(
+                        encoding="utf-8"
+                    )
+                )["tools"]
+                passed = isinstance(tools, list) and tools == expected_tools
                 observed = {
                     "http_status": code,
                     "tool_count": len(tools) if isinstance(tools, list) else None,

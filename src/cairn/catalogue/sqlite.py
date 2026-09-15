@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import stat
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -53,6 +54,10 @@ def _open_write_connection(
         connection.execute("PRAGMA busy_timeout = 5000")
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA trusted_schema = OFF")
+        # FULL controls when SQLite syncs; Darwin also needs F_FULLFSYNC
+        # to flush drive buffers. This setting belongs to each connection.
+        if sys.platform == "darwin":
+            connection.execute("PRAGMA fullfsync = ON")
         journal_mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()
         if journal_mode != ("wal",):
             raise CatalogueStorageError("sqlite_profile_unavailable")
@@ -118,6 +123,8 @@ def _open_read_only_connection(
         connection.execute("PRAGMA busy_timeout = 5000")
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA trusted_schema = OFF")
+        if sys.platform == "darwin":
+            connection.execute("PRAGMA fullfsync = ON")
         connection.execute("PRAGMA synchronous = FULL")
         connection.execute("PRAGMA query_only = ON")
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()
@@ -207,6 +214,8 @@ def _verify_profile(
     }
     if query_only:
         expected["query_only"] = 1
+    if sys.platform == "darwin":
+        expected["fullfsync"] = 1
     for pragma, value in expected.items():
         if connection.execute(f"PRAGMA {pragma}").fetchone() != (value,):
             raise CatalogueStorageError("sqlite_profile_unavailable")
