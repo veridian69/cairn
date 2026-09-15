@@ -11,13 +11,13 @@ The browser is absent. `provenance.json` records the upstream commits, module
 hash, base and distinct index/platform/config digests. The recorded scan found
 zero fixable HIGH/CRITICAL findings and 36 HIGH findings without available fixes.
 
-## Install the RC3 offline image
+## Install the RC4 offline image
 
-Download the [image archive](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.3/cairn-falkordb-v4.20.4-cairn.1.tar)
-and [matching corresponding-source bundle](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.3/cairn-falkordb-v4.20.4-cairn.1-source.tar.gz)
-from the RC3 release. The source, build inputs and component notices are
+Download the [image archive](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/cairn-falkordb-v4.20.4-cairn.1.tar)
+and [matching corresponding-source bundle](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/cairn-falkordb-v4.20.4-cairn.1-source.tar.gz)
+from the RC4 release. The source, build inputs and component notices are
 available at no charge alongside the binary. Retain the release
-[checksums](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.3/SHA256SUMS).
+[checksums](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/SHA256SUMS).
 Before `cairn-install --semantic`, run from the trusted checkout root on the
 Docker host:
 

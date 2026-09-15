@@ -305,7 +305,7 @@ validation; do not assume the Kubernetes result proves OpenShift support.
   are needed locally only if you build the Cairn image yourself.
 - A reviewed Cairn image available to the workers by immutable digest, including
   any registry pull credentials under the cluster's normal policy. The checkout's
-  `cairn:v0.5.0-rc.3` tag is a local build tag, not a published registry image. See the
+  `cairn:v0.5.0-rc.4` tag is a local build tag, not a published registry image. See the
   [image boundary](operations/deployment.md).
 - A dedicated namespace and an approved CSI StorageClass supporting
   `ReadWriteOncePod`, reliable POSIX locks and `fsync`. NFS and other shared or
