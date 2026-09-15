@@ -2,11 +2,11 @@
   "format": 1,
   "source_revision": "627a9e5e7cadabde3f935538220408bc94c23acc",
   "release_configuration": {
-    "files.json": "f614229b0a7cae86223648118e55919e8cd6172005816e915732b02ad176661b",
+    "files.json": "9f4d298d36f923bc5ce67ba344058ae99e760ec6126e028edd66526f4c492806",
     "export.py": "13b37dcda072021eb3574cff3d15510d3f376c05f519a779eb6fd67a72a32101",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "d17326aa5687abc943d402520c04bd200399ea37e437f7493a25480e025e1b4f",
-    "overlay_set_sha256": "3010adc6ecaaef85a562f4e332dd028f8a4deffd0b36e91b52a681eb7053d02d"
+    "overlay_set_sha256": "f0b661d8a8853f0d7677b3a890ed4eec62be42dceca3b6a2c60faf09d7d22502"
   },
   "files": {
     ".dockerignore": {
@@ -82,7 +82,7 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "67d391fecb33673834dd3b9b6207cf1f191aed1fcc47bd83bd1edf79b534bbea",
+      "sha256": "c653ad934a287f7b5861997b62d2857301696f8914c9b72adec479a060ac9093",
       "mode": 420
     },
     "SECURITY.md": {
@@ -531,6 +531,10 @@
     },
     "docs/assets/logo-light.png": {
       "sha256": "cc3cdbcac53978433c8d2e3f3a7b82cdf9ab3833b5a548ccbb9f2acbd4701286",
+      "mode": 420
+    },
+    "docs/assets/shared-memory-demo.gif": {
+      "sha256": "637c70a03c9aa16c8e17e38bbfd727558c4b93fc4f3ee0b9cb60778b239e47bd",
       "mode": 420
     },
     "docs/assets/shared-memory-demo.mp4": {
