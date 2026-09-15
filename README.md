@@ -43,7 +43,7 @@ Claude saves a workshop plan. Codex picks it up and changes the venue.
 When Claude returns, it can see the new plan and explain what changed—with
 the original record still there to check.
 
-https://github.com/user-attachments/assets/aa46fb2f-4d26-4c57-80c2-06e709b3e540
+![Claude and Codex share a workshop plan, correct its venue, and retrieve the correction history in Cairn](docs/assets/shared-memory-demo.gif)
 
 47 seconds ·
 [Read the transcript and history check](docs/shared-memory-demo.md)
