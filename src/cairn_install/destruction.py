@@ -94,6 +94,9 @@ def _darwin_entry(data: bytes) -> tuple[str, bool]:
         raise ValueError("missing Darwin entry attributes")
     if len(data) < offset + 12:
         raise ValueError("truncated Darwin directory entry")
+    # In the forced vnode-backed XNU fallback, getattrlist_internal adds
+    # S_IFMT bits to ATTR_CMN_ACCESSMASK before packing it (unlike an access
+    # mask alone). Requesting OBJTYPE would select a different, unsafe path.
     displacement, length, mode = struct.unpack_from("=iII", data, offset)
     name_offset = offset + displacement
     fixed_end = offset + 12

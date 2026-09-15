@@ -96,7 +96,7 @@ curl --version
 ```
 
 For RC4 semantic retrieval, first load the [maintained FalkorDB offline
-archive](../falkordb/README.md#install-the-rc4-offline-image) on this Docker host.
+archive](../falkordb/README.md#install-the-maintained-offline-image) on this Docker host.
 The loader requires Docker's containerd image store; GHCR publication is pending.
 
 If you plan to enable semantic retrieval, run its additional checks before

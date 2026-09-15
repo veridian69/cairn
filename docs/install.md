@@ -59,8 +59,8 @@ interactively; the non-interactive forms below make the same choices explicit
 ./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
 ```
 
-For RC3 semantic installs, first download and load the [maintained FalkorDB
-offline image](../deploy/falkordb/README.md#install-the-rc3-offline-image). Its
+For RC4 semantic installs, first download and load the [maintained FalkorDB
+offline image](../deploy/falkordb/README.md#install-the-maintained-offline-image). Its
 loader needs Docker's containerd image store; this image is not yet on GHCR.
 
 For **Attic plus semantic search**, add `--semantic` to a Linux native or docker
