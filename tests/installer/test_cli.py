@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,6 +55,7 @@ def test_non_interactive_missing_required_values_never_reads_stdin(
 def test_interactive_wizard_uses_clear_feature_names_and_shows_plan_first(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    monkeypatch.setattr(cli, "platform", SimpleNamespace(system=lambda: "Linux"))
     source = source_tree(tmp_path)
     answers = iter(["native", "demo", "8123", "1"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
@@ -127,6 +129,7 @@ def test_provider_key_flag_requires_semantic_mode(
 def test_semantic_setup_creates_protected_key_file_and_preserves_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    monkeypatch.setattr(cli, "platform", SimpleNamespace(system=lambda: "Linux"))
     source = source_tree(tmp_path)
     state_root = tmp_path / "state"
     install_workflow(
@@ -495,3 +498,72 @@ def test_main_outside_main_thread_does_not_install_signal_handlers(
 
     assert not worker.is_alive()
     assert results == [0]
+
+
+@pytest.mark.parametrize("operation", ["status", "rollback", "blitz", "ls"])
+def test_keep_running_rejects_non_install_operations(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], operation: str
+) -> None:
+    assert cli.main([operation, "--keep-running", "--state-root", str(tmp_path)]) == 2
+    assert "only valid with install or resume" in capsys.readouterr().err
+
+
+def test_keep_running_install_passes_foreground_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = source_tree(tmp_path)
+    seen: list[bool] = []
+
+    def run_install(ctx: object, *, keep_running: bool = False) -> None:
+        seen.append(keep_running)
+
+    install_workflow(monkeypatch, run_install=run_install)
+    assert (
+        cli.main(
+            [
+                "install",
+                "--mode",
+                "disposable",
+                "--name",
+                "mac",
+                "--port",
+                "19234",
+                "--source",
+                str(source),
+                "--state-root",
+                str(tmp_path / "state"),
+                "--non-interactive",
+                "--keep-running",
+            ]
+        )
+        == 0
+    )
+    assert seen == [True]
+
+
+@pytest.mark.parametrize("mode", ["native", "docker"])
+def test_incompatible_keep_running_does_not_create_state_or_request_keys(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], mode: str
+) -> None:
+    state = tmp_path / "state"
+    assert (
+        cli.main(
+            [
+                "install",
+                "--mode",
+                mode,
+                "--semantic",
+                "--keep-running",
+                "--name",
+                "wrong",
+                "--port",
+                "19234",
+                "--state-root",
+                str(state),
+                "--non-interactive",
+            ]
+        )
+        == 2
+    )
+    assert "--keep-running requires disposable mode" in capsys.readouterr().err
+    assert not state.exists()

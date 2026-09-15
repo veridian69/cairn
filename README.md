@@ -35,7 +35,12 @@ remembering something does not make it true. Agents must explicitly save
 useful context—Cairn does not automatically capture all your conversations.
 
 Self-hosted · [Apache-2.0](LICENSE.md) · REST and MCP ·
-[Release candidate v0.1.0-rc.2](docs/releases/v0.1.0-rc.2.md)
+[Release candidate v0.5.0-rc.3](docs/releases/v0.5.0-rc.3.md)
+
+macOS foreground and native background memory and Attic acceptance passed on
+macOS 26 Intel and Apple Silicon. The native service uses a per-user,
+login-scoped LaunchAgent. Actual logout/login and macOS 12 remain untested.
+Linux native service support uses systemd and supports optional semantic search.
 
 ## Watch Claude and Codex share a memory
 
@@ -166,10 +171,12 @@ upstream URL for your deployment.
 
 ## Start locally from source
 
-The source quickstart needs Python 3.12, [uv 0.12.0](https://docs.astral.sh/uv/),
-`curl` and `jq`. It creates an isolated instance under `/tmp`, keeps the
-bootstrap credential outside the checkout and uses synthetic memory. Retrieval
-stays disabled, so it makes no model-provider call.
+The source launcher accepts host Python 3.12–3.14. Cairn's locked managed
+application runtime and container use Python 3.14. The quickstart also needs
+[uv 0.12.14](https://docs.astral.sh/uv/), `curl` and `jq`. It creates an isolated
+instance under `/tmp`, keeps the bootstrap credential outside the checkout and
+uses synthetic memory. Retrieval stays disabled, so it makes no model-provider
+call.
 
 ```sh
 uv sync --locked
@@ -234,7 +241,10 @@ plane that prompted its design.
 
 ## Project information
 
-- [RC2 release notes](docs/releases/v0.1.0-rc.2.md)
+- [v0.5 candidate release notes](docs/releases/v0.5.0-rc.3.md)
+- [macOS native installation](docs/operations/macos-native.md) — login-scoped
+  LaunchAgent for catalogue memory and Attic, validated on macOS 26 Intel and Apple Silicon.
+- [Earlier RC2 release notes](docs/releases/v0.1.0-rc.2.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)
 - [Apache License 2.0](LICENSE.md) and [notices](NOTICE.md)

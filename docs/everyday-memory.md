@@ -5,7 +5,7 @@ client. It does not discover a server, run a model, keep a local memory store,
 install a host integration or capture arbitrary conversations. Native Windows
 execution is not claimed; the Windows relay is a separate integration.
 
-Install the project in your chosen Python 3.12 environment using its locked
+Install the project in the default Python 3.14 environment using its locked
 dependencies. From this checkout, run `uv run --locked cairn-memory --help`.
 Every command also has standalone help, requiring neither a profile nor stdin:
 
@@ -50,6 +50,30 @@ handshake reports current grants, not a promise that a later operation is
 authorised. Session operations retain their accepted expected-instance,
 principal, exact-scope and classification guards; the server reauthorises reads,
 writes and replays. Preflight alone does not rule out replacement between calls.
+
+## Grant requirements
+
+`check` is a diagnostic operation. Its `status: "ready"` result means that the
+expected instance and credential were accepted and at least one reported
+permission is available; its `permissions.retrieve` and
+`permissions.ingest` values report the currently evaluated grants for the
+profile's exact scope and classification. It does not assert that every command
+is authorised, reserve either grant, or turn a retrieve grant into a write
+grant.
+
+`recall` and other ordinary reads need a covering `retrieve` grant with enough
+read clearance. `arrive` is different: it opens or replays a session and issues
+a visit before it reads the briefing. It therefore requires both a covering
+`retrieve` grant and an `ingest` grant whose writable classifications include
+the profile classification, each covering the profile's exact scope. The same
+pair is required for `remember`, which opens/replays the session and persists a
+turn, and for acknowledgement and other session mutations. A retrieve-only
+principal can pass `check` with `permissions.retrieve: true` and still receive
+`authorisation_denied` from `arrive` at `session-open`.
+
+Inspect both booleans before choosing a command, then handle a later denial as
+authoritative: grants can be revoked or changed between the diagnostic and the
+operation.
 
 ## Command inputs
 

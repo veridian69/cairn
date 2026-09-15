@@ -2,7 +2,7 @@
 
 import asyncio
 
-import httpx
+import httpx2
 import pytest
 from graphiti_core.llm_client.config import ModelSize
 from openai import DefaultAsyncHttpxClient
@@ -26,7 +26,7 @@ def test_provider_clients_route_language_work_to_nano_models(
         asyncio.run(shared.close())
 
 
-async def _accepted_connections(client: httpx.AsyncClient, idle_seconds: float) -> int:
+async def _accepted_connections(client: httpx2.AsyncClient, idle_seconds: float) -> int:
     accepted = 0
     writers: set[asyncio.StreamWriter] = set()
 
@@ -80,7 +80,7 @@ def test_provider_pool_reuses_one_socket_after_an_idle_gap(
 
     async def exercise() -> tuple[int, int]:
         expiring_control = DefaultAsyncHttpxClient(
-            limits=httpx.Limits(
+            limits=httpx2.Limits(
                 max_connections=1000,
                 max_keepalive_connections=100,
                 keepalive_expiry=0.05,

@@ -25,14 +25,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
-          version: "0.12.0"
+          version: "0.12.14"
           enable-cache: true
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - run: uv sync --locked
       - name: Offline CI policy and selection contracts
         run: |
@@ -49,21 +49,27 @@ jobs:
           echo 'Run the Check workflow manually on the required branch for the hosted make check; local verification remains separate.' >> "$GITHUB_STEP_SUMMARY"
 
   full_check:
-    name: Full repository check (on demand)
+    name: Full repository check (Python ${{ matrix.python-version }}, on demand)
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     # The hosted runner reached 97% before the former 15-minute job limit.
     # This changes only the CI envelope, not test or benchmark deadlines.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
-          version: "0.12.0"
+          version: "0.12.14"
           enable-cache: true
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - run: uv sync --locked
       - name: Offline CI policy and selection contracts
         run: |
@@ -91,8 +97,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - run: make image IMAGE=cairn:ci
       - run: make smoke-image IMAGE=cairn:ci
       - name: Report all HIGH and CRITICAL vulnerabilities

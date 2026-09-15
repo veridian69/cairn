@@ -37,7 +37,7 @@ from importlib.metadata import version
 from typing import Any, cast
 from uuid import UUID
 
-import httpx
+import httpx2
 import uvloop
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
@@ -46,6 +46,7 @@ from graphiti_core.driver.falkordb_driver import FalkorDriver, FalkorDriverSessi
 from graphiti_core.edges import EntityEdge
 from graphiti_core.embedder.openai import OpenAIEmbedder
 from graphiti_core.errors import NodeNotFoundError
+from graphiti_core.graphiti_types import GraphitiClients
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
 from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode
@@ -122,11 +123,7 @@ _BULK_TIMEOUT_SECONDS = 1800.0
 _CALL_POLL_SECONDS = 1.0
 _BULK_INCOMPLETE = "bulk_incomplete"
 _GRAPHITI_CORE_VERSION = version("graphiti-core")
-_GRAPHITI_EDGE_SEARCH_COMPATIBILITY_VERSION = "0.29.3"
-_GRAPHITI_EDGE_REMATCH = """YIELD relationship AS rel, score
-    MATCH (n:Entity)-[e:RELATES_TO {uuid: rel.uuid}]->(m:Entity)"""
-_GRAPHITI_EDGE_DIRECT = """YIELD relationship AS e, score
-    WITH e, score, startNode(e) AS n, endNode(e) AS m"""
+_GRAPHITI_COMPATIBILITY_VERSION = "0.30.2"
 _GRAPHITI_TASK_SCOPE: ContextVar[object | None] = ContextVar(
     "cairn_graphiti_task_scope", default=None
 )
@@ -150,7 +147,7 @@ def _openai_provider_clients() -> tuple[
     pool ownership and idle lifetime differ.
     """
     http_client = DefaultAsyncHttpxClient(
-        limits=httpx.Limits(
+        limits=httpx2.Limits(
             max_connections=_PROVIDER_MAX_CONNECTIONS,
             max_keepalive_connections=_PROVIDER_MAX_KEEPALIVE_CONNECTIONS,
             keepalive_expiry=_PROVIDER_KEEPALIVE_EXPIRY,
@@ -170,33 +167,6 @@ def _openai_provider_clients() -> tuple[
             client=shared,
         ),
     )
-
-
-def _rewrite_graphiti_edge_search(cypher: str) -> str:
-    """Compatibility seam for graphiti-core 0.29.3 upstream #1272/#1506.
-
-    Falkor's full-text procedure already returns the relationship. Graphiti
-    nevertheless re-MATCHes every hit by UUID before applying ``LIMIT``;
-    Falkor plans that as a label/edge scan per hit. The retained P-82 sweep
-    measured the procedure itself returning 528 hits in 1 ms, the first 20
-    plus their MATCH in 198 ms, and this shipped query timing out after five
-    seconds on only 1,456 relationships.
-
-    Replace the one exact defective fragment and nothing broader. All filters,
-    result projection, score ordering and limiting remain Graphiti's. If a
-    later dependency still emits this fragment, refuse: its source must be
-    reviewed before Cairn carries the workaround forward. If upstream removes
-    the fragment, this becomes a no-op and can be deleted with the version pin.
-    """
-    occurrences = cypher.count(_GRAPHITI_EDGE_REMATCH)
-    if occurrences == 0:
-        return cypher
-    if (
-        _GRAPHITI_CORE_VERSION != _GRAPHITI_EDGE_SEARCH_COMPATIBILITY_VERSION
-        or occurrences != 1
-    ):
-        raise RuntimeError("graphiti_compatibility_version")
-    return cypher.replace(_GRAPHITI_EDGE_REMATCH, _GRAPHITI_EDGE_DIRECT, 1)
 
 
 class GraphitiIndexError(Exception):
@@ -386,8 +356,8 @@ class _DriverInitOwner:
         await provider.close()
 
     async def _close_client(self) -> None:
-        # Pinned FalkorDriver 0.29.3 selection, without per-clone task/client close.
-        if _GRAPHITI_CORE_VERSION != "0.29.3":
+        # Pinned FalkorDriver selection, without per-clone task/client close.
+        if _GRAPHITI_CORE_VERSION != _GRAPHITI_COMPATIBILITY_VERSION:
             raise GraphitiIndexError("graphiti_init_compatibility")
         if hasattr(self.client, "aclose"):
             await self.client.aclose()
@@ -639,7 +609,6 @@ class BoundedFalkorDriver(FalkorDriver):
 
     async def execute_query(self, cypher_query_: str, **kwargs: Any) -> Any:
         self._init_owner.admit(self._init_record)
-        cypher_query_ = _rewrite_graphiti_edge_search(cypher_query_)
         async with self._query_bound:
             self._init_owner.admit(self._init_record)
             return await super().execute_query(cypher_query_, **kwargs)
@@ -673,7 +642,7 @@ class BoundedFalkorDriver(FalkorDriver):
 
 
 class _CairnGraphiti(Graphiti):
-    """Graphiti 0.29.3 with Cairn's incremental bulk-dedupe seam."""
+    """Graphiti 0.30.2 with Cairn's incremental bulk-dedupe seam."""
 
     _cairn_extraction_cache: _CacheStore | None = None
     _cairn_safe_logger: SafeLogger | None = None
@@ -687,7 +656,7 @@ class _CairnGraphiti(Graphiti):
         driver: GraphDriver,
         query_vector: list[float],
     ) -> SearchResults:
-        if _GRAPHITI_CORE_VERSION != "0.29.3":
+        if _GRAPHITI_CORE_VERSION != _GRAPHITI_COMPATIBILITY_VERSION:
             raise GraphitiIndexError("graphiti_compatibility_version")
         return await graphiti_search(
             self.clients,
@@ -707,17 +676,19 @@ class _CairnGraphiti(Graphiti):
         entity_types: dict[str, type[BaseModel]] | None,
         excluded_entity_types: list[str] | None,
         custom_extraction_instructions: str | None = None,
+        clients: GraphitiClients | None = None,
     ) -> tuple[
         dict[str, list[EntityNode]],
         dict[str, str],
         list[list[EntityEdge]],
     ]:
+        clients = clients or self.clients
         (
             extracted_nodes_bulk,
             extracted_edges_bulk,
         ) = await cached_extract_nodes_and_edges_bulk(
             self._cairn_extraction_cache,
-            self.clients,
+            clients,
             episode_context,
             edge_type_map=edge_type_map,
             edge_types=edge_types,
@@ -730,7 +701,7 @@ class _CairnGraphiti(Graphiti):
             nodes_by_episode,
             uuid_map,
         ) = await graphiti_bulk_module.dedupe_nodes_bulk_incremental(
-            self.clients,
+            clients,
             extracted_nodes_bulk,
             episode_context,
             entity_types,
@@ -1124,7 +1095,7 @@ class GraphitiIndex:
         # pre-marker code that wrote ``"cairn.fact"`` before extracting; it
         # is resumed by falling through, not trusted and not deleted.
         #
-        # graphiti-core 0.29.3's ``add_episode(uuid=...)`` is an *update*:
+        # graphiti-core 0.30.2's ``add_episode(uuid=...)`` is an *update*:
         # it loads the episode by that uuid and raises NodeNotFoundError
         # when absent, so passing the identity on a first projection can
         # never succeed — found live by scripts/graphiti-smoke, invisible

@@ -301,10 +301,13 @@ def test_semantic_prepare_copies_secrets_through_an_isolated_init_container(
 
     compose = (ctx.root / "compose.yaml").read_text(encoding="utf-8")
     config = (ctx.root / "config.yaml").read_text(encoding="utf-8")
-    assert (
-        "falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62"
-        in compose
+    lock = Path(__file__).resolve().parents[2] / "deploy/images.lock"
+    locked_images = dict(
+        line.split("=", 1)
+        for line in lock.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
     )
+    assert f'image: "{locked_images["FALKORDB_IMAGE"]}"' in compose
     assert "network_mode: none" in compose
     assert "source: cairn-credentials" in compose
     assert "source: falkordb-config" in compose

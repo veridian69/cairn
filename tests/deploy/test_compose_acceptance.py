@@ -63,9 +63,9 @@ def _complete_report(harness: ModuleType) -> dict[str, Any]:
             "host": "reference",
             "docker_engine": "29.7.2",
             "docker_compose": "v5.4.0",
-            "cairn_image": "cairn:v0.1.0-rc.2",
+            "cairn_image": "cairn:v0.5.0-rc.3",
             "cairn_image_id": "sha256:base",
-            "cairn_upgrade_image": "cairn:v0.1.0-rc.2-acceptance-upgrade",
+            "cairn_upgrade_image": "cairn:v0.5.0-rc.3-acceptance-upgrade",
             "cairn_upgrade_image_id": "sha256:upgrade",
             "falkordb_image": "falkordb/falkordb:v4.20.2@sha256:digest",
         },
@@ -304,3 +304,41 @@ def test_upgrade_migration_refuses_a_running_service_state() -> None:
         harness.require_upgrade_service_stopped({"status": "running", "exit_code": 0})
 
     harness.require_upgrade_service_stopped({"status": "exited", "exit_code": 0})
+
+
+@pytest.mark.parametrize("alteration", ["none", "renamed", "missing_schema"])
+def test_live_mcp_advertisement_matches_the_reviewed_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, alteration: str
+) -> None:
+    harness = _load_harness()
+    tools = json.loads((REPOSITORY / "contracts/cairn-mcp-tools-v1.json").read_text())[
+        "tools"
+    ]
+    if alteration == "renamed":
+        tools[-1]["name"] = "unreviewed-tool"
+    elif alteration == "missing_schema":
+        tools[-1].pop("inputSchema")
+    instance = harness.Instance(
+        "fixture", "fixture", "fixture-id", 12345, tmp_path, False
+    )
+    runner = harness.Runner.__new__(harness.Runner)
+    runner.recorder = harness.Recorder()
+
+    def reply(url: str, *, token: str, payload: dict[str, Any]) -> tuple[int, Any]:
+        result: dict[str, Any]
+        if payload["method"] == "initialize":
+            result = {"protocolVersion": harness.MCP_PROTOCOL}
+        elif payload["method"] == "tools/list":
+            result = {"tools": tools}
+        else:
+            result = {"structuredContent": {"instance_id": "fixture-id"}}
+        return 200, {"jsonrpc": "2.0", "id": payload["id"], "result": result}
+
+    monkeypatch.setattr(harness, "_http_json", reply)
+    if alteration == "none":
+        runner._mcp_round_trip(instance, "synthetic")
+    else:
+        with pytest.raises(
+            harness.AcceptanceError, match="authenticated-mcp-tools-list"
+        ):
+            runner._mcp_round_trip(instance, "synthetic")

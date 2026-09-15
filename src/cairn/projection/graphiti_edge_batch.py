@@ -1,6 +1,6 @@
 """Pinned resolve_edge micro-batching compatibility seam (P-87).
 
-Graphiti 0.29.3 issues one ``dedupe_edges.resolve_edge`` provider call
+Graphiti 0.30.2 issues one ``dedupe_edges.resolve_edge`` provider call
 per extracted edge — 69.2% of all provider busy time in the P-86
 calibration. This module coalesces concurrent calls into combined
 calls on the medium model path: measured 27 August 2026, batch-on-small
@@ -31,7 +31,7 @@ from cairn.runtime.logging import LogEvent, SafeLogger
 _LOGGER = logging.getLogger(__name__)
 
 _GRAPHITI_CORE_VERSION = version("graphiti-core")
-_GRAPHITI_EDGE_BATCH_COMPATIBILITY_VERSION = "0.29.3"
+_GRAPHITI_EDGE_BATCH_COMPATIBILITY_VERSION = "0.30.2"
 
 
 def _require_graphiti_edge_batch_compatibility() -> None:
@@ -216,7 +216,7 @@ class EdgeBatcher:
         # max_tokens caps the response, and one combined response covers
         # every item, so the batch needs at least the largest budget any
         # single item asked for — taking one item's value could truncate
-        # the answer for the rest. Graphiti 0.29.3 never passes one
+        # the answer for the rest. Graphiti 0.30.2 never passes one
         # (edge_operations.py:726-731), so today this always folds to None.
         budgets = [tokens for _, _, tokens in batch if tokens is not None]
         max_tokens = max(budgets) if budgets else None

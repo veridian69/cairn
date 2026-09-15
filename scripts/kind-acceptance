@@ -79,6 +79,8 @@ kubectl_version=$(lock_value KUBECTL_VERSION)
 kubectl_sha256=$(lock_value KUBECTL_LINUX_AMD64_SHA256)
 calico_url=$(lock_value CALICO_MANIFEST_URL)
 calico_sha256=$(lock_value CALICO_MANIFEST_SHA256)
+cilium_cnp_crd_url=$(lock_value CILIUM_CNP_CRD_URL)
+cilium_cnp_crd_sha256=$(lock_value CILIUM_CNP_CRD_SHA256)
 
 for reference in "$kind_node_image" "$falkordb_image" "$egress_proxy_image"; do
   if [[ ! "$reference" =~ @sha256:[0-9a-f]{64}$ ]]; then
@@ -86,7 +88,9 @@ for reference in "$kind_node_image" "$falkordb_image" "$egress_proxy_image"; do
     exit 1
   fi
 done
-for checksum in "$kind_sha256" "$kubectl_sha256" "$calico_sha256"; do
+for checksum in \
+  "$kind_sha256" "$kubectl_sha256" "$calico_sha256" \
+  "$cilium_cnp_crd_sha256"; do
   if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
     printf 'download checksum is invalid\n' >&2
     exit 1
@@ -165,6 +169,8 @@ emit_report() {
     --arg kind_node_image "$kind_node_image" \
     --arg calico_manifest_url "$calico_url" \
     --arg calico_manifest_sha256 "$calico_sha256" \
+    --arg cilium_cnp_crd_url "$cilium_cnp_crd_url" \
+    --arg cilium_cnp_crd_sha256 "$cilium_cnp_crd_sha256" \
     --arg cairn_image "$IMAGE" \
     --arg cairn_image_id "${cairn_image_id:-}" \
     --argjson backup_barrier_ms "${backup_barrier_ms:-null}" \
@@ -182,6 +188,8 @@ emit_report() {
         kind_node_image: $kind_node_image,
         calico_manifest_url: $calico_manifest_url,
         calico_manifest_sha256: $calico_manifest_sha256,
+        cilium_cnp_crd_url: $cilium_cnp_crd_url,
+        cilium_cnp_crd_sha256: $cilium_cnp_crd_sha256,
         cairn_image: $cairn_image,
         cairn_image_id: $cairn_image_id,
         falkordb_image: $falkordb_image,
@@ -502,6 +510,23 @@ EOF
     fi
   done
   "$kubectl" delete namespace "$enforcement_namespace" --wait=false >/dev/null
+}
+
+# The reference render includes CiliumNetworkPolicy, so its API schema must exist
+# before the live API server can validate every committed render. This installs
+# only Cilium's version-aligned structural CRD. Calico remains the cluster's CNI
+# and policy engine; no Cilium agent or controller is installed, and this tier
+# makes no claim about Cilium enforcement.
+install_shape_validation_crds() {
+  curl -fsSLo "$temporary/cilium-cnp-crd.yaml" "$cilium_cnp_crd_url"
+  printf '%s  %s\n' \
+    "$cilium_cnp_crd_sha256" "$temporary/cilium-cnp-crd.yaml" |
+    sha256sum -c - >/dev/null
+  # The generated schema is larger than the client-side apply annotation
+  # limit, so let the API server own field management for this fixture.
+  "$kubectl" apply --server-side -f "$temporary/cilium-cnp-crd.yaml" >/dev/null
+  "$kubectl" wait --for=condition=Established --timeout=60s \
+    crd/ciliumnetworkpolicies.cilium.io >/dev/null
 }
 
 # Operator's ruling of 13 August 2026. Every committed render, against a live
@@ -941,7 +966,8 @@ deploy_fake_provider() {
   acceptance_pod_manifest fake-provider "$provider_namespace" \
     "    cairn.example.invalid/acceptance-role: fake-provider" \
     acceptance-client "$temporary/fake-provider.yaml" \
-    /opt/acceptance/provider.py "$provider_target_port"
+    /opt/acceptance/provider.py "$provider_target_port" \
+    --valid-embeddings
   "$kubectl" apply -f "$temporary/fake-provider.yaml" >/dev/null
   wait_for_log "$provider_namespace" fake-provider listening
   "$kubectl" apply -f - >/dev/null <<EOF
@@ -1793,6 +1819,7 @@ prove_backup_restore() {
 install_tools
 create_cluster
 prove_enforcement_active
+install_shape_validation_crds
 validate_committed_renders
 deploy_egress_gateway
 deploy_fake_provider

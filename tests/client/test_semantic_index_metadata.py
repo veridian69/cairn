@@ -60,7 +60,7 @@ def test_real_policy_snapshot_uses_executing_dimension_and_limit(
     assert snapshot["representation"]["version"] == "cairn.fact-vector/v1"
     assert snapshot["search"]["cutoff"] == 0.60
     assert snapshot["graphiti_search"]["limit"] == 7
-    assert snapshot["libraries"]["graphiti-core"] == "0.29.3"
+    assert snapshot["libraries"]["graphiti-core"] == "0.30.2"
     assert snapshot["last_requested_limit"] == 7
     local = snapshot["local_evidence"]
     if dimension == 1024:

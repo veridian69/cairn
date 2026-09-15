@@ -1,6 +1,6 @@
 """Pinned Graphiti bulk-extraction caching seam (P-90 seam 1).
 
-Graphiti 0.29.3's ``extract_nodes_and_edges_bulk`` issues one provider
+Graphiti 0.30.2's ``extract_nodes_and_edges_bulk`` issues one provider
 call per episode with no cache of its own: reprojecting the same
 episode content re-extracts nodes and edges from scratch every time.
 This module caches the library's own extraction output per episode in
@@ -104,7 +104,7 @@ from pydantic import BaseModel
 from cairn.runtime.logging import CacheKind, CacheReason, LogEvent, SafeLogger
 
 _GRAPHITI_CORE_VERSION = version("graphiti-core")
-_GRAPHITI_EXTRACTION_CACHE_COMPATIBILITY_VERSION = "0.29.3"
+_GRAPHITI_EXTRACTION_CACHE_COMPATIBILITY_VERSION = "0.30.2"
 
 
 def _require_graphiti_extraction_cache_compatibility() -> None:
@@ -435,7 +435,7 @@ async def _extract_and_cache_timestamps(
 ) -> None:
     """The pinned library's own timestamp call, owned here (R2).
 
-    Graphiti 0.29.3's ``_extract_edge_timestamps`` swallows provider,
+    Graphiti 0.30.2's ``_extract_edge_timestamps`` swallows provider,
     validation and parsing failures, leaving both fields null — a state
     indistinguishable from a valid "no timestamp" answer. Owning the call
     (guards, prompt, response model, model size and UTC normalisation

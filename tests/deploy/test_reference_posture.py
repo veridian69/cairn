@@ -99,15 +99,22 @@ TASK11_CILIUM_SHA256 = (
 )
 FAKE_CAIRN_CONFIG = b'{"architecture":"amd64","os":"linux"}'
 CAIRN_CONFIG_DIGEST = "sha256:" + hashlib.sha256(FAKE_CAIRN_CONFIG).hexdigest()
-FALKORDB_DIGEST = (
-    "sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62"
-)
-RETRIEVAL_RENDER_SHA256 = (
-    "a7b89311eba09e14efa403aad933c8084cc14e523e2364d1a7f4507619408602"
-)
-GATEWAY_RENDER_SHA256 = (
-    "e08d3c0bbe343e1c662b75f6cb10aea43fa1475059bf9a7a39ce89d662afe8f1"
-)
+FALKORDB_IMAGE = dict(
+    line.split("=", 1)
+    for line in (REPOSITORY / "deploy/images.lock").read_text().splitlines()
+    if line and not line.startswith("#")
+)["FALKORDB_IMAGE"]
+if FALKORDB_IMAGE.startswith("falkordb/"):
+    FALKORDB_IMAGE = f"docker.io/{FALKORDB_IMAGE}"
+FALKORDB_DIGEST = FALKORDB_IMAGE.split("@", 1)[1]
+RETRIEVAL_RENDER_SHA256 = hashlib.sha256(
+    (REPOSITORY / "deploy/kustomize/rendered/kubernetes-retrieval.yaml").read_bytes()
+).hexdigest()
+GATEWAY_RENDER_SHA256 = hashlib.sha256(
+    (
+        REPOSITORY / "deploy/kustomize/rendered/egress-gateway-reference.yaml"
+    ).read_bytes()
+).hexdigest()
 
 GATEWAY_PRE_INVENTORY = [
     {
@@ -403,9 +410,7 @@ def _runtime_expectations() -> list[dict[str, object]]:
             "primary_gid": 0,
             "supplementary_gids": [10001],
             "fs_group": 10001,
-            "image_reference": (
-                f"docker.io/falkordb/falkordb:v4.20.4@{FALKORDB_DIGEST}"
-            ),
+            "image_reference": FALKORDB_IMAGE,
         },
     ]
 
@@ -628,7 +633,7 @@ def _runtime_observations() -> list[dict[str, object]]:
                 "primary_gid": 0,
                 "supplementary_gids": [10001],
             },
-            "spec_image": (f"docker.io/falkordb/falkordb:v4.20.4@{FALKORDB_DIGEST}"),
+            "spec_image": FALKORDB_IMAGE,
             "runtime_image_id": f"containerd://{FALKORDB_DIGEST}",
             "runtime_digest": FALKORDB_DIGEST,
         },
@@ -900,9 +905,9 @@ else:
         '*task11-cilium.json) if [ "${FAKE_KUBE_FIXTURE:-}" = stale-task11-report ]; then '
         "value=0000000000000000000000000000000000000000000000000000000000000000; "
         "else value=eb5c9251fc8e994b030cf7fc8c5da2aa7e3f5224c8f44390fb046c8270480da0; fi ;;\n"
-        "*kubernetes-retrieval.yaml) value=a7b89311eba09e14efa403aad933c8084cc14e523e2364d1a7f4507619408602 ;;\n"
-        "*egress-gateway-reference.yaml) value=e08d3c0bbe343e1c662b75f6cb10aea43fa1475059bf9a7a39ce89d662afe8f1 ;;\n"
-        "*) value=a2e984a18a0c063279d692533031c1eff93a262afcc0afdc517375432d060989 ;;\n"
+        f"*kubernetes-retrieval.yaml) value={RETRIEVAL_RENDER_SHA256} ;;\n"
+        f"*egress-gateway-reference.yaml) value={GATEWAY_RENDER_SHA256} ;;\n"
+        "*) value=874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf ;;\n"
         "esac\n"
         'printf \'%s  %s\\n\' "$value" "${1:--}"\n',
     )
@@ -1185,7 +1190,7 @@ if args[:2] == ["delete", "pod"]:
             generation.write_text(str(current + 1), encoding="utf-8")
 if args[:1] == ["version"]:
     print(json.dumps({
-        "clientVersion": {"gitVersion": "v1.35.0"},
+        "clientVersion": {"gitVersion": "v1.35.8"},
         "serverVersion": {"gitVersion": "v1.35.0"},
     }))
 elif args[:3] == ["get", "node", "reference"]:
@@ -1288,8 +1293,8 @@ elif args[:2] == ["get", "pod"] and "-o json" in joined:
                 "fsGroup": 10001,
                 "fsGroupChangePolicy": "OnRootMismatch",
             }
-            image = "docker.io/falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62"
-            image_id = "containerd://sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62"
+            image = os.environ["FAKE_FALKORDB_IMAGE"]
+            image_id = "containerd://" + image.split("@", 1)[1]
         print(json.dumps({
             "metadata": {"name": workload_name + "-0"},
             "spec": {
@@ -1498,6 +1503,7 @@ def _run_fake_harness(
             "FAKE_KUBE_FIXTURE": fixture,
             "FAKE_BOOTSTRAP_TOKEN": "cairn1.fake-bootstrap-secret-value",
             "FAKE_CAIRN_CONFIG_DIGEST": CAIRN_CONFIG_DIGEST,
+            "FAKE_FALKORDB_IMAGE": FALKORDB_IMAGE,
             "IMAGE": image,
             "REFERENCE_POSTURE_RUN_ID": "task11a-0123456-01",
             "REFERENCE_POSTURE_REPORT": str(root / "report.json"),
@@ -2012,13 +2018,18 @@ def test_report_and_outcome_claim_are_both_fsynced(
     assert len(calls) == 2
 
 
-def test_report_accepts_kubernetes_short_falkordb_image_reference(
+def test_official_short_falkordb_reference_is_canonicalised(state: ModuleType) -> None:
+    upstream = f"falkordb/falkordb:v4.20.4@{'sha256:' + 'a' * 64}"
+    assert state.canonical_image_reference(upstream) == f"docker.io/{upstream}"
+
+
+def test_report_accepts_locked_falkordb_image_reference(
     state: ModuleType, preflight_args: dict[str, object]
 ) -> None:
     preflight = _preflight(state, preflight_args)
     arguments = _report_args(preflight)
     observations = cast(list[dict[str, object]], arguments["runtime_observations"])
-    observations[1]["spec_image"] = f"falkordb/falkordb:v4.20.4@{FALKORDB_DIGEST}"
+    observations[1]["spec_image"] = FALKORDB_IMAGE
 
     report = state.build_posture_report(**arguments)
 
@@ -2730,7 +2741,7 @@ def test_fetch_uv_extracts_the_dockerfile_pinned_binary_without_overwrite(
     binary = tmp_path / "bin"
     binary.mkdir()
     fake_uv = tmp_path / "fake-uv"
-    _fake_executable(fake_uv, "#!/bin/sh\nprintf 'uv 0.12.0 (test)\\n'\n")
+    _fake_executable(fake_uv, "#!/bin/sh\nprintf 'uv 0.12.14 (test)\\n'\n")
     _fake_executable(
         binary / "docker",
         "#!/bin/sh\n"

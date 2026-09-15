@@ -84,6 +84,12 @@ raise SystemExit("TCP_FAILED: " + "; ".join(errors))
 class Backend:
     """Compose lifecycle constrained to resources labelled for one run."""
 
+    def close(self) -> None:
+        """Persistent containers remain available after the installer exits."""
+
+    def wait_foreground(self) -> None:
+        raise InstallError("Foreground mode requires a disposable installation")
+
     def __init__(self, ctx: Context) -> None:
         self.ctx = ctx
         self.project = f"cairn-install-{ctx.name}"

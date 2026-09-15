@@ -24,24 +24,19 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        # The image declares no USER, so a UID has to be named here; 13
-        # is the `proxy` account it already ships. Unlike Cairn's
-        # workload this fixes one, because a gateway is cluster material
-        # that an operator deploys knowingly, not a portable artefact
-        # that has to survive an OpenShift namespace's assigned range —
-        # and on a cluster that assigns one, this is the line to remove.
+        # Retain the accepted gateway UID/GID and writable-volume policy.
+        # v0.5 tests the Squid7 binary directly under UID13; the image's
+        # Pebble launcher/default user are not part of this workload.
         runAsUser: 13
         runAsGroup: 13
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: squid
-          image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
-          # The image's own default command, written out rather than
-          # inherited: what a container runs should be readable in the
-          # manifest and not only in the image it was built from. -N runs
-          # in the foreground, -Y starts faster on reconfigure, -C leaves
-          # core dumps to the platform.
+          image: ubuntu/squid:7.2-26.04_edge@sha256:44eee73a21554c4732d6a5daee675f3a33395f36017d7bf7cc8ccb455b1f9665
+          # The Canonical rock defaults to Pebble. Run the reviewed Squid
+          # binary directly with the existing foreground/config flags.
+          command: ["/usr/sbin/squid-gnutls"]
           args:
             - -f
             - /etc/squid/squid.conf
@@ -70,12 +65,7 @@ spec:
               drop:
                 - ALL
           volumeMounts:
-            # Mounted over the image's own configuration path with a
-            # subPath, so that the entrypoint's cache-initialisation run
-            # — which reads that path and takes no -f — sees this
-            # configuration too. Mounting elsewhere leaves that run on
-            # Ubuntu's default config, which then errors against the
-            # read-only filesystem for no reason an operator can act on.
+            # Mount the reviewed configuration at the explicit -f path.
             # A subPath mount does not track ConfigMap updates; a change
             # here is a redeploy, which is what changing an allow-list
             # should be.

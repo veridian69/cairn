@@ -1,4 +1,4 @@
-# Persistent native installation
+# Persistent Linux native installation
 
 This procedure installs one persistent Cairn instance for one Linux user. It
 runs on numeric loopback as a `systemd --user` service, survives ordinary
@@ -27,6 +27,16 @@ complete local semantic-retrieval stack with FalkorDB. This native baseline
 enables Attic evidence custody but leaves semantic retrieval disabled, so its
 verification proves catalogue and evidence custody rather than search.
 
+For macOS catalogue memory and Attic, use the [macOS foreground
+guide](macos-foreground.md) for a temporary process or [macOS native
+installation](macos-native.md) for the login-scoped LaunchAgent path. macOS
+native acceptance passed on macOS 26 Intel and Apple Silicon; semantic
+retrieval remains Linux-only.
+
+RC3 semantic setup also requires loading the [maintained FalkorDB offline
+archive](../../deploy/falkordb/README.md#install-the-rc3-offline-image) into
+Docker's containerd image store before starting the index.
+
 **Semantic search requires an OpenAI API key.** The native baseline and Attic
 write/read check need no OpenAI key. Before enabling search, complete the
 [optional semantic setup](#optional-semantic-retrieval), including its protected
@@ -40,8 +50,9 @@ Complete these checks before creating any files:
   and home directory on a native Linux filesystem. This is the supported and
   acceptance-targeted native shape. WSL without systemd, macOS, Windows and
   other architectures are outside this procedure.
-- Python 3.12, uv 0.12.0, Git, `curl`, `jq`, `sha256sum`, `systemctl`,
-  `systemd-analyze` and `loginctl`. Python and uv are runtime installation requirements. Go,
+- Python 3.12–3.14 as `python3`, uv 0.12.14, Git, `curl`, `jq`, `sha256sum`,
+  `systemctl`, `systemd-analyze` and `loginctl`. The host Python launches the
+  installer; uv installs Cairn's managed Python 3.14 runtime. Go,
   Bubblewrap, Docker, `kubectl`, linters and test packages are developer or
   other-deployment tools and are not needed to run this native instance.
 - A working `systemd --user` manager. `systemctl --user is-system-running`
@@ -77,9 +88,9 @@ exact runtime versions from the repository root:
 
 ```sh
 test "$(uname -m)" = x86_64
-python3.12 --version
+python3 --version
 uv --version
-test "$(uv --version | awk '{print $2}')" = 0.12.0
+test "$(uv --version | awk '{print $2}')" = 0.12.14
 for tool in bash git curl jq sha256sum systemctl systemd-analyze loginctl journalctl \
   awk grep df id stat install cp mv tar mktemp chmod tr cat date sleep; do
   command -v "$tool" || exit 1
@@ -88,7 +99,7 @@ systemctl --user is-system-running | grep -Eq '^(running|degraded)$'
 test "$(df -Pk "$HOME" | awk 'NR == 2 {print $4}')" -ge 1048576
 ```
 
-Expected: Python reports `3.12.x`, uv reports `0.12.0`, and every command exits
+Expected: Python reports `3.12.x`, `3.13.x` or `3.14.x`, uv reports `0.12.14`, and every command exits
 zero. Install a missing prerequisite using the host's normal package policy,
 then repeat the checks. Do not continue after a failed check.
 

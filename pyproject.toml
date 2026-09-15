@@ -1,45 +1,35 @@
 [build-system]
-requires = ["hatchling==1.31.0", "hatch-vcs==0.5.0"]
+requires = ["hatchling==1.32.0", "hatch-vcs==0.5.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "drystane-cairn"
 # A release candidate has the same identity in source and history-free exports.
-version = "0.1.0rc2"
+version = "0.5.0rc3"
 description = "A scoped, evidence-aware memory authority"
 readme = "README.md"
-requires-python = "==3.12.*"
+requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
 authors = [{ name = "Example Operator", email = "operator@example.invalid" }]
 dependencies = [
   # anyio promoted from the dev group per P-34: P-29 imports anyio.Lock and
   # anyio.to_thread from runtime code, and a runtime import must not rest on
   # Starlette's transitive pin. Same locked version, not a new dependency.
-  "anyio==4.14.2",
+  "anyio==4.15.1",
   "detect-secrets==1.5.0",
-  "fastapi==0.141.0",
+  "fastapi==0.141.1",
   # The P-39 retrieval index: pinned exact, with the FalkorDB driver extra.
-  "graphiti-core[falkordb]==0.29.3",
+  "graphiti-core[falkordb]==0.30.2",
   # The Graphiti adapter constructs one shared provider pool explicitly;
   # direct runtime imports must not rest on graphiti-core's transitive pins.
   "httpx==0.28.1",
-  "openai==2.53.0",
-  # Promoted from transitive per the anyio/P-34 precedent, because the
-  # resolution redis 8.1.0 satisfies is broken at runtime: its async pool
-  # stores 8.1-internal kwargs (himport_registry and friends) in
-  # connection_kwargs, and falkordb 1.6.2's Is_Cluster replays those into
-  # the synchronous redis.Redis constructor, which rejects them before any
-  # command is sent. Found by scripts/graphiti-smoke on 9 August 2026 —
-  # every deterministic test passes with the adapter mocked, which is
-  # exactly why the live smoke is acceptance evidence.
-  #
-  # Removal condition, owned by the slice 8 dependency review (Val's
-  # ad17203 review, 10 August 2026, finding 5 — a pin with no owner is a
-  # pin that outlives its reason): drop this line and re-resolve once
-  # falkordb no longer replays async pool kwargs into the sync client.
-  # The check is scripts/graphiti-smoke against a disposable FalkorDB —
-  # nothing deterministic can see this, which is how it shipped.
-  #
+  "httpx2==2.13.0",
+  "openai==3.14.0",
+  # Pin the client whose async pool compatibility is exercised with Redis8.1
+  # by the disposable v0.5 graph acceptance (no paid provider required).
+  "falkordb==1.7.1",
+  # Redis8.1 is supported by FalkorDB1.7.1's filtered sync probe kwargs.
+  # Keep the explicit version and hiredis parser for reproducibility.
   # The hiredis extra (redis declares it as hiredis>=3.2.0) is a performance
   # pin, not a functional one: falkordb hardcodes protocol=2, so without the
   # C parser redis-py falls back to the pure-Python _AsyncRESP2Parser, which
@@ -47,9 +37,8 @@ dependencies = [
   # graph read path. redis/asyncio/connection.py selects _AsyncHiredisParser
   # automatically when the module imports, and exempts it from the RESP3->
   # RESP2 downgrade, so this changes no call semantics and no Cairn code.
-  # Like the pin above, nothing deterministic can see it — the check is a
-  # live projection drain.
-  "redis[hiredis]==8.0.1",
+  # Verify parser selection and a real disposable projection drain.
+  "redis[hiredis]==8.1.0",
   # Like the hiredis extra above, a performance pin on the projection
   # loop's critical path: the adapter's private event loop (and uvicorn's,
   # via its ``auto`` loop detection) becomes uvloop's C implementation.
@@ -57,33 +46,19 @@ dependencies = [
   # per-callback overhead is paid directly there. Nothing deterministic
   # can see it beyond the loop-type unit test — the check is a live
   # projection drain.
-  "uvloop==0.21.0",
-  # The slice 7 MCP transport (P-49). Pinned to the 1.x line, whose
-  # LATEST_PROTOCOL_VERSION is the 2025-11-25 revision this slice
-  # implements and the I-89 manifest records. mcp 2.0.0 shipped the same
-  # day (28 July 2026) and was rejected on maturity, not capability: it is
-  # a fortnight old, splits the types into a second distribution, and
-  # restructures the server package this slice is written against.
-  #
-  # The closure this drags in is larger than the import surface Cairn
-  # uses. pyjwt[crypto] (and so cryptography) and python-multipart arrive
-  # for the SDK's OAuth and authorisation-server support, which I-88 says
-  # Cairn deliberately does not implement. The install cannot be narrowed,
-  # so the *reachable* surface is bounded instead, by
-  # tests/transports/mcp/test_import_boundary.py: every mcp import in
-  # src/cairn must be under one of the three roots P-49 permits
-  # (mcp.types, mcp.server.lowlevel, mcp.server.streamable_http_manager),
-  # and the OAuth endpoint modules must never reach sys.modules.
-  #
-  # Note it is an allow-list, not a ban on mcp.server.auth: importing
-  # mcp.server.lowlevel unavoidably pulls that package in through the
-  # SDK's own mcp/server/__init__.py, so a ban would be unsatisfiable —
-  # P-49 records the amendment.
-  "mcp==1.29.0",
+  "uvloop==0.22.1",
+  # MCP 1.30 retains the accepted 2025-11-25 protocol and low-level API.
+  # MCP 2.2 eagerly imports OAuth endpoint modules and fails P-49's runtime
+  # import boundary. Keep 1.x until that security contract is satisfied;
+  # see docs/m1/cairn-v0.5-dependency-decisions.md. Cairn uses a stateless
+  # manager, so 1.30's new stateful idle/session limits are inactive.
+  # The AST allow-list and runtime OAuth endpoint exclusion remain tested
+  # in tests/transports/mcp/test_import_boundary.py.
+  "mcp==1.30.0",
   "prometheus-client==0.26.0",
-  "pydantic==2.13.4",
+  "pydantic==2.13.5",
   "PyYAML==6.0.3",
-  "uvicorn==0.52.0",
+  "uvicorn==0.53.0",
 ]
 
 [project.scripts]
@@ -96,15 +71,15 @@ cairn-install = "cairn_install.cli:run"
 [dependency-groups]
 dev = [
   "asgi-lifespan==2.1.0",
-  "coverage==7.15.2",
-  "hypothesis==6.163.0",
-  "mypy==2.3.0",
+  "coverage==7.16.1",
+  "hypothesis==6.168.0",
+  "mypy==2.3.1",
   "pip-audit==2.10.1",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
   "pytest-xdist==3.8.0",
-  "ruff==0.16.0",
-  "types-PyYAML==6.0.12.20260724",
+  "ruff==0.16.7",
+  "types-PyYAML==6.0.12.20260906",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -115,7 +90,7 @@ packages = ["src/cairn", "src/cairn_install"]
 "integrations/claude/cairn-memory/SKILL.md" = "cairn/host_workflows/claude/cairn-memory/SKILL.md"
 
 [tool.uv]
-required-version = "==0.12.0"
+required-version = "==0.12.14"
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --cov=cairn --cov-branch --cov-report=term-missing"

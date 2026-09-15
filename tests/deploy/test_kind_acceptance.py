@@ -36,6 +36,7 @@ import threading
 import urllib.request
 from pathlib import Path
 from types import ModuleType
+from typing import cast
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 HARNESS = REPOSITORY / "scripts" / "kind-acceptance"
@@ -121,6 +122,37 @@ def test_the_fake_provider_speaks_the_openai_responses_shape() -> None:
     content = document["output"][0]["content"][0]
     assert content["type"] == "output_text"
     assert json.loads(content["text"]) == {"extracted_entities": []}
+
+
+def test_the_fake_provider_keeps_zero_embeddings_unless_opted_into_valid_vectors() -> (
+    None
+):
+    provider = _load_provider()
+
+    def embedding(*, valid_embeddings: bool) -> list[float]:
+        server = provider.make_server("127.0.0.1", 0, valid_embeddings=valid_embeddings)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/embeddings",
+                data=json.dumps(
+                    {"model": "text-embedding-3-small", "input": ["x"]}
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=2) as response:
+                return cast(list[float], json.load(response)["data"][0]["embedding"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    default = embedding(valid_embeddings=False)
+    valid = embedding(valid_embeddings=True)
+
+    assert default == [0.0] * 1024
+    assert valid == [1.0] + [0.0] * 1023
 
 
 def _unique_name_result(
@@ -212,6 +244,8 @@ REQUIRED_LOCK_KEYS = (
     "KUBECTL_LINUX_AMD64_SHA256",
     "CALICO_MANIFEST_URL",
     "CALICO_MANIFEST_SHA256",
+    "CILIUM_CNP_CRD_URL",
+    "CILIUM_CNP_CRD_SHA256",
 )
 
 # The P-68 identity record. A run's report names each of these or the
@@ -223,6 +257,8 @@ REQUIRED_IDENTITY_FIELDS = (
     "kind_node_image",
     "calico_manifest_url",
     "calico_manifest_sha256",
+    "cilium_cnp_crd_url",
+    "cilium_cnp_crd_sha256",
     "cairn_image",
     "cairn_image_id",
     "falkordb_image",
@@ -280,6 +316,20 @@ def test_the_kind_binary_checksum_is_a_checksum() -> None:
     assert re.fullmatch(r"[0-9a-f]{64}", lock["KIND_LINUX_AMD64_SHA256"])
 
 
+def test_the_cilium_validation_crd_matches_the_target_version() -> None:
+    """The schema fixture must be the official CNP CRD for the Cilium
+    version named by the target profile, with its content pinned locally.
+    """
+    lock = _lock_values()
+    expected_url = (
+        "https://raw.githubusercontent.com/cilium/cilium/"
+        f"{lock['TARGET_CILIUM_VERSION']}"
+        "/pkg/k8s/apis/cilium.io/client/crds/v2/ciliumnetworkpolicies.yaml"
+    )
+    assert lock["CILIUM_CNP_CRD_URL"] == expected_url
+    assert re.fullmatch(r"[0-9a-f]{64}", lock["CILIUM_CNP_CRD_SHA256"])
+
+
 def test_the_harness_carries_no_pin_of_its_own() -> None:
     """Nothing that belongs in the lock may appear in the script.
 
@@ -317,6 +367,29 @@ def test_enforcement_is_proved_active_before_anything_else() -> None:
     assert evidence.index("validate_committed_renders") < evidence.index(
         "bring_up_instance"
     )
+
+
+def test_the_cilium_crd_is_only_a_shape_validation_fixture() -> None:
+    """The kind tier uses Calico for enforcement. It installs only the
+    CNP schema, after proving Calico enforcement and before validating every
+    render; it must not install a Cilium agent or controller.
+    """
+    calls = _top_level_calls()
+    assert calls.index("prove_enforcement_active") < calls.index(
+        "install_shape_validation_crds"
+    )
+    assert calls.index("install_shape_validation_crds") < calls.index(
+        "validate_committed_renders"
+    )
+    function = re.search(
+        r"install_shape_validation_crds\(\) \{\n(.*?)\n\}", SOURCE, re.S
+    )
+    assert function
+    body = function.group(1)
+    assert '"$kubectl" apply --server-side -f "$temporary/cilium-cnp-crd.yaml"' in body
+    assert "crd/ciliumnetworkpolicies.cilium.io" in body
+    assert "cilium install" not in SOURCE
+    assert "helm install" not in SOURCE
 
 
 def test_the_enforcement_probe_requires_both_observations() -> None:
@@ -540,6 +613,21 @@ def test_the_provider_dns_rewrite_is_bring_up_evidence() -> None:
 
 def test_the_fake_provider_listens_on_the_gateway_policy_port() -> None:
     assert re.search(r"^provider_target_port=\$tls_port$", SOURCE, re.M)
+
+
+def test_the_graph_fixture_explicitly_requests_valid_provider_vectors() -> None:
+    """The provider keeps zero vectors as its compatibility default. This
+    graph-backed acceptance fixture must opt into the non-zero vector required
+    by the production validation path rather than changing that default.
+    """
+    body = re.search(r"^deploy_fake_provider\(\) \{\n(.*?)\n\}", SOURCE, re.M | re.S)
+    assert body
+    assert re.search(
+        r'/opt/acceptance/provider\.py "\$provider_target_port" \\\n'
+        r"    --valid-embeddings",
+        body.group(1),
+    )
+    assert SOURCE.count("--valid-embeddings") == 1
 
 
 def test_only_the_recovery_candidate_gets_the_fake_provider_route() -> None:

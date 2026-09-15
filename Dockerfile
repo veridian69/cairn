@@ -1,5 +1,5 @@
-ARG PYTHON_IMAGE=python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.0@sha256:606e70c71c852d03f611b1e56a195d08648507018a7057fab82c4974c4eae105
+ARG PYTHON_IMAGE=python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.14@sha256:1946145b8706ad9e5c0e79a513f9e324b58d5e38126bb2c8b7dbfca61febeb45
 
 FROM ${UV_IMAGE} AS uv
 FROM ${PYTHON_IMAGE} AS builder
@@ -14,6 +14,10 @@ COPY integrations/claude/cairn-memory/SKILL.md ./integrations/claude/cairn-memor
 RUN uv sync --frozen --no-dev --no-editable
 
 FROM ${PYTHON_IMAGE} AS runtime
+# Dependencies are installed in the builder. The runtime needs neither pip
+# (including its independently vendored dependencies) nor its ensurepip wheel.
+RUN python -m pip uninstall --yes pip \
+    && rm -rf /usr/local/lib/python*/ensurepip
 RUN apt-get update \
     && apt-get install --no-install-recommends --only-upgrade -y \
         bsdutils \
@@ -33,7 +37,7 @@ RUN apt-get update \
         perl-base \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
-ARG VERSION=v0.1.0-rc.2
+ARG VERSION=v0.5.0-rc.3
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/veridian69/cairn" \
       org.opencontainers.image.documentation="https://github.com/veridian69/cairn" \

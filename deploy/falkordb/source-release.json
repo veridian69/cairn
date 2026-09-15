@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "archive": "cairn-falkordb-v4.20.4-cairn.1-source.tar.gz",
+  "archive_sha256": "6af71d599273cad73d553b98cb18dd78276b8a079a1ffabc4a939df1a2092acd",
+  "archive_size_bytes": 344389948,
+  "reviewed_cairn_source_revision": "8ef95232dd4d63519a87f8df6f1d9113d7cfe4e1",
+  "falkordb_repositories": 15,
+  "falkordb_submodules": 14,
+  "debian_binary_packages": 73,
+  "debian_source_packages": 53,
+  "debian_source_files": 166,
+  "debian_copyright_files": 73
+}

@@ -12,8 +12,8 @@ fail() {
 }
 
 uv_image=$(awk -F= '$1 == "ARG UV_IMAGE" { print $2 }' Dockerfile)
-[[ "$uv_image" =~ ^ghcr\.io/astral-sh/uv:0\.12\.0@sha256:[0-9a-f]{64}$ ]] ||
-  fail 'Dockerfile does not contain the required digest-pinned uv 0.12.0 image'
+[[ "$uv_image" =~ ^ghcr\.io/astral-sh/uv:0\.12\.14@sha256:[0-9a-f]{64}$ ]] ||
+  fail 'Dockerfile does not contain the required digest-pinned uv 0.12.14 image'
 
 destination=${UV_DESTINATION:-"$PWD/build/tools/uv"}
 [[ "$destination" == /* && "$destination" != / && ! -e "$destination" && ! -L "$destination" ]] ||
@@ -31,5 +31,5 @@ docker cp "${container_id}:/uv" "$destination" || fail 'could not extract /uv fr
 docker rm "$container_id" >/dev/null || fail 'could not remove the temporary uv image container'
 container_id=
 chmod 0755 "$destination"
-[[ $("$destination" --version) == 'uv 0.12.0 '* ]] ||
-  fail 'extracted binary is not uv 0.12.0'
+[[ $("$destination" --version) == 'uv 0.12.14 '* ]] ||
+  fail 'extracted binary is not uv 0.12.14'

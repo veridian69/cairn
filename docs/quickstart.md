@@ -17,7 +17,7 @@ For the full installer reference, see [guided installation](operations/guided-in
 - A [trusted checkout](install.md#obtain-a-trusted-checkout) of this
   repository, with access to its locked Python package indexes.
 - `python3` 3.12–3.14 to launch the installer, and
-  [uv 0.12.0](install.md#get-missing-prerequisites) for the Cairn runtime.
+  [uv 0.12.14](install.md#get-missing-prerequisites) for the Cairn runtime.
 - An unused loopback port; the default is 8000.
 
 The installer checks prerequisites before preparing the runtime. It may retain

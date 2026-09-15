@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "platform": "linux/amd64",
+  "upstream_version": "4.20.4",
+  "upstream_commit": "5ac6db8059013c9d74842c02b6a9f1a4858a6a1b",
+  "patched_commit": "c3fea9bee0d7d4ad6c24308f18a19fc8c81c2996",
+  "upstream_pr": "https://github.com/FalkorDB/FalkorDB/pull/2838",
+  "module_source_image": "falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62",
+  "module_sha256": "81ea6b989dc2fd4c9ad905e246018b220b02f0e40c406255f9da4768c1684555",
+  "redis_base": "redis:8.6.3@sha256:4d25e2fe601f7ffaeb4437cb6ced3518bc36edf34ebe98863c80836943d94529",
+  "image_index": "sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578",
+  "platform_manifest": "sha256:082208ce77a8ae5b318907e673611d8f0e2b27ed26fa0fd2349f9e0acd0b8f16",
+  "image_config": "sha256:8a1ad120b7894fb6db8c15cef9d4830283f6f267ab7b8a519e75b4fb9439f45e",
+  "module_recompiled": false,
+  "scanner": {
+    "version": "0.70.0",
+    "database_sha256": "3112b1f2645bf7062ef4ccff085b27148a8d46c2c5de0eff63e1eb37b6617dd8",
+    "date": "2026-09-15",
+    "high": 36,
+    "critical": 0,
+    "fixable_high_critical": 0
+  },
+  "build_source_state": "The image was built from upstream_commit with the uncommitted runtime grouping patch; patched_commit subsequently records the matching recipe bytes.",
+  "attestation_scope": "Preserved BuildKit attestation is supplemental; request and resolved dependency completeness are false. Exact recipe hashes and component source inventory provide separate provenance."
+}

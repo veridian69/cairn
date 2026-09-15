@@ -59,7 +59,10 @@ def falkordb_image(lock_text: str) -> str:
         if line.startswith("FALKORDB_IMAGE=")
     ]
     if len(values) != 1 or not re.fullmatch(
-        r"falkordb/falkordb:[A-Za-z0-9_.-]+@sha256:[0-9a-f]{64}", values[0]
+        r"(?:ghcr\.io/veridian69/cairn-falkordb|"
+        r"(?:docker\.io/)?falkordb/falkordb(?:-server)?)"
+        r":[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}",
+        values[0],
     ):
         raise EnvironmentError("image_pin_invalid")
     return values[0]

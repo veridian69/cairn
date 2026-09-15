@@ -68,6 +68,12 @@ async def test_i27_public_keys_refuse_safely_and_v5_replays(
             )
         elif operation == "proposal-reject":
             body.update(reason="No")
+        # The source write queues Attic delivery independently of these
+        # requests. Finish that setup work before asserting no mutations.
+        async with asyncio.timeout(15):
+            # The persistent outbox has no asyncio notification to await.
+            while rows(instance, "evidence_outbox"):  # noqa: ASYNC110
+                await asyncio.sleep(0.01)
         with read_connection(instance.data_path) as con:
             tables = [
                 row[0]

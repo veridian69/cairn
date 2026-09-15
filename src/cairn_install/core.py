@@ -6,7 +6,9 @@ import fcntl
 import hashlib
 import json
 import os
+import platform
 import re
+import selectors
 import shlex
 import signal
 import stat
@@ -32,6 +34,20 @@ class InstallError(Exception):
         super().__init__(message)
 
 
+def sync_regular_file(fd: int) -> None:
+    """Flush installer publications through Darwin's drive-cache barrier."""
+    os.fsync(fd)
+    if platform.system() == "Darwin":
+        # Apple XNU bsd/sys/fcntl.h defines F_FULLFSYNC as 51.
+        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
+        try:
+            fcntl.fcntl(fd, getattr(fcntl, "F_FULLFSYNC", 51))
+        except OSError as error:
+            raise InstallError(
+                "macOS full file sync failed", "durability_failed"
+            ) from error
+
+
 @contextmanager
 def defer_spawn_signals() -> Iterator[list[int]]:
     """Acquire the child handle before delivering a cancellation exception."""
@@ -49,6 +65,11 @@ def defer_spawn_signals() -> Iterator[list[int]]:
 
 
 def _group_has_live_members(group: int) -> bool:
+    if platform.system() == "Darwin":
+        return any(
+            pgid == group and status != "Z"
+            for pgid, status in _darwin_processes().values()
+        )
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
@@ -62,20 +83,123 @@ def _group_has_live_members(group: int) -> bool:
     return False
 
 
+def _parse_darwin_processes(raw: bytes) -> dict[int, tuple[int, str]]:
+    # State flags documented by Apple's adv_cmds/ps/ps.1 (including legacy A/S).
+    try:
+        text = raw.decode("ascii")
+    except UnicodeError as error:
+        raise InstallError(
+            "Invalid Darwin process inventory", "cleanup_failed"
+        ) from error
+    result: dict[int, tuple[int, str]] = {}
+    for line in text.splitlines():
+        match = re.fullmatch(
+            r"\s*([0-9]+)\s+([0-9]+)\s+([HRISTUZ?])[<>AELNSs+VWX]*\s*", line
+        )
+        if match is None or int(match[1]) in result:
+            raise InstallError("Invalid Darwin process inventory", "cleanup_failed")
+        result[int(match[1])] = (int(match[2]), match[3])
+    if not result:
+        raise InstallError("Empty Darwin process inventory", "cleanup_failed")
+    return result
+
+
+def _darwin_processes() -> dict[int, tuple[int, str]]:
+    """Read bounded kernel process metadata; never execute a PATH-selected ps."""
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        process = subprocess.Popen(
+            ["/bin/ps", "-axo", "pid=,pgid=,stat="],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            close_fds=True,
+        )
+        assert process.stdout is not None
+        output = bytearray()
+        deadline = time.monotonic() + 3
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise InstallError(
+                        "Darwin process inventory timed out", "cleanup_failed"
+                    )
+                block = os.read(process.stdout.fileno(), 65536)
+                if not block:
+                    break
+                output.extend(block)
+                if len(output) > 1024 * 1024:
+                    raise InstallError(
+                        "Darwin process inventory exceeds limit", "cleanup_failed"
+                    )
+        if process.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
+            raise InstallError("Darwin process inventory failed", "cleanup_failed")
+        return _parse_darwin_processes(bytes(output))
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise InstallError(
+            "Darwin process inventory unavailable", "cleanup_failed"
+        ) from error
+    finally:
+        if process is not None:
+            if process.returncode is None:
+                process.kill()
+                process.wait(timeout=3)
+            if process.stdout is not None:
+                process.stdout.close()
+
+
+def owned_child_running(process: subprocess.Popen[bytes]) -> bool:
+    """Observe without reaping: the child PID must keep its group ID pinned."""
+    if process.returncode is not None:
+        return False
+    if platform.system() == "Darwin":
+        record = _darwin_processes().get(process.pid)
+        return record is not None and record[1] != "Z"
+    try:
+        value = (Path("/proc") / str(process.pid) / "stat").read_text()
+        return value[value.rfind(")") + 2 :].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
 def stop_command_group(process: subprocess.Popen[bytes]) -> None:
     """Cancel the whole command tree, including children ignoring SIGTERM."""
+    with defer_spawn_signals():
+        _stop_command_group(process)
+
+
+def _signal_command_group(group: int, number: int) -> None:
     try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+        os.killpg(group, number)
+    except (PermissionError, ProcessLookupError) as error:
+        # Darwin killpg1 excludes zombies and can return EPERM for a group
+        # whose unreaped leader is its only member. Never infer death from
+        # that errno: require the bounded, strict Darwin inventory to prove it.
+        if platform.system() == "Darwin":
+            if not _group_has_live_members(group):
+                return
+        elif isinstance(error, ProcessLookupError):
+            return
+        raise InstallError(
+            "Cannot signal command group; live processes may remain",
+            "cleanup_failed",
+        ) from error
+
+
+def _stop_command_group(process: subprocess.Popen[bytes]) -> None:
+    if process.returncode is not None:
+        raise InstallError(
+            "Cannot signal an already reaped command group", "cleanup_failed"
+        )
+    _signal_command_group(process.pid, signal.SIGTERM)
     deadline = time.monotonic() + 5
     # Do not reap the leader during the grace period: its PID pins the group ID.
     while _group_has_live_members(process.pid) and time.monotonic() < deadline:
         time.sleep(0.05)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    _signal_command_group(process.pid, signal.SIGKILL)
     deadline = time.monotonic() + 5
     while _group_has_live_members(process.pid) and time.monotonic() < deadline:
         time.sleep(0.01)
@@ -130,7 +254,7 @@ def atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
             os.fchmod(stream.fileno(), mode)
             stream.write(data)
             stream.flush()
-            os.fsync(stream.fileno())
+            sync_regular_file(stream.fileno())
         os.replace(temporary, path)
         directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -177,6 +301,13 @@ class Context:
     @property
     def run_id(self) -> str:
         return str(self.state["run_id"])
+
+    @property
+    def lock_fd(self) -> int:
+        """Share this open-file-description with an owned foreground child."""
+        if self._lock < 0:
+            raise InstallError("Installer lock is already closed")
+        return self._lock
 
     def __enter__(self) -> Context:
         return self
@@ -316,7 +447,7 @@ class Context:
                 os.fchmod(stream.fileno(), mode)
                 stream.write(content.encode())
                 stream.flush()
-                os.fsync(stream.fileno())
+                sync_regular_file(stream.fileno())
             os.link(temp, path, follow_symlinks=False)
             directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
@@ -425,7 +556,7 @@ class Context:
                     started = time.monotonic()
                     deadline = started + timeout
                     next_update = started + 15
-                    while process.poll() is None:
+                    while owned_child_running(process):
                         if time.monotonic() >= next_update:
                             self.note(
                                 f"# Command still running ({int(time.monotonic() - started)} seconds)."
@@ -441,11 +572,7 @@ class Context:
                             raise InstallError(
                                 "Command output exceeded the safe capture limit"
                             )
-                        try:
-                            process.wait(timeout=0.2)
-                        except subprocess.TimeoutExpired:
-                            pass
-                    code = process.returncode
+                        time.sleep(0.2)
                 except (
                     subprocess.TimeoutExpired,
                     KeyboardInterrupt,
@@ -460,6 +587,16 @@ class Context:
                         "Command interrupted or timed out; state retained. Use resume.",
                         "interrupted",
                     ) from None
+                # Cancellation cleanup must retain an unreaped leader. Once the
+                # command has finished, reap under deferred signals outside that
+                # cleanup region; its numeric process group is no longer ours.
+                with defer_spawn_signals() as cancelled:
+                    code = process.wait()
+                if cancelled:
+                    raise InstallError(
+                        "Command interrupted at completion; state retained. Use resume.",
+                        "interrupted",
+                    )
                 if capture_fd is not None:
                     os.fsync(capture_fd)
                     output = ""

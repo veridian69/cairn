@@ -16,6 +16,9 @@ metadata:
 data:
   squid.conf: |
     http_port 3128
+    # Container runtimes may inherit billion-entry descriptor limits. Bound
+    # Squid's descriptor table before startup; each CONNECT uses two sockets.
+    max_filedescriptors 65536
 
     # THE OPERATOR-EDITABLE VALUE. Every destination Cairn instances on
     # this cluster may reach, and nothing else is reachable at all — not

@@ -242,7 +242,7 @@ async def test_a_combined_call_ignores_items_that_asked_for_no_budget() -> None:
 
 @pytest.mark.anyio
 async def test_a_combined_call_stays_unbudgeted_when_no_item_asked() -> None:
-    # The path graphiti 0.29.3 actually takes: it never passes
+    # The path graphiti 0.30.2 actually takes: it never passes
     # max_tokens, so folding an empty set must yield None, not raise.
     provider = _FakeProvider([_two_empty_resolutions()])
     batcher = seam.EdgeBatcher(

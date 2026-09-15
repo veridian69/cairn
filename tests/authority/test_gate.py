@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -622,3 +622,26 @@ def test_credential_principal_returns_a_parseable_stored_identity(
         fetch = gate.fetch_from(connection)
         principal_id = gate.credential_principal(fetch, _MANAGER_CREDENTIAL_ID)
     assert principal_id == _MANAGER_ID
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        (datetime(999, 12, 31, 23, 59, 59, tzinfo=UTC), False),
+        (datetime(1000, 1, 1, tzinfo=UTC), True),
+        (datetime(1000, 1, 1, tzinfo=timezone(timedelta(hours=1))), False),
+        (datetime(999, 12, 31, 23, tzinfo=timezone(timedelta(hours=-1))), True),
+        (datetime(1, 1, 1, tzinfo=timezone(timedelta(hours=1))), False),
+    ],
+)
+def test_expiry_and_preparation_preserve_utc_year_boundary(
+    value: datetime, accepted: bool
+) -> None:
+    from cairn.authority.session_codec import canonical
+
+    assert gate.validate_expiry(value) == (None if accepted else "invalid_expiry")
+    if accepted:
+        assert canonical(value) == b'"1000-01-01T00:00:00.000000Z"'
+    else:
+        with pytest.raises(ValueError, match="invalid_session_timestamp"):
+            canonical(value)
