@@ -33,8 +33,8 @@ installation](macos-native.md) for the login-scoped LaunchAgent path. macOS
 native acceptance passed on macOS 26 Intel and Apple Silicon; semantic
 retrieval remains Linux-only.
 
-RC3 semantic setup also requires loading the [maintained FalkorDB offline
-archive](../../deploy/falkordb/README.md#install-the-rc3-offline-image) into
+RC4 semantic setup also requires loading the [maintained FalkorDB offline
+archive](../../deploy/falkordb/README.md#install-the-maintained-offline-image) into
 Docker's containerd image store before starting the index.
 
 **Semantic search requires an OpenAI API key.** The native baseline and Attic

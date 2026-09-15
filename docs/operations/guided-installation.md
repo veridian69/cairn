@@ -27,7 +27,7 @@ search needs outbound OpenAI access and an OpenAI API key; Attic needs no
 external key. Native semantic mode also needs Docker: its FalkorDB index runs
 in a dedicated container. The installer checks local prerequisites before
 preparing Cairn and proves provider access during semantic verification.
-For RC3, load the [maintained FalkorDB offline archive](../../deploy/falkordb/README.md#install-the-rc3-offline-image)
+For RC4, load the [maintained FalkorDB offline archive](../../deploy/falkordb/README.md#install-the-maintained-offline-image)
 before enabling semantic mode; the archive requires Docker's containerd image
 store. The candidate is not yet published to GHCR.
 

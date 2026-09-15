@@ -11,7 +11,10 @@ The browser is absent. `provenance.json` records the upstream commits, module
 hash, base and distinct index/platform/config digests. The recorded scan found
 zero fixable HIGH/CRITICAL findings and 36 HIGH findings without available fixes.
 
-## Install the RC4 offline image
+<a id="install-the-rc3-offline-image"></a>
+<a id="install-the-rc4-offline-image"></a>
+
+## Install the maintained offline image
 
 Download the [image archive](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/cairn-falkordb-v4.20.4-cairn.1.tar)
 and [matching corresponding-source bundle](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/cairn-falkordb-v4.20.4-cairn.1-source.tar.gz)
