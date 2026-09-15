@@ -8,12 +8,12 @@
 
 # The Cairn image the base renders. NOT yet digest-pinned, and
 # deliberately so: nothing is published to a registry, the package
-# version is 0.5.0rc3, and pinning a locally built digest
+# version is 0.5.0rc4, and pinning a locally built digest
 # would rewrite every committed render on every rebuild — the render gate
 # would then fail for changes that have nothing to do with deployment.
 # The tag names the v0.5 candidate source build. Release publication owns the
 # signed digest; this local build tag is not a registry release claim.
-CAIRN_IMAGE=cairn:v0.5.0-rc.3
+CAIRN_IMAGE=cairn:v0.5.0-rc.4
 
 # P-63: the per-instance FalkorDB workload, included by choice (I-91).
 FALKORDB_IMAGE=ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578

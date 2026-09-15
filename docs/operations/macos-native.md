@@ -13,8 +13,9 @@ Use the ordinary installer from a trusted checkout:
 ```
 
 The service provides catalogue-backed memory and exact Attic evidence only.
-Semantic graph search remains a Linux feature and `--semantic` is unavailable
-for this macOS native path. It needs no model-provider credential.
+The installer currently supports semantic graph search on Linux; `--semantic`
+is unavailable for this macOS native path. Remote FalkorDB use from a Mac has
+not been validated or integrated into the installer. It needs no model-provider credential.
 
 ## Requirements and status
 
@@ -70,3 +71,12 @@ See the [guided installer reference](guided-installation.md) for ownership,
 failure and recovery rules. For a temporary foreground process, use
 [macOS foreground](macos-foreground.md). For persistent Linux systemd and
 optional semantic search, use the [Linux native guide](native-installation.md).
+
+## Repeatable hosted acceptance
+
+The public repository includes the manual **macOS native acceptance** workflow
+(`.github/workflows/macos-foreground.yml`). Maintainers select an exact candidate
+branch and run the standard Intel and Apple Silicon jobs. Each job records its
+measured result in the Actions summary. The workflow uses synthetic data and no
+model-provider credentials; it does not certify macOS 12, semantic search or an
+actual logout/login cycle.

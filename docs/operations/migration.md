@@ -23,7 +23,7 @@ reports when your information policy permits it.
   granting a migration principal access to a target.
 - Pin the source revision, snapshot digests, restore-image digest, target
   `instance_id` and Cairn image digest in the operator's migration record. A
-  local `cairn:v0.5.0-rc.3` tag is not a published release image.
+  local `cairn:v0.5.0-rc.4` tag is not a published release image.
 
 ## Prepare offline snapshots
 

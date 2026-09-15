@@ -35,7 +35,7 @@ remembering something does not make it true. Agents must explicitly save
 useful context—Cairn does not automatically capture all your conversations.
 
 Self-hosted · [Apache-2.0](LICENSE.md) · REST and MCP ·
-[Release candidate v0.5.0-rc.3](docs/releases/v0.5.0-rc.3.md)
+[Release candidate v0.5.0-rc.4](docs/releases/v0.5.0-rc.4.md)
 
 macOS foreground and native background memory and Attic acceptance passed on
 macOS 26 Intel and Apple Silicon. The native service uses a per-user,
@@ -241,7 +241,7 @@ plane that prompted its design.
 
 ## Project information
 
-- [v0.5 candidate release notes](docs/releases/v0.5.0-rc.3.md)
+- [v0.5 candidate release notes](docs/releases/v0.5.0-rc.4.md)
 - [macOS native installation](docs/operations/macos-native.md) — login-scoped
   LaunchAgent for catalogue memory and Attic, validated on macOS 26 Intel and Apple Silicon.
 - [Earlier RC2 release notes](docs/releases/v0.1.0-rc.2.md)

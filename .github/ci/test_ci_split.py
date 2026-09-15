@@ -86,6 +86,62 @@ def workflow(name):
 
 
 class SplitTests(unittest.TestCase):
+    def test_every_hosted_job_requires_a_public_repository(self):
+        paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
+        self.assertTrue(paths)
+        for path in paths:
+            for name, job in workflow(path.name)["jobs"].items():
+                with self.subTest(workflow=path.name, job=name):
+                    # A job-level condition is evaluated before runner allocation.
+                    condition = job.get("if", "")
+                    self.assertTrue(
+                        condition.startswith(
+                            "${{ github.event.repository.private == false && "
+                        ),
+                        condition,
+                    )
+
+    def test_mac_acceptance_is_manual_bounded_and_secret_free(self):
+        doc = workflow("macos-foreground.yml")
+        self.assertEqual(set(doc["on"]), {"workflow_dispatch"})
+        self.assertEqual(doc["permissions"], {"contents": "read"})
+        self.assertEqual(set(doc["jobs"]), {"native"})
+        job = doc["jobs"]["native"]
+        self.assertEqual(
+            job["if"],
+            "${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' }}",
+        )
+        self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
+        self.assertEqual(job["timeout-minutes"], "${{ matrix.timeout }}")
+        self.assertEqual(
+            job["strategy"]["matrix"]["include"],
+            [
+                {
+                    "runner": "macos-26-intel",
+                    "architecture": "x86_64",
+                    "timeout": "10",
+                    "acceptance_deadline": "300",
+                },
+                {
+                    "runner": "macos-26",
+                    "architecture": "arm64",
+                    "timeout": "4",
+                    "acceptance_deadline": "180",
+                },
+            ],
+        )
+        text = (ROOT / ".github/workflows/macos-foreground.yml").read_text()
+        self.assertNotIn("secrets.", text)
+        self.assertNotIn("secrets[", text)
+        for step in job["steps"]:
+            if "uses" in step:
+                self.assertRegex(step["uses"], r"^[^@]+@[0-9a-f]{40}$")
+            self.assertNotIn("continue-on-error", step)
+        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        self.assertIn("scripts/test_macos_native.py", commands)
+        self.assertIn('test -z "${OPENAI_API_KEY:-}"', commands)
+        self.assertIn('test -z "${ANTHROPIC_API_KEY:-}"', commands)
+
     def test_marker_inventory_is_individual_and_exact(self):
         actual = {}
         for path in (ROOT / "tests").rglob("test_*.py"):
@@ -120,7 +176,7 @@ class SplitTests(unittest.TestCase):
         self.assertEqual(lightweight["name"], "Lightweight policy and wheel checks")
         self.assertEqual(
             lightweight["if"],
-            "${{ github.event_name == 'pull_request' || github.event_name == 'push' }}",
+            "${{ github.event.repository.private == false && (github.event_name == 'pull_request' || github.event_name == 'push') }}",
         )
         self.assertNotIn("env", lightweight)
         self.assertNotIn("needs", lightweight)
@@ -156,7 +212,10 @@ class SplitTests(unittest.TestCase):
             job["name"],
             "Full repository check (Python ${{ matrix.python-version }}, on demand)",
         )
-        self.assertEqual(job["if"], "${{ github.event_name == 'workflow_dispatch' }}")
+        self.assertEqual(
+            job["if"],
+            "${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' }}",
+        )
         self.assertEqual(job["timeout-minutes"], "25")
         self.assertEqual(
             job["strategy"],
@@ -227,10 +286,13 @@ class SplitTests(unittest.TestCase):
             "${{ github.event_name != 'workflow_dispatch' }}",
         )
         image = doc["jobs"]["image"]
-        self.assertEqual(image["if"], "${{ github.event_name != 'workflow_dispatch' }}")
+        self.assertEqual(
+            image["if"],
+            "${{ github.event.repository.private == false && github.event_name != 'workflow_dispatch' }}",
+        )
         self.assertEqual(
             doc["jobs"]["full_check"]["if"],
-            "${{ github.event_name == 'workflow_dispatch' }}",
+            "${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' }}",
         )
         self.assertNotEqual(
             doc["jobs"]["lightweight"]["if"], doc["jobs"]["full_check"]["if"]
@@ -254,7 +316,10 @@ class SplitTests(unittest.TestCase):
     def test_image_has_no_optional_dependency_or_suppression(self):
         image = workflow("check.yml")["jobs"]["image"]
         self.assertNotIn("needs", image)
-        self.assertEqual(image["if"], "${{ github.event_name != 'workflow_dispatch' }}")
+        self.assertEqual(
+            image["if"],
+            "${{ github.event.repository.private == false && github.event_name != 'workflow_dispatch' }}",
+        )
         self.assertNotIn("continue-on-error", image)
         steps = image["steps"]
         self.assertIn({"run": "make image IMAGE=cairn:ci"}, steps)
@@ -282,7 +347,7 @@ class SplitTests(unittest.TestCase):
         job = doc["jobs"]["host_diagnostics"]
         self.assertEqual(
             job["if"],
-            "${{ github.event_name == 'workflow_dispatch' && inputs.run_host_diagnostics }}",
+            "${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.run_host_diagnostics }}",
         )
         self.assertNotIn("continue-on-error", job)
         self.assertEqual(job["timeout-minutes"], "15")

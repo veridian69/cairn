@@ -19,7 +19,7 @@ concurrency:
 jobs:
   host_diagnostics:
     name: Optional host isolation diagnostics
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_host_diagnostics }}
+    if: ${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.run_host_diagnostics }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

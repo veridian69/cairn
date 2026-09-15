@@ -21,7 +21,7 @@ concurrency:
 jobs:
   lightweight:
     name: Lightweight policy and wheel checks
-    if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+    if: ${{ github.event.repository.private == false && (github.event_name == 'pull_request' || github.event_name == 'push') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -50,7 +50,7 @@ jobs:
 
   full_check:
     name: Full repository check (Python ${{ matrix.python-version }}, on demand)
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -93,7 +93,7 @@ jobs:
 
   image:
     name: Image gate
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event.repository.private == false && github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

@@ -1,0 +1,81 @@
+name: macOS native acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-foreground-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    if: ${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' }}
+    name: Native background (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26-intel
+            architecture: x86_64
+            timeout: 10
+            acceptance_deadline: 300
+          - runner: macos-26
+            architecture: arm64
+            timeout: 4
+            acceptance_deadline: 180
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env:
+      UV_PYTHON: "3.14"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.14"
+          enable-cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+      - name: Verify bounded hosted Mac environment
+        env:
+          EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          test "$RUNNER_OS" = macOS
+          test "$GITHUB_ACTIONS" = true
+          test "$(uname -m)" = "$EXPECTED_ARCHITECTURE"
+          test "$(id -u)" -ne 0
+          test -z "${OPENAI_API_KEY:-}"
+          test -z "${ANTHROPIC_API_KEY:-}"
+      - run: env -u UV_CACHE_DIR -u UV_PYTHON_INSTALL_DIR uv sync --locked
+      - name: Verify foreground ownership and Darwin durability contracts
+        run: >-
+          uv run --locked pytest -q --no-cov
+          tests/installer/test_native_foreground.py
+          tests/installer/test_macos_launchd.py
+          tests/installer/test_darwin_mounts.py
+          tests/installer/test_macos_native_acceptance.py
+          tests/installer/test_macos_cli.py
+          tests/installer/test_cli.py
+          tests/catalogue/test_sqlite_durability.py
+      - name: Exercise persistent launchd, memory, Attic and lifecycle recovery
+        run: >-
+          uv run --locked python -B scripts/test_macos_native.py
+          --source "$GITHUB_WORKSPACE"
+          --work-root "$RUNNER_TEMP/cairn-macos-native-${{ matrix.architecture }}"
+          --report "$RUNNER_TEMP/macos-native-${{ matrix.architecture }}.json"
+          --deadline ${{ matrix.acceptance_deadline }}
+      - name: State measured acceptance boundary
+        if: always()
+        env:
+          NATIVE_REPORT: ${{ runner.temp }}/macos-native-${{ matrix.architecture }}.json
+        run: |
+          if test -f "$NATIVE_REPORT"; then
+            tee -a "$GITHUB_STEP_SUMMARY" < "$NATIVE_REPORT"
+          else
+            echo 'macOS native acceptance did not produce a report.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo 'These jobs exercise foreground ownership regressions and graph-disabled login-scoped launchd operation. They do not certify semantic graph search, an actual logout/login cycle or macOS 12.' >> "$GITHUB_STEP_SUMMARY"
