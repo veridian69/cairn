@@ -43,10 +43,15 @@ Claude saves a workshop plan. Codex picks it up and changes the venue.
 When Claude returns, it can see the new plan and explain what changed—with
 the original record still there to check.
 
-![Claude and Codex share a workshop plan, correct its venue, and retrieve the correction history in Cairn](docs/assets/shared-memory-demo.gif)
+<details open>
+<summary>Show or hide animated demo</summary>
+
+![Claude and Codex share a workshop plan, correct its venue, and retrieve the correction history in Cairn](https://raw.githubusercontent.com/veridian69/cairn/326dc87e1c8c1cba0ec3bb99983b7d093ea8f11f/docs/assets/shared-memory-demo.gif)
+
+</details>
 
 47 seconds ·
-[Read the transcript and history check](docs/shared-memory-demo.md)
+[Read the transcript and history check](https://github.com/veridian69/cairn/blob/326dc87e1c8c1cba0ec3bb99983b7d093ea8f11f/docs/shared-memory-demo.md)
 
 These are real agent responses using a disposable Cairn instance and a
 fictional workshop. The layout is re-rendered for readability and waiting
