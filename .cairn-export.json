@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "a01e3eca0286bb4576b96d882464c68b7e80be7d",
+  "source_revision": "569c06edc9ff33a298b8d5048c696f3b831d8b8e",
   "release_configuration": {
     "files.json": "79118ff2177bb35264d3d1c0a4f16ca9f75d5704e6787c01ff439bcef82ca293",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
@@ -1710,7 +1710,7 @@
       "mode": 420
     },
     "docs/releases/v0.7.0-rc.2.md": {
-      "sha256": "67c33eea81c8dfe0d7803cc16cb1aa60fbe8619cdd75818d80d3f50e688f617d",
+      "sha256": "fc323399a0a9699cb1836868f45093c872e99af422b11d7d1df0d85df24ad4d3",
       "mode": 420
     },
     "docs/runbooks/runbook-reference-task11a-posture.md": {
@@ -2618,7 +2618,7 @@
       "mode": 420
     },
     "src/cairn_install/native_index.py": {
-      "sha256": "6efaa34c4f74d4b5f7fd0b82089ddc677074b6ee0dff0d3aa24b86503a50c735",
+      "sha256": "1ce5c21e09c3f8dbee5d0dc834b54939d94b1953930a5ad005f3d5502dfae420",
       "mode": 420
     },
     "src/cairn_install/output.py": {
@@ -3350,7 +3350,7 @@
       "mode": 420
     },
     "tests/installer/test_native.py": {
-      "sha256": "5caedf162143ceded1cf7787aa14a37a970e382750d1c91eca4b4f3deda996c4",
+      "sha256": "417a329f46b994878e2f87d071d4a36058e5bed8ef88fe230007f7fa7ebb2eab",
       "mode": 420
     },
     "tests/installer/test_native_blitz_backends.py": {

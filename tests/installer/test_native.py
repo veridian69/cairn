@@ -1189,3 +1189,35 @@ def test_detached_helper_records_real_kernel_identity_and_stops_only_that_proces
         stop_process(identity, timeout=2.0)
     assert process_identity(identity.pid) is None
     assert identity.pid not in native_index._spawned_processes
+
+
+def test_detached_helper_retries_only_transient_empty_startup_cmdline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inspect = native_index.process_identity
+    calls = 0
+
+    def transient_identity(pid: int) -> ProcessIdentity | None:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise InstallError(f"Native process {pid} has no inspectable command line")
+        return inspect(pid)
+
+    monkeypatch.setattr(native_index, "process_identity", transient_identity)
+    identity = spawn_detached(
+        tmp_path / "process.json",
+        tmp_path / "service.log",
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+    )
+    try:
+        assert calls >= 3
+        assert (
+            ProcessIdentity.from_json(
+                json.loads((tmp_path / "process.json").read_text())
+            )
+            == identity
+        )
+    finally:
+        stop_process(identity, timeout=2.0)

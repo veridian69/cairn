@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,9 +152,35 @@ def spawn_detached(
             )
         if received:
             raise KeyboardInterrupt
-        identity = process_identity(process.pid)
-        if identity is None:
-            raise InstallError("Native process exited before its identity was recorded")
+        deadline = time.monotonic() + 1.0
+        transient_error: InstallError | None = None
+        while True:
+            try:
+                identity = process_identity(process.pid)
+                transient_error = None
+            except InstallError as error:
+                if str(error) != (
+                    f"Native process {process.pid} has no inspectable command line"
+                ):
+                    raise
+                # A newly spawned child can briefly expose an empty cmdline
+                # while the kernel replaces its image. Retry only this owned
+                # Popen child and only during its bounded startup window.
+                identity = None
+                transient_error = error
+            if identity is not None:
+                break
+            if process.poll() is not None:
+                raise InstallError(
+                    "Native process exited before its identity was recorded"
+                )
+            if time.monotonic() >= deadline:
+                if transient_error is not None:
+                    raise transient_error
+                raise InstallError(
+                    "Native process identity was not inspectable during startup"
+                )
+            time.sleep(0.005)
         if identity.uid != os.getuid() or identity.argv != tuple(command):
             raise InstallError(
                 "Started native process does not match the requested identity"
