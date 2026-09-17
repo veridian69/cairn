@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "6be0da958a407ca9932443cdcca36c81e372a4f3",
+  "source_revision": "a01e3eca0286bb4576b96d882464c68b7e80be7d",
   "release_configuration": {
     "files.json": "79118ff2177bb35264d3d1c0a4f16ca9f75d5704e6787c01ff439bcef82ca293",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
@@ -1294,7 +1294,7 @@
       "mode": 420
     },
     "deploy/falkordb/build.sh": {
-      "sha256": "2a5b162758680229a1c8f092c96f4a7dda0bd83f353204cadfd59e3aac52de76",
+      "sha256": "7f427ab1b16be8ea21d04a89bc2b14238d8a0f35236bca18202dddb145794b7a",
       "mode": 493
     },
     "deploy/falkordb/prepare_source_bundle.py": {
@@ -1710,7 +1710,7 @@
       "mode": 420
     },
     "docs/releases/v0.7.0-rc.2.md": {
-      "sha256": "a6bd21a7bbbac4172a602cb0b4f8030a10ec7697b50bc37b518206df2f524e16",
+      "sha256": "67c33eea81c8dfe0d7803cc16cb1aa60fbe8619cdd75818d80d3f50e688f617d",
       "mode": 420
     },
     "docs/runbooks/runbook-reference-task11a-posture.md": {
@@ -2594,7 +2594,7 @@
       "mode": 420
     },
     "src/cairn_install/kubernetes_endpoint.py": {
-      "sha256": "1904348986395ba3b6be395e1ca81f03c0c81a666933ba34a87cd669a4b8ff50",
+      "sha256": "f0d9fd7c3838412a2226043351558d9d657b1f51ec69be59e4391eed8506ee10",
       "mode": 420
     },
     "src/cairn_install/kubernetes_garden.py": {
@@ -3190,7 +3190,7 @@
       "mode": 420
     },
     "tests/deploy/test_falkordb_build.py": {
-      "sha256": "cf462a3b991bf133056114c05f52f34784f8ecc3c16d917f727fc6b58e426895",
+      "sha256": "21fb55def51b13238a2dc0344168174da4e740578791b11f06dc6094f5090032",
       "mode": 420
     },
     "tests/deploy/test_falkordb_release.py": {
@@ -3322,7 +3322,7 @@
       "mode": 420
     },
     "tests/installer/test_kubernetes.py": {
-      "sha256": "e9c7a831e1b3e64be0a37275d6420a5791238f4d4c7fc3ecdfbd5dc6b71892c9",
+      "sha256": "30ddc896877d6283c2a9eedcfc4b7419e53ab992aff3b261d142ba69c6f533cd",
       "mode": 420
     },
     "tests/installer/test_kubernetes_assets.py": {

@@ -104,6 +104,25 @@ class EndpointProcess:
                             with socket.create_connection(
                                 ("127.0.0.1", self.local_port), timeout=2
                             ):
+                                # A script launcher can still be crossing the
+                                # shebang exec boundary when Popen returns.
+                                # Readiness proves the final command is now
+                                # running, so journal that stable identity for
+                                # safe recovery by a resumed installer.
+                                stable_fields = (
+                                    Path("/proc/" + str(process.pid) + "/stat")
+                                    .read_text()
+                                    .rsplit(")", 1)[1]
+                                    .split()
+                                )
+                                endpoint = self.record["endpoint"]
+                                endpoint["start_time"] = stable_fields[19]
+                                endpoint["cmdline"] = (
+                                    Path("/proc/" + str(process.pid) + "/cmdline")
+                                    .read_bytes()
+                                    .hex()
+                                )
+                                self.ctx.save()
                                 return
             raise InstallError(
                 "kubectl port-forward did not become ready within 20 seconds"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import shlex
 import socket
 import subprocess
 import sys
@@ -733,6 +734,30 @@ def test_resumed_backend_cleans_verified_recorded_tunnel(
         resumed.close_endpoint()
         assert "endpoint" not in ctx.state["resources"]["kubernetes"]
         assert adapter.endpoint.process.wait(timeout=2) == -15
+    finally:
+        adapter.close_endpoint()
+
+
+def test_resumed_backend_records_identity_after_launcher_exec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    actual = tmp_path / "actual-kubectl"
+    install_tunnel_binary(tmp_path, monkeypatch)
+    (tmp_path / "kubectl").rename(actual)
+    wrapper = tmp_path / "kubectl"
+    wrapper.write_text(
+        "#!/bin/sh\nsleep 0.1\nexec " + shlex.quote(str(actual)) + ' "$@"\n'
+    )
+    wrapper.chmod(0o700)
+    ctx, adapter = prepared(tmp_path)
+    adapter.open_endpoint()
+    try:
+        record = ctx.state["resources"]["kubernetes"]["endpoint"]
+        current = (Path("/proc") / str(record["pid"]) / "cmdline").read_bytes().hex()
+        assert record["cmdline"] == current
+        resumed = backend(ctx)
+        resumed.close_endpoint()
+        assert "endpoint" not in ctx.state["resources"]["kubernetes"]
     finally:
         adapter.close_endpoint()
 

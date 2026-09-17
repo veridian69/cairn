@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 RECIPE = Path(__file__).resolve().parents[2] / "deploy/falkordb"
 
 
@@ -27,7 +29,10 @@ def test_source_recipe_has_offline_compiles_and_runtime_dependency_check() -> No
     assert 'ENTRYPOINT ["/var/lib/falkordb/bin/run.sh"]' in dockerfile
 
 
-def test_invalid_job_limit_refuses_before_external_commands(tmp_path: Path) -> None:
+@pytest.mark.parametrize("jobs", ["0", "11", "08", "18446744073709551617"])
+def test_invalid_job_limit_refuses_before_external_commands(
+    tmp_path: Path, jobs: str
+) -> None:
     binary = tmp_path / "bin"
     binary.mkdir()
     marker = tmp_path / "docker-called"
@@ -39,7 +44,7 @@ def test_invalid_job_limit_refuses_before_external_commands(tmp_path: Path) -> N
         **os.environ,
         "PATH": f"{binary}:{os.environ['PATH']}",
         "COMMAND_MARKER": str(marker),
-        "CAIRN_BUILD_JOBS": "11",
+        "CAIRN_BUILD_JOBS": jobs,
     }
 
     result = subprocess.run(

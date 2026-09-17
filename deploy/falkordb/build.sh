@@ -7,7 +7,7 @@ if (( $# != 0 )); then
   exit 2
 fi
 jobs=${CAIRN_BUILD_JOBS:-10}
-if [[ ! $jobs =~ ^[0-9]+$ ]] || (( jobs < 1 || jobs > 10 )); then
+if [[ ! $jobs =~ ^([1-9]|10)$ ]]; then
   printf 'CAIRN_BUILD_JOBS must be an integer from 1 to 10\n' >&2; exit 2
 fi
 
