@@ -146,6 +146,9 @@ proves the exact local FalkorDB digest on every recorded node without pulling.
 It does not transfer the image or obtain host access; node staging remains a
 separate cluster-administrator operation.
 
+Cairn uses the normal registry path and the site's existing registry-credential policy.
+FalkorDB uses the separate local runtime receipt described above.
+
 `--kube-preloaded-image` is an explicit, narrow exception for the recorded
 single-node reference host. Add it only when the same digest is already in that
 node's runtime image cache; the installer then uses `IfNotPresent` and refuses

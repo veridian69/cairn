@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "e7999dee671e4f499b5964ccf0e7f456433250fb",
+  "source_revision": "6be0da958a407ca9932443cdcca36c81e372a4f3",
   "release_configuration": {
     "files.json": "79118ff2177bb35264d3d1c0a4f16ca9f75d5704e6787c01ff439bcef82ca293",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
@@ -1278,7 +1278,7 @@
       "mode": 420
     },
     "deploy/falkordb/Dockerfile.source": {
-      "sha256": "e17598796d49cda6d19fa36503f5e7e359ce66ccfd22d603fbf1c2076bbfa7c5",
+      "sha256": "626d81cea59b0d22b443d50d1785f60f5c5497710573c487d7d51cc4d40e9bb6",
       "mode": 420
     },
     "deploy/falkordb/MODIFICATIONS.md": {
@@ -1638,7 +1638,7 @@
       "mode": 420
     },
     "docs/operations/guided-installation.md": {
-      "sha256": "3921e1cc60f876fb0212baef5193b19dfc3e1277d13015f6ada53b121cc8ac57",
+      "sha256": "fe956d90357155ae4bd525e30e4a0a5c235bd375d2528e517a6c4d561ad0a4b5",
       "mode": 420
     },
     "docs/operations/kubernetes-gateway.md": {
@@ -3190,7 +3190,7 @@
       "mode": 420
     },
     "tests/deploy/test_falkordb_build.py": {
-      "sha256": "b2e4cc5158b1e2b931ff1adc71ab643f4014d396b7f49b4847f72a2d8f7d28e3",
+      "sha256": "cf462a3b991bf133056114c05f52f34784f8ecc3c16d917f727fc6b58e426895",
       "mode": 420
     },
     "tests/deploy/test_falkordb_release.py": {

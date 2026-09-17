@@ -12,9 +12,15 @@ RUN printf '%s\n' 'set(CXX_AVX OFF CACHE BOOL "Cairn amd64 baseline" FORCE)' 'se
 WORKDIR /build/FalkorDB
 RUN --network=none CMAKE_TOOLCHAIN_FILE=/build/cairn-toolchain.cmake make GCC=1 && \
     test -f bin/linux-x64-release/falkordb.so && \
+    grep -Fx 'CXX_AVX:BOOL=OFF' bin/linux-x64-release/CMakeCache.txt && \
+    grep -Fx 'CXX_AVX512F:BOOL=OFF' bin/linux-x64-release/CMakeCache.txt && \
+    grep -Fx 'CXX_AVX512DQ:BOOL=OFF' bin/linux-x64-release/CMakeCache.txt && \
+    grep -Fx 'FETCHCONTENT_SOURCE_DIR_CPU_FEATURES:PATH=/build/cpu_features' bin/linux-x64-release/CMakeCache.txt && \
+    ! grep -R --include=flags.make -- '-mavx' bin/linux-x64-release && \
     mkdir -p /build/licenses/falkordb /build/licenses/redis /build/licenses/cpu_features && \
     find . -type f \( -iname 'license' -o -iname 'license.*' -o -iname 'copying' -o -iname 'copying.*' \) -exec cp --parents '{}' /build/licenses/falkordb/ \; && \
-    cp "/build/redis-${REDIS_VERSION}/COPYING" /build/licenses/redis/COPYING && \
+    cd "/build/redis-${REDIS_VERSION}" && \
+    find . -type f \( -iname 'license' -o -iname 'license.*' -o -iname 'copying' -o -iname 'copying.*' \) -exec cp --parents '{}' /build/licenses/redis/ \; && \
     cp /build/cpu_features/LICENSE /build/licenses/cpu_features/LICENSE
 
 ARG UBUNTU_BASE
