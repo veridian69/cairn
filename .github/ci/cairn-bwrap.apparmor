@@ -1,0 +1,6 @@
+# Disposable GitHub-hosted CI only. This is a userns exception, not a sandbox.
+abi <abi/4.0>,
+
+profile cairn-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}

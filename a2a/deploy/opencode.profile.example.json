@@ -1,0 +1,13 @@
+{
+  "garden_endpoint": "https://garden.example.net:8443/mcp",
+  "credential_file": "opencode.token",
+  "instance_id": "11111111-1111-4111-8111-111111111111",
+  "scope": {"realm": "engineering", "segments": [{"kind": "project", "identifier": "cairn"}]},
+  "classification": "internal",
+  "participant": "opencode",
+  "adapter": "opencode",
+  "session_id": "REPLACE_WITH_EXISTING_SESSION_ID",
+  "host_endpoint": "http://127.0.0.1:4096",
+  "host_username": "opencode",
+  "host_credential_file": "opencode-server.password"
+}

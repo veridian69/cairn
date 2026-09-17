@@ -1,0 +1,164 @@
+# I-09: a StatefulSet, not a Deployment. Stable identity plus a
+# ReadWriteOncePod claim is what makes "deliberately replace, never
+# overlap" structural rather than a matter of update strategy — the data
+# directory's lease refuses a second process, and the claim refuses a
+# second Pod before the lease is ever consulted.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cairn
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+spec:
+  replicas: 1
+  serviceName: cairn
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: cairn
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cairn
+        app.kubernetes.io/instance: cairn
+    spec:
+      serviceAccountName: cairn
+      automountServiceAccountToken: false
+      # I-20: 60 seconds to finish in-flight work and close the
+      # catalogue, matching the termination contract the runtime honours.
+      terminationGracePeriodSeconds: 60
+      # I-11 verbatim. No runAsUser, runAsGroup or fsGroup is fixed here:
+      # the image already runs as 65532:0, and OpenShift assigns its own
+      # UID from the namespace range. Pinning one would break exactly the
+      # target the portability exists for.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # I-39: the catalogue is migrated by an init container running
+        # the same image against the same volume, so a Pod that starts
+        # serving has already reached the schema it expects. `migrate` is
+        # idempotent; `bootstrap` is not, and deliberately does not
+        # appear here — see the base README for the documented two-step.
+        - name: migrate
+          image: cairn:v0.7.0-rc.2
+          args:
+            - migrate
+            - --config
+            - /etc/cairn/config.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/cairn
+            - name: config
+              mountPath: /etc/cairn
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: cairn
+          image: cairn:v0.7.0-rc.2
+          args:
+            - serve
+            - --config
+            - /etc/cairn/config.yaml
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          # I-20's three probes against the three routes the runtime
+          # actually serves. Startup carries the slow case — catalogue
+          # verification on a large instance — so liveness never fires
+          # during a legitimate start.
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/cairn
+            - name: config
+              mountPath: /etc/cairn
+              readOnly: true
+            - name: credentials
+              mountPath: /var/run/secrets/cairn
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: cairn-config
+        # I-19: credentials arrive as files from a Secret, never as
+        # environment variables. Optional because the base disables the
+        # retrieval index and therefore reads nothing here; an overlay
+        # that enables it and forgets the Secret gets I-92's typed
+        # startup refusal naming the missing file, which is a better
+        # failure than a Pod stuck in ContainerCreating with no reason
+        # given.
+        - name: credentials
+          secret:
+            secretName: cairn-credentials
+            optional: true
+            # 0440, not 0400. A Secret volume's files are owned root:root
+            # unless an fsGroup is injected, and I-11 deliberately fixes
+            # no fsGroup — so at 0400 the workload UID cannot read its own
+            # credentials and a graphiti-enabled instance refuses to start
+            # with credentials_unavailable. Group 0 read is what P-67 asks
+            # for: "readable only by the arbitrary runtime UID's root
+            # group". Measured on reference as uid 65532 gid 0 — 0400 gives
+            # -r-------- and a failed read, 0440 gives -r--r----- and a
+            # successful one.
+            defaultMode: 0440
+        # readOnlyRootFilesystem leaves nowhere to write, and SQLite
+        # wants a temporary directory. Bounded so a runaway cannot
+        # consume the node's memory.
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: cairn
+          app.kubernetes.io/instance: cairn
+      spec:
+        volumeMode: Filesystem
+        # I-10: one Pod, enforced by the scheduler rather than by
+        # convention. The kind overlay alone may relax this to
+        # ReadWriteOnce where the provisioner lacks RWOP, and its
+        # acceptance then proves exclusion through the lease instead.
+        accessModes:
+          - ReadWriteOncePod
+        resources:
+          requests:
+            storage: 10Gi
+        # No storageClassName: the base is portable and names no
+        # cluster's provisioner. The Kubernetes overlay names
+        # `cairn-local` explicitly, per I-10.

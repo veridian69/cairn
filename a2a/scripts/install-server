@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Stage Garden's server installation under an explicit Linux root directory."""
+
+import runpy
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    installer = runpy.run_path(str(Path(__file__).absolute().with_name("install-user")))
+    sys.exit(installer["main"]("server"))

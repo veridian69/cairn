@@ -1,0 +1,57 @@
+# The whole of the gateway's behaviour, on one page a reviewer can read
+# in full — which is the argument P-64 made for squid over a proxy with a
+# larger configuration surface.
+#
+# Order is the whole of squid's semantics: rules are evaluated top to
+# bottom and the first match wins, so a rule below `http_access deny all`
+# is a rule that never fires. The render test checks the sequence, not
+# merely the presence, of these four lines.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-gateway-config
+  namespace: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+data:
+  squid.conf: |
+    http_port 3128
+    # Container runtimes may inherit billion-entry descriptor limits. Bound
+    # Squid's descriptor table before startup; each CONNECT uses two sockets.
+    max_filedescriptors 65536
+
+    # THE OPERATOR-EDITABLE VALUE. Every destination Cairn instances on
+    # this cluster may reach, and nothing else is reachable at all — not
+    # by a different instance, not by a mistyped model endpoint, not by
+    # anything that later reads a provider base URL from configuration.
+    acl allowed_fqdns dstdomain api.openai.com
+    acl SSL_ports port 443
+    acl CONNECT method CONNECT
+
+    # I-93's posture, in four lines and this order:
+    # nothing but CONNECT, nothing but 443, nothing but the allow-list,
+    # and then a deny that catches everything the three above did not.
+    http_access deny !CONNECT
+    http_access deny CONNECT !SSL_ports
+    http_access allow CONNECT allowed_fqdns
+    http_access deny all
+
+    # A tunnel has nothing to cache, and a proxy that stores nothing has
+    # nothing to leak from disk. No cache_dir is configured either, so
+    # the on-disk store never exists rather than existing and being
+    # bypassed.
+    cache deny all
+
+    # Logs to stdout, where a container's logs belong; no pid file,
+    # because the root filesystem is read-only and a foreground process
+    # supervised by the kubelet has no use for one. `cache_log` takes a
+    # plain path and not the `stdio:` module `access_log` accepts —
+    # writing the module form here silently falls back to the default
+    # file and errors against the read-only filesystem.
+    access_log stdio:/dev/stdout
+    cache_log /dev/stdout
+    pid_filename none
+
+    # Shorter than the 30-second default so that squid finishes inside a
+    # pod's termination grace rather than being killed at the end of it.
+    shutdown_lifetime 10 seconds

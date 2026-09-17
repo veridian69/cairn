@@ -1,0 +1,22 @@
+# The name the instance's configuration resolves: `graphiti.host` is
+# `falkordb`, which is this Service inside the instance's own namespace.
+# A short name and not an FQDN, because the namespace is the isolation
+# boundary — a configuration that names another namespace's index is a
+# configuration that has already lost the argument.
+apiVersion: v1
+kind: Service
+metadata:
+  name: falkordb
+  labels:
+    app.kubernetes.io/name: falkordb
+    app.kubernetes.io/instance: cairn
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: falkordb
+    app.kubernetes.io/instance: cairn
+  ports:
+    - name: redis
+      protocol: TCP
+      port: 6379
+      targetPort: redis

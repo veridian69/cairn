@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--no-start" ]; }; then
+    echo "usage: install-user [--no-start]" >&2
+    exit 2
+fi
+
+source_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+# Not XDG_CONFIG_HOME: the systemd user manager is seeded at login and typically
+# carries no XDG_CONFIG_HOME, so a shell-set value would send credentials and the unit
+# somewhere neither the manager nor the relay binary ever looks.
+config_dir="$HOME/.config/cairn"
+unit_dir="$HOME/.config/systemd/user"
+token_path="$config_dir/relay-token"
+binary_path="$HOME/.local/share/bin/cairn-mcp"
+
+validate_secret_file() {
+    local secret_path="$1"
+    local secret_label="$2"
+    local required="$3"
+
+    if [ ! -e "$secret_path" ]; then
+        if [ "$required" = "required" ]; then
+            echo "$secret_label is missing" >&2
+            exit 1
+        fi
+        return
+    fi
+    if [ -L "$secret_path" ] || [ ! -f "$secret_path" ]; then
+        echo "$secret_label must be a regular file" >&2
+        exit 1
+    fi
+    if [ "$(stat -c '%u' "$secret_path")" != "$(id -u)" ]; then
+        echo "$secret_label must be owned by the current user" >&2
+        exit 1
+    fi
+    if [ "$(stat -c '%a' "$secret_path")" != "600" ]; then
+        echo "$secret_label must have mode 0600" >&2
+        exit 1
+    fi
+}
+
+if ! command -v go >/dev/null; then
+    echo "go must be installed to build cairn-mcp" >&2
+    exit 1
+fi
+
+install -d -m 0700 "$config_dir"
+install -d -m 0755 "$HOME/.local/share/bin" "$unit_dir"
+
+if [ ! -e "$token_path" ]; then
+    umask 077
+    token_tmp="$(mktemp "$config_dir/.relay-token.XXXXXX")"
+    head -c 32 /dev/urandom | base64 | tr -d '\n' | cut -c1-43 > "$token_tmp"
+    chmod 0600 "$token_tmp"
+    mv -f "$token_tmp" "$token_path"
+fi
+
+validate_secret_file "$token_path" "local relay token" required
+validate_secret_file "$config_dir/cf-access-client-id" "Cloudflare client ID" required
+validate_secret_file "$config_dir/cf-access-client-secret" "Cloudflare client secret" required
+
+(cd "$source_dir" && go build -o "$binary_path" ./cmd/cairn-mcp)
+"$binary_path" check
+
+install -m 0644 "$source_dir/deploy/cairn-mcp.service" "$unit_dir/cairn-mcp.service"
+systemctl --user daemon-reload
+if [ "${1:-}" != "--no-start" ]; then
+    systemctl --user enable --now cairn-mcp.service
+fi
+
+echo "Cairn MCP relay installed"

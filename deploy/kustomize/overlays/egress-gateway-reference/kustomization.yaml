@@ -1,0 +1,18 @@
+# Reference's egress boundary is stricter than the portable gateway: address
+# ranges keep TCP/443 off local space, then Cilium identities close the
+# cluster-internal paths that are not expressible as IP ranges alone.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../egress-gateway
+  - cilium-networkpolicy.yaml
+
+patches:
+  - path: networkpolicy-egress.yaml
+    target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: egress-gateway-allow-egress
+      namespace: cairn-egress

@@ -1,0 +1,24 @@
+# Standard NetworkPolicy cannot distinguish Cilium's cluster identities.
+# This reference-only layer therefore blocks their HTTPS paths after the
+# portable policy has admitted only public address space on TCP/443.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: egress-gateway-deny-cluster-https
+  namespace: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  egressDeny:
+    - toEntities:
+        - cluster
+        - host
+        - remote-node
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

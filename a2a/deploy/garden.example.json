@@ -1,0 +1,18 @@
+{
+  "listen": "0.0.0.0:8443",
+  "data_dir": "/var/lib/garden/.a2a/data",
+  "daemon_url_file": "/var/lib/garden/.a2a/daemon.url",
+  "tls_cert_file": "/etc/garden/tls/fullchain.pem",
+  "tls_key_file": "/etc/garden/tls/key.pem",
+  "auth": {
+    "endpoint": "https://cairn.example.net/memory/v1/diagnose",
+    "instance_id": "11111111-1111-4111-8111-111111111111",
+    "scope": {"realm": "engineering", "segments": [{"kind": "project", "identifier": "cairn"}]},
+    "classification": "internal"
+  },
+  "principals": {
+    "22222222-2222-4222-8222-222222222222": "spike",
+    "33333333-3333-4333-8333-333333333333": "val",
+    "44444444-4444-4444-8444-444444444444": "opencode"
+  }
+}

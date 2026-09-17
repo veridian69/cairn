@@ -1,0 +1,74 @@
+gui/501/invalid.example.cairn.probe.fd971ada-7190-418e-bd9c-dc2c16debd01 = {
+	active count = 1
+	path = /private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cairn-launchd-probe-p5mabhk9/invalid.example.cairn.probe.fd971ada-7190-418e-bd9c-dc2c16debd01.plist
+	type = LaunchAgent
+	state = xpcproxy
+
+	program = /bin/sleep
+	arguments = {
+		/bin/sleep
+		300
+	}
+
+	working directory = /var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cairn-launchd-probe-p5mabhk9
+
+	stdout path = /var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cairn-launchd-probe-p5mabhk9/stdout.log
+	stderr path = /var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cairn-launchd-probe-p5mabhk9/stderr.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.example/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => invalid.example.cairn.probe.fd971ada-7190-418e-bd9c-dc2c16debd01
+	}
+
+	domain = gui/501 [100002]
+	umask = 77
+	asid = 100002
+	minimum runtime = 10
+	exit timeout = 15
+	runs = 1
+	pid = 1185
+	immediate reason = speculative
+	forks = 0
+	execs = 0
+	initialized = 1
+	trampolined = 0
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 0)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = (never exited)
+
+	resource coalition = {
+		ID = 868
+		type = resource
+		state = active
+		active count = 1
+		name = invalid.example.cairn.probe.fd971ada-7190-418e-bd9c-dc2c16debd01
+	}
+
+	jetsam coalition = {
+		ID = 869
+		type = jetsam
+		state = active
+		active count = 1
+		name = invalid.example.cairn.probe.fd971ada-7190-418e-bd9c-dc2c16debd01
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+
+	properties = keepalive | runatload | inferred program | system service | tle system
+}

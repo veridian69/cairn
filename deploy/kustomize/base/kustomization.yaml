@@ -1,0 +1,17 @@
+# The portable base: exactly one instance's portable resources, and
+# nothing a particular cluster needs (P-62, I-08).
+#
+# Labels and selectors are written out in each resource rather than
+# injected by a transformer. The committed render is the artefact a
+# reviewer reads and an operator applies (P-61), so what it says should be
+# what the source says — a label that only exists after a transformer runs
+# is a label nobody can grep for in the source.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - configmap.yaml
+  - service.yaml
+  - statefulset.yaml
+  - networkpolicy.yaml

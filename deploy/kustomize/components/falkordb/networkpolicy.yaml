@@ -1,0 +1,77 @@
+# The index's own closed pair, in the base's shape: a deny that carries
+# no rules to widen, and one explicit allowance beside it. I-91's "denies
+# everything else" is the emptiness of the first policy, not a rule in
+# the second.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: falkordb-default-deny
+  labels:
+    app.kubernetes.io/name: falkordb
+    app.kubernetes.io/instance: cairn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: falkordb
+      app.kubernetes.io/instance: cairn
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# The only connection the index accepts: this namespace's Cairn pod, on
+# 6379. The selector carries no namespaceSelector, so it means "in this
+# namespace" — which is the point. A sibling instance's Cairn pod is a
+# pod in another namespace and is refused by the deny above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: falkordb-allow-cairn-ingress
+  labels:
+    app.kubernetes.io/name: falkordb
+    app.kubernetes.io/instance: cairn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: falkordb
+      app.kubernetes.io/instance: cairn
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cairn
+              app.kubernetes.io/instance: cairn
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# The other half of the same connection. The base denies Cairn's egress
+# by default, so permitting the index at one end only would produce a
+# instance that starts, passes its probes and cannot reach its own index
+# — a failure that surfaces at first query rather than at first boot.
+# It ships with the component because it exists exactly when the index
+# does.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cairn-allow-index-egress
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: cairn
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: falkordb
+              app.kubernetes.io/instance: cairn
+      ports:
+        - protocol: TCP
+          port: 6379

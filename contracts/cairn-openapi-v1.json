@@ -1,0 +1,4946 @@
+{
+  "components": {
+    "schemas": {
+      "AuditEvent": {
+        "additionalProperties": false,
+        "description": "The canonical audit event. Every key is always present; a value that does not apply is null. These are the exact bytes the hash chain covers.",
+        "properties": {
+          "action_code": {
+            "type": "string"
+          },
+          "action_kind": {
+            "enum": [
+              "data",
+              "administration",
+              "system"
+            ],
+            "type": "string"
+          },
+          "affected_assertion_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "affected_evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "affected_fact_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "affected_grant_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "chain_identity": {
+            "type": "string"
+          },
+          "chain_kind": {
+            "enum": [
+              "instance",
+              "realm"
+            ],
+            "type": "string"
+          },
+          "classification_transition": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "enum": [
+                  "public",
+                  "internal",
+                  "restricted",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "to": {
+                "enum": [
+                  "public",
+                  "internal",
+                  "restricted"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "command_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "credential_verifier_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "evidence_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_reference": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grant_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "idempotency_key": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mutation_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "allow",
+              "deny",
+              "error"
+            ],
+            "type": "string"
+          },
+          "previous_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "principal_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$",
+            "type": "string"
+          },
+          "replay_of_mutation_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_scope": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "safe_request_fingerprint": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema": {
+            "const": "cairn.audit/v1",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_scope": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "target_scope": {
+            "additionalProperties": false,
+            "properties": {
+              "realm": {
+                "type": "string"
+              },
+              "segments": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "realm",
+              "segments"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "trust_transition": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "enum": [
+                  "candidate",
+                  "validated",
+                  "failed-approach",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "to": {
+                "enum": [
+                  "candidate",
+                  "validated",
+                  "failed-approach"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action_code",
+          "action_kind",
+          "affected_assertion_ids",
+          "affected_evidence_ids",
+          "affected_fact_ids",
+          "affected_grant_ids",
+          "chain_identity",
+          "chain_kind",
+          "classification_transition",
+          "command_digest",
+          "correlation_id",
+          "credential_verifier_id",
+          "event_id",
+          "evidence_digest",
+          "evidence_reference",
+          "grant_id",
+          "idempotency_key",
+          "mutation_id",
+          "outcome",
+          "previous_hash",
+          "principal_id",
+          "reason_code",
+          "recorded_at",
+          "replay_of_mutation_id",
+          "requested_scope",
+          "safe_request_fingerprint",
+          "schema",
+          "sequence",
+          "source_scope",
+          "target_scope",
+          "trust_transition"
+        ],
+        "type": "object"
+      },
+      "AuditReceiptBody": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_identity": {
+            "title": "Chain Identity",
+            "type": "string"
+          },
+          "chain_kind": {
+            "enum": [
+              "instance",
+              "realm"
+            ],
+            "title": "Chain Kind",
+            "type": "string"
+          },
+          "event_hash": {
+            "title": "Event Hash",
+            "type": "string"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "chain_kind",
+          "chain_identity",
+          "sequence",
+          "recorded_at",
+          "event_hash"
+        ],
+        "title": "AuditReceiptBody",
+        "type": "object"
+      },
+      "CreateGrantRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/GrantBody"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "grant"
+        ],
+        "title": "CreateGrantRequest",
+        "type": "object"
+      },
+      "CreateGrantResult": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_id",
+          "created_at"
+        ],
+        "title": "CreateGrantResult",
+        "type": "object"
+      },
+      "CreateGrantResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/CreateGrantResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[CreateGrantResult]",
+        "type": "object"
+      },
+      "CreatePrincipalRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "human",
+              "workload"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "kind",
+          "label"
+        ],
+        "title": "CreatePrincipalRequest",
+        "type": "object"
+      },
+      "CreatePrincipalResult": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "human",
+              "workload"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal_id",
+          "kind",
+          "label",
+          "created_at"
+        ],
+        "title": "CreatePrincipalResult",
+        "type": "object"
+      },
+      "CreatePrincipalResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/CreatePrincipalResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[CreatePrincipalResult]",
+        "type": "object"
+      },
+      "EvidenceIdBody": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id"
+        ],
+        "title": "EvidenceIdBody",
+        "type": "object"
+      },
+      "ExternalEvidenceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "external_uri": {
+            "title": "External Uri",
+            "type": "string"
+          },
+          "payload_digest": {
+            "title": "Payload Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "external_uri",
+          "payload_digest"
+        ],
+        "title": "ExternalEvidenceBody",
+        "type": "object"
+      },
+      "FactBody": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "title": "FactBody",
+        "type": "object"
+      },
+      "FailureBody": {
+        "additionalProperties": false,
+        "description": "The I-26 stable failure on the wire.\n\nField order matches the foundation middleware's ``internal_error``\nbody, so a ``/v1`` failure and the middleware's catch-all are the same\nshape; ``detail`` is absent unless one of the two licensed forms rides\nalong.",
+        "properties": {
+          "code": {
+            "enum": [
+              "invalid_request",
+              "authentication_failed",
+              "authorisation_denied",
+              "secret_rejected",
+              "not_found",
+              "idempotency_conflict",
+              "evidence_pending",
+              "evidence_corrupt",
+              "index_pending",
+              "stale_index",
+              "dependency_unavailable",
+              "instance_mismatch",
+              "internal_error"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvalidRequestDetail"
+              },
+              {
+                "$ref": "#/components/schemas/SecretRejectedDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Detail"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "retry": {
+            "enum": [
+              "never",
+              "same-request",
+              "after-delay"
+            ],
+            "title": "Retry",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retry",
+          "correlation_id"
+        ],
+        "title": "FailureBody",
+        "type": "object"
+      },
+      "FailureEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "failure": {
+            "$ref": "#/components/schemas/FailureBody"
+          }
+        },
+        "required": [
+          "failure"
+        ],
+        "title": "FailureEnvelope",
+        "type": "object"
+      },
+      "GrantBody": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "operations": {
+            "items": {
+              "enum": [
+                "retrieve",
+                "ingest",
+                "promote",
+                "invalidate",
+                "audit-read",
+                "grant-manage"
+              ],
+              "type": "string"
+            },
+            "title": "Operations",
+            "type": "array"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          },
+          "read_clearance": {
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "title": "Read Clearance",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentBody"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "write_classifications": {
+            "items": {
+              "enum": [
+                "public",
+                "internal",
+                "restricted"
+              ],
+              "type": "string"
+            },
+            "title": "Write Classifications",
+            "type": "array"
+          }
+        },
+        "required": [
+          "principal_id",
+          "realm_id",
+          "segments",
+          "operations",
+          "read_clearance",
+          "write_classifications"
+        ],
+        "title": "GrantBody",
+        "type": "object"
+      },
+      "IngestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "classification": {
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "title": "Classification",
+            "type": "string"
+          },
+          "evidence_payload": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Payload"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/FactBody"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metadata"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Observed At"
+          },
+          "requested_trust": {
+            "default": "candidate",
+            "enum": [
+              "candidate",
+              "validated",
+              "failed-approach"
+            ],
+            "title": "Requested Trust",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeBody"
+          },
+          "source_type": {
+            "enum": [
+              "agent-claim",
+              "verified-check",
+              "human"
+            ],
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "classification",
+          "source_type",
+          "facts"
+        ],
+        "title": "IngestRequest",
+        "type": "object"
+      },
+      "IngestResult": {
+        "additionalProperties": false,
+        "properties": {
+          "assertion_id": {
+            "title": "Assertion Id",
+            "type": "string"
+          },
+          "evidence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Id"
+          },
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "assertion_id",
+          "fact_ids",
+          "evidence_id"
+        ],
+        "title": "IngestResult",
+        "type": "object"
+      },
+      "IngestResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/IngestResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[IngestResult]",
+        "type": "object"
+      },
+      "InstanceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_digest": {
+            "title": "Contract Digest",
+            "type": "string"
+          },
+          "contract_identity": {
+            "title": "Contract Identity",
+            "type": "string"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "mcp_contract_digest": {
+            "title": "Mcp Contract Digest",
+            "type": "string"
+          },
+          "product_version": {
+            "title": "Product Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "product_version",
+          "contract_identity",
+          "contract_digest"
+        ],
+        "title": "InstanceResult",
+        "type": "object"
+      },
+      "InvalidRequestDetail": {
+        "additionalProperties": false,
+        "description": "The ``detail`` form I-72 licenses on an adapter-raised\n``invalid_request`` — the rejected field path and the wire rule.",
+        "properties": {
+          "field_path": {
+            "title": "Field Path",
+            "type": "string"
+          },
+          "rule": {
+            "enum": [
+              "body_not_object",
+              "body_too_large",
+              "duplicate_json_key",
+              "idempotency_key_duplicated",
+              "idempotency_key_forbidden",
+              "idempotency_key_malformed",
+              "idempotency_key_missing",
+              "invalid_content_type",
+              "invalid_encoding",
+              "invalid_value",
+              "malformed_json",
+              "method_not_allowed",
+              "missing_field",
+              "unknown_field"
+            ],
+            "title": "Rule",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_path",
+          "rule"
+        ],
+        "title": "InvalidRequestDetail",
+        "type": "object"
+      },
+      "InvalidateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Superseded By"
+          }
+        },
+        "required": [
+          "fact_ids",
+          "reason"
+        ],
+        "title": "InvalidateRequest",
+        "type": "object"
+      },
+      "InvalidateResult": {
+        "additionalProperties": false,
+        "properties": {
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          },
+          "invalidated_at": {
+            "title": "Invalidated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fact_ids",
+          "invalidated_at"
+        ],
+        "title": "InvalidateResult",
+        "type": "object"
+      },
+      "InvalidateResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/InvalidateResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[InvalidateResult]",
+        "type": "object"
+      },
+      "IssueCredentialRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "principal_id"
+        ],
+        "title": "IssueCredentialRequest",
+        "type": "object"
+      },
+      "IssueCredentialResult": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "credential_id": {
+            "title": "Credential Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "plaintext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plaintext"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential_id",
+          "principal_id",
+          "expires_at",
+          "created_at",
+          "plaintext"
+        ],
+        "title": "IssueCredentialResult",
+        "type": "object"
+      },
+      "IssueCredentialResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/IssueCredentialResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[IssueCredentialResult]",
+        "type": "object"
+      },
+      "MutationReceiptBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command_digest": {
+            "title": "Command Digest",
+            "type": "string"
+          },
+          "mutation_id": {
+            "title": "Mutation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mutation_id",
+          "command_digest"
+        ],
+        "title": "MutationReceiptBody",
+        "type": "object"
+      },
+      "PromoteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceIdBody"
+              },
+              {
+                "$ref": "#/components/schemas/ExternalEvidenceBody"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "target_classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "title": "Target Classification"
+          },
+          "target_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScopeBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "fact_ids",
+          "evidence",
+          "reason"
+        ],
+        "title": "PromoteRequest",
+        "type": "object"
+      },
+      "PromoteResult": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "promotions": {
+            "items": {
+              "$ref": "#/components/schemas/PromotionPairBody"
+            },
+            "title": "Promotions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "promotions",
+          "evidence_id"
+        ],
+        "title": "PromoteResult",
+        "type": "object"
+      },
+      "PromoteResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/PromoteResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[PromoteResult]",
+        "type": "object"
+      },
+      "PromotionPairBody": {
+        "additionalProperties": false,
+        "properties": {
+          "derived_fact_id": {
+            "title": "Derived Fact Id",
+            "type": "string"
+          },
+          "source_fact_id": {
+            "title": "Source Fact Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_fact_id",
+          "derived_fact_id"
+        ],
+        "title": "PromotionPairBody",
+        "type": "object"
+      },
+      "ReadAuditEventsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "after_sequence": {
+            "default": 0,
+            "title": "After Sequence",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 100,
+            "description": "Between 1 and 500. A limit of 1 cannot make pagination progress: a successful read appends its own audit event to the chain it reads, so next_after_sequence never returns null at that limit.",
+            "title": "Limit",
+            "type": "integer"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "scope_prefix": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentBody"
+            },
+            "title": "Scope Prefix",
+            "type": "array"
+          }
+        },
+        "required": [
+          "realm_id",
+          "scope_prefix"
+        ],
+        "title": "ReadAuditEventsRequest",
+        "type": "object"
+      },
+      "ReadAuditEventsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_after_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After Sequence"
+          }
+        },
+        "required": [
+          "events",
+          "next_after_sequence"
+        ],
+        "title": "ReadAuditEventsResult",
+        "type": "object"
+      },
+      "ReadEvidenceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeBody"
+          }
+        },
+        "required": [
+          "scope",
+          "evidence_id"
+        ],
+        "title": "ReadEvidenceRequest",
+        "type": "object"
+      },
+      "ReadEvidenceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_length": {
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "payload": {
+            "title": "Payload",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "payload",
+          "sha256",
+          "byte_length",
+          "media_type"
+        ],
+        "title": "ReadEvidenceResult",
+        "type": "object"
+      },
+      "RetrieveRequest": {
+        "additionalProperties": false,
+        "description": "I-71/P-44. ``trust_filters`` empty or absent means the I-80\n``validated`` default; duplicates are rejected by strict parsing rather\nthan silently collapsed. No classification ceiling field exists — it is\nderived from the caller's grants server-side and a caller may not ask\nfor one it does not hold.",
+        "properties": {
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "As Of"
+          },
+          "budget": {
+            "description": "Disclosure budget in bytes of fact body, 1 to 1048576. Whole facts are appended until the next would not fit.",
+            "title": "Budget",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Opaque UTF-8, 1 byte to 8 KiB after encoding. Cairn owns no query syntax and passes this to the index unparsed.",
+            "title": "Query",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeBody"
+          },
+          "trust_filters": {
+            "items": {
+              "enum": [
+                "candidate",
+                "validated",
+                "failed-approach"
+              ],
+              "type": "string"
+            },
+            "title": "Trust Filters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "query",
+          "budget"
+        ],
+        "title": "RetrieveRequest",
+        "type": "object"
+      },
+      "RetrieveResult": {
+        "additionalProperties": false,
+        "description": "I-77's bare result: a read returns no mutation envelope, as on the\nother two read routes. ``budget_exhausted`` distinguishes \"that is\neverything\" from \"there was more\" (I-82).",
+        "properties": {
+          "budget_consumed": {
+            "title": "Budget Consumed",
+            "type": "integer"
+          },
+          "budget_exhausted": {
+            "title": "Budget Exhausted",
+            "type": "boolean"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievedFactBody"
+            },
+            "title": "Hits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hits",
+          "budget_consumed",
+          "budget_exhausted"
+        ],
+        "title": "RetrieveResult",
+        "type": "object"
+      },
+      "RetrievedFactBody": {
+        "additionalProperties": false,
+        "description": "I-77: exactly the I-67 stored fields, nothing invented for the wire.\n\nThe provenance columns appear in their two lawful forms — ``assertion_id``\nfor an ingested fact, or ``derived_from``/``promoted_by``/``evidence_id``\nfor a promoted one — so the shape mirrors the catalogue's own\n``ck_facts_provenance_form`` rather than flattening the distinction.\n``invalidated_at`` carries an invalidation only where this ``as_of``\ncan see it (P-42), which in v0.1 means it is always null: I-79 withholds\nthe fact entirely once its invalidation is visible, so any hit's\ninvalidation necessarily lies in the caller's future. The field remains\npart of the closed I-77 hit shape regardless.",
+        "properties": {
+          "assertion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assertion Id"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "classification": {
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "title": "Classification",
+            "type": "string"
+          },
+          "derived_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Derived From"
+          },
+          "evidence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Id"
+          },
+          "fact_id": {
+            "title": "Fact Id",
+            "type": "string"
+          },
+          "invalidated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invalidated At"
+          },
+          "promoted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Promoted By"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeBody"
+          },
+          "trust": {
+            "enum": [
+              "candidate",
+              "validated",
+              "failed-approach"
+            ],
+            "title": "Trust",
+            "type": "string"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          }
+        },
+        "required": [
+          "fact_id",
+          "body",
+          "scope",
+          "classification",
+          "trust",
+          "recorded_at"
+        ],
+        "title": "RetrievedFactBody",
+        "type": "object"
+      },
+      "RevokeCredentialRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "title": "Credential Id",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "credential_id",
+          "reason_code"
+        ],
+        "title": "RevokeCredentialRequest",
+        "type": "object"
+      },
+      "RevokeCredentialResult": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "title": "Credential Id",
+            "type": "string"
+          },
+          "revoked_at": {
+            "title": "Revoked At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential_id",
+          "revoked_at"
+        ],
+        "title": "RevokeCredentialResult",
+        "type": "object"
+      },
+      "RevokeCredentialResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RevokeCredentialResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[RevokeCredentialResult]",
+        "type": "object"
+      },
+      "RevokeGrantRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "realm_id": {
+            "title": "Realm Id",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "realm_id",
+          "grant_id",
+          "reason_code"
+        ],
+        "title": "RevokeGrantRequest",
+        "type": "object"
+      },
+      "RevokeGrantResult": {
+        "additionalProperties": false,
+        "properties": {
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "revoked_at": {
+            "title": "Revoked At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_id",
+          "revoked_at"
+        ],
+        "title": "RevokeGrantResult",
+        "type": "object"
+      },
+      "RevokeGrantResultEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_receipt": {
+            "$ref": "#/components/schemas/AuditReceiptBody"
+          },
+          "mutation_receipt": {
+            "$ref": "#/components/schemas/MutationReceiptBody"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/WireOutcome"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RevokeGrantResult"
+          }
+        },
+        "required": [
+          "outcome",
+          "result",
+          "mutation_receipt",
+          "audit_receipt"
+        ],
+        "title": "SuccessEnvelope[RevokeGrantResult]",
+        "type": "object"
+      },
+      "ScopeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "realm": {
+            "title": "Realm",
+            "type": "string"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentBody"
+            },
+            "title": "Segments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "realm",
+          "segments"
+        ],
+        "title": "ScopeBody",
+        "type": "object"
+      },
+      "SecretRejectedDetail": {
+        "additionalProperties": false,
+        "description": "The ``detail`` form I-72 licenses on ``secret_rejected`` — policy\nversion, rule identity and field path, and nothing else.\n\nNeither ``policy`` nor ``rule`` publishes an enumeration, unlike the\nwire rules above: I-31 versions the secret policy apart from the API,\nso pinning its rule vocabulary into the ``/v1`` contract would make\nevery policy release a contract change I-29 does not license.",
+        "properties": {
+          "field_path": {
+            "title": "Field Path",
+            "type": "string"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "rule": {
+            "title": "Rule",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy",
+          "rule",
+          "field_path"
+        ],
+        "title": "SecretRejectedDetail",
+        "type": "object"
+      },
+      "SegmentBody": {
+        "additionalProperties": false,
+        "properties": {
+          "identifier": {
+            "title": "Identifier",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "identifier"
+        ],
+        "title": "SegmentBody",
+        "type": "object"
+      },
+      "WireOutcome": {
+        "enum": [
+          "committed",
+          "replayed"
+        ],
+        "title": "WireOutcome",
+        "type": "string"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "An opaque Cairn credential. TLS is mandatory outside loopback.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "The Cairn v0.1 memory authority surface. Every operation authenticates with an opaque bearer credential; scope isolation is enforced server-side and sibling scopes are never visible. Route names are the closed operation vocabulary itself, so this document is a one-to-one map of the authority model.\n\nTwo boundary behaviours are deliberately absent from the per-operation responses below, because neither is a response to a valid call on the operation it would sit under: an unknown path returns the fixed not_found failure, and a known path with a wrong method returns invalid_request with status 405.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "summary": "The cairn/v1 contract.",
+    "title": "Cairn",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/create-grant": {
+      "post": {
+        "operationId": "create_grant",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateGrantResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a grant over a scope prefix."
+      }
+    },
+    "/v1/create-principal": {
+      "post": {
+        "operationId": "create_principal",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePrincipalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePrincipalResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a principal in a realm."
+      }
+    },
+    "/v1/ingest": {
+      "post": {
+        "operationId": "ingest",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Ingest an assertion into a scope as candidate memory."
+      }
+    },
+    "/v1/instance": {
+      "get": {
+        "description": "This is a read: supplying an Idempotency-Key header is invalid_request. The header is required on all eight mutations and refused on both reads.",
+        "operationId": "instance",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceResult"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Report the contract identity, product version and contract digest."
+      }
+    },
+    "/v1/invalidate": {
+      "post": {
+        "operationId": "invalidate",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvalidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidateResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Invalidate facts, optionally naming what supersedes them."
+      }
+    },
+    "/v1/issue-credential": {
+      "post": {
+        "operationId": "issue_credential",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueCredentialResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Issue a credential, returning its plaintext exactly once."
+      }
+    },
+    "/v1/promote": {
+      "post": {
+        "operationId": "promote",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoteResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Promote facts to validated trust against an evidence reference."
+      }
+    },
+    "/v1/read-audit-events": {
+      "post": {
+        "description": "This is a read: supplying an Idempotency-Key header is invalid_request. The header is required on all eight mutations and refused on both reads.",
+        "operationId": "read_audit_events",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAuditEventsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadAuditEventsResult"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read audit events under a scope prefix. A POST because scope paths must never appear in a URL."
+      }
+    },
+    "/v1/read-evidence": {
+      "post": {
+        "description": "This is a read: supplying an Idempotency-Key header is invalid_request. The header is required on all eight mutations and refused on both reads.",
+        "operationId": "read_evidence",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadEvidenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadEvidenceResult"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read exact UTF-8 evidence from authenticated Cairn custody."
+      }
+    },
+    "/v1/retrieve": {
+      "post": {
+        "description": "This is a read: supplying an Idempotency-Key header is invalid_request. The header is required on all eight mutations and refused on both reads.",
+        "operationId": "retrieve",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrieveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrieveResult"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Retrieve facts reconciled against the catalogue. A POST because the scope path and the query must never appear in a URL."
+      }
+    },
+    "/v1/revoke-credential": {
+      "post": {
+        "operationId": "revoke_credential",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeCredentialResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Revoke a credential."
+      }
+    },
+    "/v1/revoke-grant": {
+      "post": {
+        "operationId": "revoke_grant",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A canonical lowercase hyphenated UUID. Replaying one returns the original receipt with outcome 'replayed'.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeGrantResultEnvelope"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Revoke a grant, including a self-issuer grant."
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}

@@ -1,0 +1,1876 @@
+#!/usr/bin/env bash
+# The disposable kind acceptance tier (P-68): bring-up, one instance, the
+# two-instance isolation matrix, and the backup/restore rehearsal. Modelled on the
+# Drystane foundation's script of the same name, and on the same terms —
+# an evidence tier run on demand, never a CI job. CI owns rendering and
+# validation (P-61); this owns the claims that can only be made by a
+# cluster.
+#
+# Every claim below is a `require_check`: a predicted outcome and an
+# observed one, recorded in the report whether they matched or not. There
+# is deliberately no way to assert something here without it appearing in
+# the transcript, and no way for a prediction to be revised after the
+# observation.
+#
+# Two orderings are load-bearing rather than tidy:
+#
+#   1. Enforcement is proved active before any evidence is drawn (I-07,
+#      verbatim). A cluster whose policy engine is not enforcing refuses
+#      nothing, so every isolation probe would be met, every expectation
+#      satisfied and the run green. The proof needs both halves — a
+#      denied connection *and* a permitted one — because a probe that
+#      cannot observe a connection at all reports every target as
+#      blocked, which looks exactly like enforcement working perfectly.
+#
+#   2. The committed renders are shape-checked against a live API server
+#      before one of them is applied. This is Operator's ruling of 13 August
+#      2026, moving the check here from task 4: a clusterless CI job
+#      cannot perform the client-side validation the plan first named,
+#      and `--dry-run=server` is the stronger check anyway — it is the
+#      admitting API server's own answer, not a schema's.
+#
+#   3. Every refusal in stage 2 is paired with a positive control, for
+#      the reason ordering (1) exists: a probe that cannot reach its
+#      target reports every destination as blocked. So each negative
+#      names the connection that proves the target was reachable by
+#      something — its own client, its own Cairn, the gateway's
+#      allow-list — and both halves are recorded.
+#
+# Stage 3 is deliberately last: the original deployment is quiesced and
+# retained as rollback while a fresh-PVC replacement is proved.
+set -euo pipefail
+
+: "${IMAGE:?IMAGE is required}"
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:@-]+$ ]]; then
+  printf 'image reference is invalid\n' >&2
+  exit 2
+fi
+if [[ "$IMAGE" == *:latest ]]; then
+  # A `:latest` tag defaults imagePullPolicy to Always, and the whole
+  # point of loading the image into the cluster is that nothing is
+  # pulled. The failure would be a fifteen-minute ImagePullBackOff.
+  printf 'image must not be tagged latest: nothing is published to pull\n' >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------- pins
+
+# P-61: every version, digest and checksum comes from the lock and none
+# of them is written here. The reader is `scripts/fetch-kubectl`'s,
+# unchanged.
+lock_value() {
+  local key=$1
+  awk -F= -v key="$key" \
+    '$1 == key {sub(/^[^=]*=/, ""); print; found=1; exit}
+     END {if (!found) exit 1}' \
+    deploy/images.lock
+}
+
+cairn_image=$(lock_value CAIRN_IMAGE)
+falkordb_image=$(lock_value FALKORDB_IMAGE)
+egress_proxy_image=$(lock_value EGRESS_PROXY_IMAGE)
+kind_version=$(lock_value KIND_VERSION)
+kind_sha256=$(lock_value KIND_LINUX_AMD64_SHA256)
+kind_node_image=$(lock_value KIND_NODE_IMAGE)
+kubectl_version=$(lock_value KUBECTL_VERSION)
+kubectl_sha256=$(lock_value KUBECTL_LINUX_AMD64_SHA256)
+calico_url=$(lock_value CALICO_MANIFEST_URL)
+calico_sha256=$(lock_value CALICO_MANIFEST_SHA256)
+cilium_cnp_crd_url=$(lock_value CILIUM_CNP_CRD_URL)
+cilium_cnp_crd_sha256=$(lock_value CILIUM_CNP_CRD_SHA256)
+
+for reference in "$kind_node_image" "$falkordb_image" "$egress_proxy_image"; do
+  if [[ ! "$reference" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    printf 'image lock is not digest-pinned: %s\n' "$reference" >&2
+    exit 1
+  fi
+done
+for checksum in \
+  "$kind_sha256" "$kubectl_sha256" "$calico_sha256" \
+  "$cilium_cnp_crd_sha256"; do
+  if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'download checksum is invalid\n' >&2
+    exit 1
+  fi
+done
+
+# ------------------------------------------------------------- fixtures
+
+temporary=$(mktemp -d)
+cluster="cairn-$RANDOM-$RANDOM"
+cluster_owned=false
+termination_signal=
+report_path=${KIND_ACCEPTANCE_REPORT:-build/kind-acceptance/report.json}
+checks_file="$temporary/checks.jsonl"
+: >"$checks_file"
+
+acceptance_scripts=tests/acceptance/kind
+enforcement_namespace=cairn-acceptance-enforcement
+shapes_namespace=cairn-acceptance-shapes
+provider_namespace=cairn-acceptance-provider
+gateway_namespace=cairn-egress
+probe_port=8000
+index_port=6379
+gateway_port=3128
+# The port a provider is reached on, and so the port both squid's
+# `SSL_ports` rule and the gateway's NetworkPolicy permit. The pinned kind
+# runtime sets `net.ipv4.ip_unprivileged_port_start=0` in the container
+# namespace, so the non-root fake provider listens on that exact port: a
+# Service translation to 8443 would be evaluated by Calico as 8443 and the
+# gateway's deliberately 443-only egress rule would drop it.
+tls_port=443
+provider_target_port=$tls_port
+probe_timeout=5
+# Longer than the raw probes above because Squid must resolve the rewritten
+# allow-listed name and establish the in-cluster provider tunnel before it
+# answers. The bound covers the gateway path, not an external provider.
+gateway_timeout=15
+grace_seconds=60
+
+# The gateway's allow-list is the one operator-editable value in
+# `egress-gateway.yaml` (I-93), so the probe reads it from the render
+# rather than carrying a copy that could disagree with the artefact
+# under test.
+allowed_fqdn=$(
+  awk '$1 == "acl" && $2 == "allowed_fqdns" && $3 == "dstdomain" {print $4; exit}' \
+    deploy/kustomize/rendered/egress-gateway.yaml
+)
+if [[ -z "$allowed_fqdn" ]]; then
+  printf 'the rendered egress gateway names no allow-listed destination\n' >&2
+  exit 1
+fi
+# RFC 2606's reserved suffix, and deliberately unresolvable: if the ACL
+# were broken this probe must still be incapable of reaching anything
+# real.
+refused_fqdn=blocked.example.invalid
+
+kind=build/tools/kind
+kubectl=build/tools/kubectl
+
+fail() {
+  printf 'kind acceptance failed: %s\n' "$*" >&2
+  exit 1
+}
+
+# The report is emitted from the trap rather than at the end, because a
+# failed run's transcript is the one worth most: it names the stack, the
+# checks that passed and the exact prediction that did not hold.
+emit_report() {
+  local status=$1
+  mkdir -p "$(dirname "$report_path")"
+  jq -n \
+    --arg status "$status" \
+    --arg termination_signal "$termination_signal" \
+    --arg stage "$(printf '%s' "${completed_stage:-bring-up}")" \
+    --arg cluster "$cluster" \
+    --arg kind_version "$kind_version" \
+    --arg kubernetes_version "${kubernetes_version:-}" \
+    --arg kubectl_version "$kubectl_version" \
+    --arg kind_node_image "$kind_node_image" \
+    --arg calico_manifest_url "$calico_url" \
+    --arg calico_manifest_sha256 "$calico_sha256" \
+    --arg cilium_cnp_crd_url "$cilium_cnp_crd_url" \
+    --arg cilium_cnp_crd_sha256 "$cilium_cnp_crd_sha256" \
+    --arg cairn_image "$IMAGE" \
+    --arg cairn_image_id "${cairn_image_id:-}" \
+    --argjson backup_barrier_ms "${backup_barrier_ms:-null}" \
+    --arg falkordb_image "$falkordb_image" \
+    --arg egress_proxy_image "$egress_proxy_image" \
+    --slurpfile checks "$checks_file" \
+    '{
+      status: $status,
+      termination_signal: (
+        $termination_signal | if length == 0 then null else . end
+      ),
+      stage: $stage,
+      cluster: $cluster,
+      identities: {
+        kind_version: $kind_version,
+        kubernetes_version: $kubernetes_version,
+        kubectl_version: $kubectl_version,
+        kind_node_image: $kind_node_image,
+        calico_manifest_url: $calico_manifest_url,
+        calico_manifest_sha256: $calico_manifest_sha256,
+        cilium_cnp_crd_url: $cilium_cnp_crd_url,
+        cilium_cnp_crd_sha256: $cilium_cnp_crd_sha256,
+        cairn_image: $cairn_image,
+        cairn_image_id: $cairn_image_id,
+        falkordb_image: $falkordb_image,
+        egress_proxy_image: $egress_proxy_image
+      },
+      backup_barrier_ms: $backup_barrier_ms,
+      checks: $checks
+    }' >"$report_path"
+  printf 'report written to %s\n' "$report_path"
+}
+
+cleanup() {
+  local code=$?
+  trap - EXIT
+  trap '' HUP INT TERM
+  if [[ "$code" -eq 0 && -z "$termination_signal" ]]; then
+    emit_report passed || true
+  else
+    emit_report failed || true
+  fi
+  if [[ "$cluster_owned" == true ]]; then
+    "$kind" delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$temporary"
+  return "$code"
+}
+
+interrupt() {
+  termination_signal=$1
+  exit "$2"
+}
+
+trap cleanup EXIT
+trap 'interrupt HUP 129' HUP
+trap 'interrupt INT 130' INT
+trap 'interrupt TERM 143' TERM
+
+# One prediction, one observation, one record. Every claim in this script
+# goes through here, so the report is complete by construction rather
+# than by remembering to add to it.
+require_unique_check_name() {
+  local name=$1 stage=$2
+  jq -e -s --arg name "$name" --arg stage "$stage" \
+    -f "$acceptance_scripts/unique-check-name.jq" "$checks_file" >/dev/null ||
+    fail "duplicate check identity: $name in $stage"
+}
+
+require_check() {
+  local name=$1 stage=$2 expected=$3 observed=$4
+  local outcome=passed
+  [[ "$observed" == "$expected" ]] || outcome=failed
+  require_unique_check_name "$name" "$stage"
+  jq -nc \
+    --arg name "$name" \
+    --arg stage "$stage" \
+    --arg expected "$expected" \
+    --arg observed "$observed" \
+    --arg outcome "$outcome" \
+    '{name: $name, stage: $stage, expected: $expected,
+      observed: $observed, outcome: $outcome}' \
+    >>"$checks_file"
+  if [[ "$outcome" != passed ]]; then
+    printf '  %-38s expected %s, observed %s\n' "$name" "$expected" "$observed" >&2
+    fail "check $name did not hold"
+  fi
+  printf '  %-38s %s\n' "$name" "$observed"
+}
+
+# The one check whose prediction is a bound rather than a value. Recorded
+# in the same stream, with the bound as the expectation so a reader sees
+# what was required as well as what happened.
+require_bound() {
+  local name=$1 stage=$2 bound=$3 observed=$4
+  local outcome=passed
+  ((observed <= bound)) || outcome=failed
+  require_unique_check_name "$name" "$stage"
+  jq -nc \
+    --arg name "$name" \
+    --arg stage "$stage" \
+    --arg expected "at most ${bound}s" \
+    --arg observed "${observed}s" \
+    --arg outcome "$outcome" \
+    '{name: $name, stage: $stage, expected: $expected,
+      observed: $observed, outcome: $outcome}' \
+    >>"$checks_file"
+  if [[ "$outcome" != passed ]]; then
+    fail "check $name took ${observed}s, want at most ${bound}s"
+  fi
+  printf '  %-38s %ss\n' "$name" "$observed"
+}
+
+# --------------------------------------------------------------- tools
+
+install_tools() {
+  mkdir -p build/tools
+  if [[ ! -x "$kind" ]] ||
+    [[ "$(sha256sum "$kind" | awk '{print $1}')" != "$kind_sha256" ]]; then
+    local download
+    download=$(mktemp)
+    curl -fsSLo "$download" \
+      "https://github.com/kubernetes-sigs/kind/releases/download/${kind_version}/kind-linux-amd64"
+    printf '%s  %s\n' "$kind_sha256" "$download" | sha256sum -c - >/dev/null
+    install -m 0755 "$download" "$kind"
+    rm -f -- "$download"
+  fi
+  if [[ "$("$kind" version)" != "kind $kind_version "* ]]; then
+    fail "kind is not the pinned $kind_version"
+  fi
+  # kubectl has its own fetcher, because `make render` needs the same
+  # binary and P-61 keeps that acquisition explicit.
+  if [[ ! -x "$kubectl" ]] ||
+    [[ "$(sha256sum "$kubectl" | awk '{print $1}')" != "$kubectl_sha256" ]]; then
+    ./scripts/fetch-kubectl >/dev/null
+  fi
+}
+
+# --------------------------------------------------------------- waits
+
+wait_for_log() {
+  local namespace=$1 pod=$2 needle=$3
+  for _ in $(seq 1 600); do
+    if "$kubectl" logs --namespace "$namespace" "pod/$pod" 2>/dev/null |
+      grep -qF "$needle"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  fail "pod $pod never logged '$needle'"
+}
+
+# Applies a one-off Pod, waits for it to stop, and leaves its phase in
+# `pod_phase` and its logs in `pod_logs`. Deletion is the caller's, so a
+# failing check can still read what the pod said.
+run_pod() {
+  local namespace=$1 pod=$2 manifest=$3
+  "$kubectl" apply --namespace "$namespace" -f "$manifest" >/dev/null
+  pod_phase=
+  for _ in $(seq 1 900); do
+    pod_phase=$(
+      "$kubectl" get --namespace "$namespace" "pod/$pod" \
+        -o jsonpath='{.status.phase}' 2>/dev/null || true
+    )
+    if [[ "$pod_phase" == Succeeded || "$pod_phase" == Failed ]]; then
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ "$pod_phase" != Succeeded && "$pod_phase" != Failed ]]; then
+    fail "pod $pod did not terminate (phase ${pod_phase:-unknown})"
+  fi
+  pod_logs=$("$kubectl" logs --namespace "$namespace" "pod/$pod" 2>&1 || true)
+}
+
+# The acceptance scripts, in whichever namespace is about to need them.
+# They are committed, linted and type-checked like everything else under
+# `tests/`, rather than buried in a heredoc here.
+install_acceptance_scripts() {
+  local namespace=$1
+  "$kubectl" create configmap acceptance-scripts \
+    --namespace "$namespace" \
+    --from-file "$acceptance_scripts" >/dev/null
+}
+
+# A pod running one of those scripts on the Cairn image. The image is
+# already loaded, so this costs nothing to start, and the security
+# context is the base's — a probe running with privileges the workload
+# does not have would be probing a different cluster.
+#
+# The credential is named rather than assumed because P-68's credential
+# cross-check is a pod in one instance's namespace carrying *another*
+# instance's token: the whole claim is that the two are different, and a
+# hard-coded secret name could not express it.
+acceptance_pod_manifest() {
+  local pod=$1 namespace=$2 labels=$3 secret=$4 destination=$5
+  shift 5
+  {
+    cat <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod}
+  namespace: ${namespace}
+  labels:
+${labels}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: acceptance
+      image: ${IMAGE}
+      imagePullPolicy: IfNotPresent
+      command:
+EOF
+    printf '        - python\n'
+    # JSON-quoted, which is also YAML: an unquoted port number is parsed
+    # as an integer and rejected, and an unquoted marker with spaces is
+    # worse — it parses, and means something else.
+    local argument
+    for argument in "$@"; do
+      printf '        - %s\n' "$(printf '%s' "$argument" | jq -Rs .)"
+    done
+    cat <<EOF
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - name: acceptance-scripts
+          mountPath: /opt/acceptance
+          readOnly: true
+        - name: token
+          mountPath: /var/run/secrets/acceptance
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: acceptance-scripts
+      configMap:
+        name: acceptance-scripts
+    - name: token
+      secret:
+        secretName: ${secret}
+        optional: true
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Mi
+EOF
+  } >"$destination"
+}
+
+# ------------------------------------------------------------- bring-up
+
+create_cluster() {
+  docker image inspect "$IMAGE" >/dev/null
+  cairn_image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+
+  local clusters
+  clusters=$("$kind" get clusters) || fail "could not enumerate kind clusters"
+  if grep -Fxq "$cluster" <<<"$clusters"; then
+    fail "generated kind cluster name already exists: $cluster"
+  fi
+  # Claim the proven-absent generated name before creation: interruption can
+  # leave a partial cluster, and cleanup must own that exact residue.
+  cluster_owned=true
+
+  # I-15: one control plane and two workers. A single-node cluster cannot
+  # observe a policy decision made between nodes, which is most of what
+  # the later stages claim. Calico rather than kindnet for the same
+  # reason I-07 gives: kindnet's policy support is not what production
+  # runs.
+  cat >"$temporary/kind.yaml" <<EOF
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+EOF
+  "$kind" create cluster \
+    --name "$cluster" \
+    --image "$kind_node_image" \
+    --config "$temporary/kind.yaml"
+  "$kind" load docker-image --name "$cluster" "$IMAGE"
+
+  curl -fsSLo "$temporary/calico.yaml" "$calico_url"
+  printf '%s  %s\n' "$calico_sha256" "$temporary/calico.yaml" |
+    sha256sum -c - >/dev/null
+  "$kubectl" apply -f "$temporary/calico.yaml" >/dev/null
+  "$kubectl" wait --for=condition=Ready nodes --all --timeout=300s >/dev/null
+  "$kubectl" wait --namespace kube-system \
+    --for=condition=Ready pods --all --timeout=420s >/dev/null
+
+  kubernetes_version=$(
+    "$kubectl" version -o json |
+      jq -r '.serverVersion.gitVersion'
+  )
+  require_check kubernetes-version bring-up "$kubectl_version" \
+    "$kubernetes_version"
+}
+
+# I-07, verbatim: a run in which a default-deny probe connects is a
+# failed run, never a skipped check. Both halves are required — see the
+# note at the top of this file.
+prove_enforcement_active() {
+  "$kubectl" create namespace "$enforcement_namespace" >/dev/null
+  install_acceptance_scripts "$enforcement_namespace"
+
+  # The policy first, so no listener is ever briefly reachable.
+  "$kubectl" apply --namespace "$enforcement_namespace" -f - >/dev/null <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-listener-denied
+spec:
+  podSelector:
+    matchLabels:
+      cairn.example.invalid/acceptance-role: listener-denied
+  policyTypes:
+    - Ingress
+EOF
+
+  local role
+  for role in listener-denied listener-permitted; do
+    acceptance_pod_manifest "$role" "$enforcement_namespace" \
+      "    cairn.example.invalid/acceptance-role: ${role}" \
+      acceptance-client "$temporary/${role}.yaml" \
+      /opt/acceptance/listen.py "$probe_port"
+    "$kubectl" apply -f "$temporary/${role}.yaml" >/dev/null
+  done
+  for role in listener-denied listener-permitted; do
+    wait_for_log "$enforcement_namespace" "$role" listening
+  done
+
+  local target
+  for role in listener-denied listener-permitted; do
+    target=$(
+      "$kubectl" get --namespace "$enforcement_namespace" "pod/$role" \
+        -o jsonpath='{.status.podIP}'
+    )
+    acceptance_pod_manifest "probe-${role}" "$enforcement_namespace" \
+      "    cairn.example.invalid/acceptance-role: probe" \
+      acceptance-client "$temporary/probe-${role}.yaml" \
+      /opt/acceptance/probe.py "$target" "$probe_port" "$probe_timeout"
+    run_pod "$enforcement_namespace" "probe-${role}" \
+      "$temporary/probe-${role}.yaml"
+    if [[ "$role" == listener-denied ]]; then
+      require_check enforcement-default-deny bring-up blocked "$pod_logs"
+    else
+      require_check enforcement-permitted-control bring-up connected "$pod_logs"
+    fi
+  done
+  "$kubectl" delete namespace "$enforcement_namespace" --wait=false >/dev/null
+}
+
+# The reference render includes CiliumNetworkPolicy, so its API schema must exist
+# before the live API server can validate every committed render. This installs
+# only Cilium's version-aligned structural CRD. Calico remains the cluster's CNI
+# and policy engine; no Cilium agent or controller is installed, and this tier
+# makes no claim about Cilium enforcement.
+install_shape_validation_crds() {
+  curl -fsSLo "$temporary/cilium-cnp-crd.yaml" "$cilium_cnp_crd_url"
+  printf '%s  %s\n' \
+    "$cilium_cnp_crd_sha256" "$temporary/cilium-cnp-crd.yaml" |
+    sha256sum -c - >/dev/null
+  # The generated schema is larger than the client-side apply annotation
+  # limit, so let the API server own field management for this fixture.
+  "$kubectl" apply --server-side -f "$temporary/cilium-cnp-crd.yaml" >/dev/null
+  "$kubectl" wait --for=condition=Established --timeout=60s \
+    crd/ciliumnetworkpolicies.cilium.io >/dev/null
+}
+
+# Operator's ruling of 13 August 2026. Every committed render, against a live
+# API server, before one of them is applied — and the list comes from the
+# directory, so a render added tomorrow is covered the moment it is
+# committed rather than the moment somebody remembers this line.
+validate_committed_renders() {
+  # The namespace is set on the context rather than passed per apply,
+  # because the two kinds of render need different treatment and a flag
+  # cannot give it: the instance renders are namespace-agnostic and take
+  # whatever default they are given, while the gateway render names its
+  # own namespace on every object and `--namespace` on that is a
+  # client-side conflict, not a validation. A context default resolves
+  # the first and defers to the second, which is what an operator's own
+  # `kubectl apply -f` does.
+  #
+  # `cairn-egress` is created here rather than by the gateway's own
+  # Namespace object because a server-side dry run persists nothing: the
+  # objects that follow it in the same file would be validated against a
+  # namespace that does not exist. It is left behind for
+  # `deploy_egress_gateway` to apply into.
+  "$kubectl" create namespace "$shapes_namespace" >/dev/null
+  "$kubectl" create namespace "$gateway_namespace" --save-config >/dev/null
+  "$kubectl" config set-context --current \
+    --namespace "$shapes_namespace" >/dev/null
+
+  local render observed
+  for render in deploy/kustomize/rendered/*.yaml; do
+    observed=accepted
+    "$kubectl" apply --dry-run=server -f "$render" >/dev/null || observed=rejected
+    require_check "render-shape:$(basename "$render")" bring-up accepted "$observed"
+  done
+
+  "$kubectl" config set-context --current --namespace default >/dev/null
+  "$kubectl" delete namespace "$shapes_namespace" --wait=false >/dev/null
+}
+
+# The cluster's one outbound route (I-93), applied once per cluster
+# rather than once per instance. Stage 1 needs it because the kind
+# overlay's instances name it: an instance whose HTTPS_PROXY points at a
+# Service that does not exist is not the shape the overlay documents.
+deploy_egress_gateway() {
+  "$kubectl" apply -f deploy/kustomize/rendered/egress-gateway.yaml >/dev/null
+  local observed=rolled-out
+  "$kubectl" rollout status --namespace "$gateway_namespace" \
+    deployment/cairn-egress-gateway --timeout=420s >/dev/null || observed=failed
+  require_check egress-gateway-rollout bring-up rolled-out "$observed"
+}
+
+# ------------------------------------------------- one instance, applied
+
+# One instance's manifest from the committed kind render. Three
+# substitutions, each of them something the render deliberately leaves
+# for an operator, and each verified to have happened: a placeholder that
+# survived into a running cluster is exactly the failure the unparseable
+# `instance_id` sentinel exists to prevent.
+render_instance() {
+  local instance=$1 instance_id=$2 destination=$3
+  sed \
+    -e "s|image: ${cairn_image}\$|image: ${IMAGE}|" \
+    -e "s|instance_id: REPLACE_WITH_PER_INSTANCE_UUID\$|instance_id: ${instance_id}|" \
+    -e "s|app.kubernetes.io/instance: cairn\$|app.kubernetes.io/instance: ${instance}|" \
+    deploy/kustomize/rendered/kind.yaml >"$destination"
+  # Each pattern is anchored exactly as its substitution was. Unanchored,
+  # the label check would match the substituted `cairn-a` as readily as
+  # the placeholder `cairn` it is looking for, and report a successful
+  # substitution as a failed one.
+  local leftover
+  for leftover in "image: ${cairn_image}\$" \
+    "instance_id: REPLACE_WITH_PER_INSTANCE_UUID\$" \
+    "app\.kubernetes\.io/instance: cairn\$"; do
+    if grep -qE "$leftover" "$destination"; then
+      fail "instance render still carries '$leftover'"
+    fi
+  done
+}
+
+# The operator's own step, performed by the harness so that the
+# documented procedure is the tested one: one generated secret written to
+# the two files that need it, `--from-file` throughout, and no credential
+# on a command line (P-63 as amended, I-19).
+create_instance_credentials() {
+  local instance=$1
+  local directory="$temporary/credentials-${instance}"
+  local token
+  ( umask 077; mkdir -p "$directory" )
+  token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  ( umask 077
+    printf '%s\n' "$token" >"$directory/falkordb-password"
+    printf 'requirepass %s\n' "$token" >"$directory/falkordb.conf"
+    printf 'sk-acceptance-%s\n' "$instance" >"$directory/openai-api-key" )
+  "$kubectl" create secret generic cairn-credentials \
+    --namespace "$instance" \
+    --from-file "$directory/falkordb-password" \
+    --from-file "$directory/falkordb.conf" \
+    --from-file "$directory/openai-api-key" >/dev/null
+}
+
+bring_up_instance() {
+  local instance=$1 stage=$2
+  local instance_id
+  instance_id=$(cat /proc/sys/kernel/random/uuid)
+
+  "$kubectl" create namespace "$instance" >/dev/null
+  # The label the gateway's ingress selector matches on, and the operator
+  # obligation `deploy/kustomize/overlays/README.md` names. Applied here
+  # because no instance render creates a namespace.
+  "$kubectl" label namespace "$instance" \
+    "cairn.example.invalid/instance=${instance}" >/dev/null
+  create_instance_credentials "$instance"
+  install_acceptance_scripts "$instance"
+
+  # The ingress an operator opens deliberately. Nothing reaches an
+  # instance until one does (I-12, I-13), so the in-cluster round trip
+  # below is a test of the opened path and of nothing wider: the label is
+  # this instance's own, which is what makes the stage 2 matrix's
+  # cross-instance refusals mean something.
+  "$kubectl" apply --namespace "$instance" -f - >/dev/null <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cairn-allow-acceptance-client-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: ${instance}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cairn.example.invalid/acceptance-client: ${instance}
+      ports:
+        - protocol: TCP
+          port: ${probe_port}
+EOF
+
+  render_instance "$instance" "$instance_id" "$temporary/${instance}.yaml"
+  "$kubectl" apply --namespace "$instance" -f "$temporary/${instance}.yaml" >/dev/null
+
+  local observed=rolled-out
+  "$kubectl" rollout status --namespace "$instance" \
+    statefulset/falkordb --timeout=420s >/dev/null || observed=failed
+  require_check "index-rollout:${instance}" "$stage" rolled-out "$observed"
+  observed=rolled-out
+  "$kubectl" rollout status --namespace "$instance" \
+    statefulset/cairn --timeout=420s >/dev/null || observed=failed
+  require_check "instance-rollout:${instance}" "$stage" rolled-out "$observed"
+
+  # I-39's idempotent schema step, run as the init container P-62 names
+  # rather than as anything the serving container does on start.
+  observed=$(
+    "$kubectl" get --namespace "$instance" pod/cairn-0 \
+      -o jsonpath='{.status.initContainerStatuses[?(@.name=="migrate")].state.terminated.reason}'
+  )
+  require_check "migrate-init-container:${instance}" "$stage" Completed "$observed"
+}
+
+# P-62's documented first boot, performed exactly as
+# `deploy/kustomize/base/README.md` writes it: with the StatefulSet
+# scaled to zero, because `bootstrap` takes the exclusive data-directory
+# lease and a bootstrap init container would poison every later restart.
+bootstrap_instance() {
+  local instance=$1 stage=$2
+  "$kubectl" scale --namespace "$instance" statefulset/cairn --replicas=0 >/dev/null
+  "$kubectl" wait --namespace "$instance" --for=delete pod/cairn-0 \
+    --timeout=120s >/dev/null
+
+  cat >"$temporary/bootstrap-${instance}.yaml" <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cairn-bootstrap
+  namespace: ${instance}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: bootstrap
+      image: ${IMAGE}
+      imagePullPolicy: IfNotPresent
+      args:
+        - bootstrap
+        - --config
+        - /etc/cairn/config.yaml
+        - --realm
+        - local
+        - --label
+        - acceptance
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - name: data
+          mountPath: /var/lib/cairn
+        - name: config
+          mountPath: /etc/cairn
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: data-cairn-0
+    - name: config
+      configMap:
+        name: cairn-config
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Mi
+EOF
+  run_pod "$instance" cairn-bootstrap "$temporary/bootstrap-${instance}.yaml"
+  require_check "bootstrap-pod:${instance}" "$stage" Succeeded "$pod_phase"
+
+  # Structured logs share stdout with the command's own JSON, so the
+  # payload is selected rather than assumed to be the only line.
+  local token observed
+  token=$(
+    printf '%s\n' "$pod_logs" |
+      grep -F '"operation": "bootstrap"' |
+      jq -r '.token' |
+      head -n 1
+  )
+  observed=malformed
+  if [[ "$token" =~ ^cairn1\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$ ]]; then
+    observed=i62-credential
+  fi
+  require_check "bootstrap-token:${instance}" "$stage" i62-credential "$observed"
+
+  ( umask 077; printf '%s' "$token" >"$temporary/token-${instance}" )
+  "$kubectl" create secret generic acceptance-client \
+    --namespace "$instance" \
+    --from-file "token=$temporary/token-${instance}" >/dev/null
+  "$kubectl" delete --namespace "$instance" pod/cairn-bootstrap --wait=true >/dev/null
+
+  "$kubectl" scale --namespace "$instance" statefulset/cairn --replicas=1 >/dev/null
+  local rollout=rolled-out
+  "$kubectl" rollout status --namespace "$instance" \
+    statefulset/cairn --timeout=420s >/dev/null || rollout=failed
+  require_check "instance-serving:${instance}" "$stage" rolled-out "$rollout"
+}
+
+# The slice 5 task 12 checkbox, discharged here on Operator's ruling of
+# 8 August 2026: authenticate, ingest and read the audit event back
+# through `/v1`, in-cluster, from another pod, over the Service.
+#
+# The marker is the instance's own, because stage 2 reads these two
+# ingests back as fixtures and has to be able to tell them apart.
+prove_round_trip() {
+  local instance=$1 stage=$2
+  local marker="kind acceptance ${cluster} ${instance}"
+  acceptance_pod_manifest client-ingest "$instance" \
+    "    cairn.example.invalid/acceptance-client: ${instance}" \
+    acceptance-client "$temporary/client-ingest-${instance}.yaml" \
+    /opt/acceptance/client.py ingest "http://cairn:${probe_port}" \
+    "$marker" /var/run/secrets/acceptance/token
+  run_pod "$instance" client-ingest "$temporary/client-ingest-${instance}.yaml"
+  require_check "v1-round-trip:${instance}" "$stage" ok "${pod_logs%% *}"
+  mutation_id=${pod_logs##* }
+  "$kubectl" delete --namespace "$instance" pod/client-ingest --wait=true >/dev/null
+}
+
+# One deletion, two claims: the pod goes inside its grace period (I-20),
+# and what was ingested through the old pod is still there when the new
+# one answers.
+prove_persistence_and_termination() {
+  local instance=$1
+  local started elapsed
+  started=$(date +%s)
+  "$kubectl" delete --namespace "$instance" pod/cairn-0 --wait=true >/dev/null
+  elapsed=$(($(date +%s) - started))
+  require_bound termination-within-grace single-instance "$grace_seconds" "$elapsed"
+
+  local rollout=rolled-out
+  "$kubectl" rollout status --namespace "$instance" \
+    statefulset/cairn --timeout=420s >/dev/null || rollout=failed
+  require_check "instance-replaced:${instance}" single-instance rolled-out "$rollout"
+
+  acceptance_pod_manifest client-audit "$instance" \
+    "    cairn.example.invalid/acceptance-client: ${instance}" \
+    acceptance-client "$temporary/client-audit-${instance}.yaml" \
+    /opt/acceptance/client.py audit "http://cairn:${probe_port}" \
+    "$mutation_id" /var/run/secrets/acceptance/token
+  run_pod "$instance" client-audit "$temporary/client-audit-${instance}.yaml"
+  require_check persistence-across-pod-deletion single-instance ok "${pod_logs%% *}"
+  "$kubectl" delete --namespace "$instance" pod/client-audit --wait=true >/dev/null
+}
+
+# I-10's kind-tier proof. The claim relaxes to ReadWriteOnce here because
+# kind's provisioner does not implement ReadWriteOncePod, so the property
+# is proved through the data-directory lease instead — a second process
+# on the same claim, on the same node, refusing to start rather than
+# corrupting what the first one owns.
+prove_duplicate_refusal() {
+  local instance=$1
+  local node
+  node=$(
+    "$kubectl" get --namespace "$instance" pod/cairn-0 \
+      -o jsonpath='{.spec.nodeName}'
+  )
+  # The instance's own labels, and they have to be: a contender labelled
+  # anything else is not selected by the index's ingress policy, so it
+  # fails at `graphiti_unavailable` while constructing its adapter and
+  # never reaches the lease at all. That first attempt proved the index's
+  # isolation and said nothing whatever about duplicate exclusion, which
+  # is the claim being made here.
+  #
+  # It therefore matches the Service selector too. This check runs last
+  # for that reason, and the contender fails in the lifespan — before any
+  # readiness a Service would route to.
+  cat >"$temporary/contender-${instance}.yaml" <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cairn-contender
+  namespace: ${instance}
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: ${instance}
+spec:
+  restartPolicy: Never
+  nodeName: ${node}
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: cairn
+      image: ${IMAGE}
+      imagePullPolicy: IfNotPresent
+      args:
+        - serve
+        - --config
+        - /etc/cairn/config.yaml
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - name: data
+          mountPath: /var/lib/cairn
+        - name: config
+          mountPath: /etc/cairn
+          readOnly: true
+        - name: credentials
+          mountPath: /var/run/secrets/cairn
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: data-cairn-0
+    - name: config
+      configMap:
+        name: cairn-config
+    - name: credentials
+      secret:
+        secretName: cairn-credentials
+        defaultMode: 288
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Mi
+EOF
+  run_pod "$instance" cairn-contender "$temporary/contender-${instance}.yaml"
+  local observed=none
+  if printf '%s\n' "$pod_logs" | grep -qF already_locked; then
+    observed=already_locked
+  fi
+  require_check duplicate-process-refusal single-instance already_locked "$observed"
+  require_check duplicate-process-phase single-instance Failed "$pod_phase"
+  "$kubectl" delete --namespace "$instance" pod/cairn-contender --wait=true >/dev/null
+}
+
+# ------------------------------------------------ two instances, probed
+
+# A connection attempted with the workload's own network identity.
+#
+# Every policy in an instance's namespace selects pods by label, so a
+# probe wearing different labels is a probe of a different subject: the
+# only place a connection can be attempted *as* Cairn is inside Cairn's
+# own pod. The image ships no acceptance scripts, so the committed one
+# arrives on stdin — `python -` reads the program from there and leaves
+# the rest of the arguments in `sys.argv`. That is what keeps the file
+# under `tests/` the file that runs, rather than a second copy of it
+# living in a heredoc here.
+probe_from_instance() {
+  local instance=$1 host=$2 port=$3
+  "$kubectl" exec -i --namespace "$instance" pod/cairn-0 -c cairn -- \
+    python - "$host" "$port" "$probe_timeout" <"$acceptance_scripts/probe.py"
+}
+
+# The same, for a CONNECT through the gateway rather than a bare socket.
+connect_from_instance() {
+  local instance=$1 target=$2
+  "$kubectl" exec -i --namespace "$instance" pod/cairn-0 -c cairn -- \
+    python - "cairn-egress-gateway.${gateway_namespace}.svc.cluster.local" \
+    "$gateway_port" "$target" "$tls_port" "$gateway_timeout" \
+    <"$acceptance_scripts/connect.py"
+}
+
+# A connection attempted by a pod that is *not* the workload: same
+# namespace, its own labels, and therefore a different subject to every
+# policy there. The pod is deleted before the answer is returned, because
+# each of these runs once and the namespace outlives it.
+probe_from_pod() {
+  local namespace=$1 pod=$2 labels=$3 host=$4 port=$5
+  acceptance_pod_manifest "$pod" "$namespace" "$labels" acceptance-client \
+    "$temporary/${pod}.yaml" \
+    /opt/acceptance/probe.py "$host" "$port" "$probe_timeout"
+  run_pod "$namespace" "$pod" "$temporary/${pod}.yaml"
+  "$kubectl" delete --namespace "$namespace" "pod/$pod" --wait=true >/dev/null
+  printf '%s' "$pod_logs"
+}
+
+# The endpoint an instance must not be able to reach directly (I-93).
+# In-cluster and fake: P-68's gateway entries are connectivity claims,
+# and a real endpoint would make a fact about Calico depend on somebody
+# else's uptime.
+deploy_fake_provider() {
+  "$kubectl" create namespace "$provider_namespace" >/dev/null
+  install_acceptance_scripts "$provider_namespace"
+  acceptance_pod_manifest fake-provider "$provider_namespace" \
+    "    cairn.example.invalid/acceptance-role: fake-provider" \
+    acceptance-client "$temporary/fake-provider.yaml" \
+    /opt/acceptance/provider.py "$provider_target_port" \
+    --valid-embeddings
+  "$kubectl" apply -f "$temporary/fake-provider.yaml" >/dev/null
+  wait_for_log "$provider_namespace" fake-provider listening
+  "$kubectl" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-provider
+  namespace: ${provider_namespace}
+spec:
+  selector:
+    cairn.example.invalid/acceptance-role: fake-provider
+  ports:
+    - protocol: TCP
+      port: ${tls_port}
+      targetPort: ${provider_target_port}
+EOF
+}
+
+# Keep P-68's provider-connectivity evidence inside the disposable cluster.
+# The source name is still the operator-edited allow-list value from the
+# committed render; CoreDNS maps that exact name to the fake provider only for
+# this cluster, so the CONNECT proves the ACL without proving somebody else's
+# uptime or requiring host egress.
+install_provider_dns_rewrite() {
+  local provider="fake-provider.${provider_namespace}.svc.cluster.local"
+  local original="$temporary/coredns.Corefile"
+  local rewritten="$temporary/coredns-rewritten.Corefile"
+
+  "$kubectl" get --namespace kube-system configmap/coredns \
+    -o jsonpath='{.data.Corefile}' >"$original"
+  awk -v source="$allowed_fqdn" -v target="$provider" \
+    -f "$acceptance_scripts/rewrite-coredns.awk" "$original" >"$rewritten"
+  "$kubectl" create configmap coredns --namespace kube-system \
+    --from-file="Corefile=$rewritten" --dry-run=client -o yaml |
+    "$kubectl" apply -f - >/dev/null
+  "$kubectl" rollout restart --namespace kube-system deployment/coredns \
+    >/dev/null
+  local rollout=rolled-out
+  "$kubectl" rollout status --namespace kube-system deployment/coredns \
+    --timeout=120s >/dev/null || rollout=failed
+  require_check coredns-rewrite-rollout bring-up rolled-out "$rollout"
+
+  local provider_ip
+  provider_ip=$(
+    "$kubectl" get --namespace "$provider_namespace" service/fake-provider \
+      -o jsonpath='{.spec.clusterIP}'
+  )
+  acceptance_pod_manifest resolve-provider "$provider_namespace" \
+    "    cairn.example.invalid/acceptance-role: resolver" \
+    acceptance-client "$temporary/resolve-provider.yaml" \
+    /opt/acceptance/resolve.py "$allowed_fqdn" "$provider_ip" "$tls_port" \
+    20 240 0.25
+  run_pod "$provider_namespace" resolve-provider \
+    "$temporary/resolve-provider.yaml"
+  require_check allow-listed-dns-is-hermetic bring-up matched \
+    "${pod_logs%% *}"
+  "$kubectl" delete --namespace "$provider_namespace" pod/resolve-provider \
+    --wait=true >/dev/null
+}
+
+# P-68 stage 2's matrix. Every entry is an attempted connection with a
+# predicted outcome, and every refusal is paired with the connection that
+# proves its target was reachable by something — otherwise an index that
+# never started, or a Service with no endpoints, would satisfy the
+# negatives for free.
+prove_isolation_matrix() {
+  local a=$1 b=$2
+  local cairn_a="cairn.${a}.svc.cluster.local"
+  local cairn_b="cairn.${b}.svc.cluster.local"
+  local index_b="falkordb.${b}.svc.cluster.local"
+  local index_a="falkordb.${a}.svc.cluster.local"
+  local gateway="cairn-egress-gateway.${gateway_namespace}.svc.cluster.local"
+  local provider="fake-provider.${provider_namespace}.svc.cluster.local"
+
+  # Each instance reaches its own index by the short name its
+  # configuration uses, and neither reaches the other's by any name.
+  require_check "instance-to-own-index:${a}" two-instance connected \
+    "$(probe_from_instance "$a" falkordb "$index_port")"
+  require_check "instance-to-own-index:${b}" two-instance connected \
+    "$(probe_from_instance "$b" falkordb "$index_port")"
+  require_check "instance-to-foreign-index:${a}->${b}" two-instance blocked \
+    "$(probe_from_instance "$a" "$index_b" "$index_port")"
+  require_check "instance-to-foreign-index:${b}->${a}" two-instance blocked \
+    "$(probe_from_instance "$b" "$index_a" "$index_port")"
+
+  # Both directions, because a matrix that only ever probes one way
+  # cannot tell a refusal from an asymmetry.
+  require_check "instance-to-other-instance:${a}->${b}" two-instance blocked \
+    "$(probe_from_instance "$a" "$cairn_b" "$probe_port")"
+  require_check "instance-to-other-instance:${b}->${a}" two-instance blocked \
+    "$(probe_from_instance "$b" "$cairn_a" "$probe_port")"
+
+  # The one route out (I-93) and the destination that proves it is the
+  # only one: the fake provider is reachable from this very namespace by
+  # a pod that is not Cairn, and unreachable from Cairn itself.
+  require_check "instance-to-gateway:${a}" two-instance connected \
+    "$(probe_from_instance "$a" "$gateway" "$gateway_port")"
+  require_check "instance-to-provider-direct:${a}" two-instance blocked \
+    "$(probe_from_instance "$a" "$provider" "$tls_port")"
+  require_check provider-reachable-control two-instance connected \
+    "$(probe_from_pod "$a" probe-provider \
+      "    cairn.example.invalid/acceptance-role: probe" \
+      "$provider" "$tls_port")"
+
+  # Nothing but an instance's own Cairn reaches its index, and nothing
+  # but a Cairn pod reaches the gateway — both from a pod the instance's
+  # own ingress policy admits, so the refusal is the workload's identity
+  # and not the client's location.
+  require_check "client-to-own-index:${a}" two-instance blocked \
+    "$(probe_from_pod "$a" probe-index \
+      "    cairn.example.invalid/acceptance-client: ${a}" \
+      falkordb "$index_port")"
+  require_check "client-to-gateway:${a}" two-instance blocked \
+    "$(probe_from_pod "$a" probe-gateway \
+      "    cairn.example.invalid/acceptance-client: ${a}" \
+      "$gateway" "$gateway_port")"
+
+  # Deliberately wearing *b*'s ingress label in *a*'s namespace: the
+  # label alone admits nothing, because the policy that names it selects
+  # from its own namespace. A client that could cross by relabelling
+  # would make every instance's opened ingress a cluster-wide one.
+  require_check "client-to-other-instance:${a}->${b}" two-instance blocked \
+    "$(probe_from_pod "$a" probe-cross \
+      "    cairn.example.invalid/acceptance-client: ${b}" \
+      "$cairn_b" "$probe_port")"
+}
+
+# The allow-list itself, from inside a Cairn pod, which is the only place
+# the gateway admits a CONNECT from. Connectivity only (P-68): the tunnel
+# to the permitted destination is opened and nothing is sent through it,
+# and the refused destination is unresolvable by construction so a broken
+# ACL cannot reach anything real.
+prove_gateway_allow_list() {
+  local instance=$1
+  require_check gateway-connect-allowed two-instance established \
+    "$(connect_from_instance "$instance" "$allowed_fqdn")"
+  require_check gateway-connect-refused two-instance forbidden \
+    "$(connect_from_instance "$instance" "$refused_fqdn")"
+  require_check gateway-connect-refused-reachable two-instance forbidden \
+    "$(connect_from_instance "$instance" \
+      "fake-provider.${provider_namespace}.svc.cluster.local")"
+}
+
+# The index sees the serving process's actual connection, not the manifest's
+# promise about where that process ought to connect. Authentication is read
+# from the index's own mounted configuration and sent to redis-cli on stdin:
+# the value reaches no argument, environment, log or report.
+index_client_list() {
+  local instance=$1
+  "$kubectl" exec --namespace "$instance" pod/falkordb-0 -c falkordb -- \
+    sh -eu -c \
+    "{ sed -n 's/^requirepass /AUTH /p' /etc/falkordb/cairn.conf; \
+       echo 'CLIENT LIST'; } | redis-cli --raw" |
+    sed '/^OK$/d'
+}
+
+# Query the Attic file itself, read-only. The retrieve surface merges Attic and
+# index candidates, so a successful wire read cannot establish which store
+# carried the payload.
+attic_payload_presence() {
+  local instance=$1 pod=$2 container=$3 marker=$4
+  "$kubectl" exec -i --namespace "$instance" "pod/${pod}" -c "$container" -- \
+    python - /var/lib/cairn/attic.sqlite3 "attic evidence ${marker}" \
+    <"$acceptance_scripts/attic.py"
+}
+
+# Ask the rebuilt FalkorDB directly for the root-scope episode. Authentication
+# comes from the mounted configuration and enters redis-cli on stdin; the
+# credential reaches no argument, environment, log or report.
+restored_index_episode_presence() {
+  local instance=$1 marker=$2 graph
+  graph=$(printf 'cairn.graphiti.partition/v1\000local\n[]' |
+    sha256sum | awk '{print $1}')
+  if "$kubectl" exec --namespace "$instance" \
+    pod/falkordb-restored-0 -c falkordb -- sh -eu -c \
+    "{ sed -n 's/^requirepass /AUTH /p' /etc/falkordb/cairn.conf; \
+       echo 'GRAPH.RO_QUERY ${graph} \"MATCH (e:Episodic) RETURN e.content\"'; } | \
+     redis-cli --raw" |
+    sed '/^OK$/d' | grep -Fxq -- "$marker"; then
+    printf present
+  else
+    printf absent
+  fi
+}
+
+client_presence() {
+  local address=$1
+  if grep -Fq "addr=${address}:"; then
+    printf connected
+  else
+    printf absent
+  fi
+}
+
+wait_for_index_client_list() {
+  local instance=$1 expected_address=$2 clients=
+  for _ in $(seq 1 60); do
+    clients=$(index_client_list "$instance")
+    if [[ "$(printf '%s\n' "$clients" | client_presence \
+      "$expected_address")" == connected ]]; then
+      printf '%s' "$clients"
+      return 0
+    fi
+    sleep 0.5
+  done
+  printf '%s' "$clients"
+}
+
+wait_for_service_endpoint() {
+  local instance=$1 expected_ip=$2 endpoint_ip=
+  for _ in $(seq 1 60); do
+    if endpoint_ip=$("$kubectl" get --namespace "$instance" endpoints/cairn \
+      -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null) &&
+      [[ "$endpoint_ip" == "$expected_ip" ]]; then
+      printf '%s' "$endpoint_ip"
+      return 0
+    fi
+    sleep 0.5
+  done
+  printf '%s' "$endpoint_ip"
+}
+
+# P-68's endpoint cross-selection check, through the running processes rather
+# than raw probe sockets. Each Cairn Pod IP must appear in its own index's
+# authenticated client list and be absent from the sibling's list.
+prove_endpoint_selection() {
+  local a=$1 b=$2 ip_a ip_b clients_a clients_b
+  ip_a=$(
+    "$kubectl" get --namespace "$a" pod/cairn-0 \
+      -o jsonpath='{.status.podIP}'
+  )
+  ip_b=$(
+    "$kubectl" get --namespace "$b" pod/cairn-0 \
+      -o jsonpath='{.status.podIP}'
+  )
+  clients_a=$(wait_for_index_client_list "$a" "$ip_a")
+  clients_b=$(wait_for_index_client_list "$b" "$ip_b")
+
+  require_check "endpoint-own-selection:${a}" two-instance connected \
+    "$(printf '%s\n' "$clients_a" | client_presence "$ip_a")"
+  require_check "endpoint-foreign-selection:${a}->${b}" two-instance absent \
+    "$(printf '%s\n' "$clients_b" | client_presence "$ip_a")"
+  require_check "endpoint-own-selection:${b}" two-instance connected \
+    "$(printf '%s\n' "$clients_b" | client_presence "$ip_b")"
+  require_check "endpoint-foreign-selection:${b}->${a}" two-instance absent \
+    "$(printf '%s\n' "$clients_a" | client_presence "$ip_b")"
+}
+
+# One instance's fixture, looked for in the other, with the other's own
+# credential on its own opened ingress. `absent` is printed only when the
+# read succeeded and did not contain it — a refused read prints a
+# failure, never absence, which is the difference between an isolation
+# claim and a broken request.
+prove_fixture_absent() {
+  local instance=$1 foreign_mutation=$2
+  acceptance_pod_manifest client-absent "$instance" \
+    "    cairn.example.invalid/acceptance-client: ${instance}" \
+    acceptance-client "$temporary/client-absent-${instance}.yaml" \
+    /opt/acceptance/client.py absent "http://cairn:${probe_port}" \
+    "$foreign_mutation" /var/run/secrets/acceptance/token
+  run_pod "$instance" client-absent "$temporary/client-absent-${instance}.yaml"
+  require_check "fixture-cross-selection:${instance}" two-instance absent \
+    "${pod_logs%% *}"
+  "$kubectl" delete --namespace "$instance" pod/client-absent --wait=true >/dev/null
+}
+
+# P-68's credential and fixture cross-selection checks through the REST
+# boundary. `prove_endpoint_selection` separately observes the serving
+# processes' actual FalkorDB connections from both index sides.
+prove_cross_selection() {
+  local a=$1 b=$2 fixture_a=$3 fixture_b=$4
+
+  # a's own client pod, on a's opened ingress, carrying b's token. The
+  # network path is permitted and the instance refuses anyway, which is
+  # the only arrangement that tests the credential rather than the
+  # policy. I-26's authentication failure is a 401 and the prediction is
+  # that code: "it did not work" would be satisfied by an instance that
+  # was never running.
+  "$kubectl" create secret generic acceptance-client-foreign \
+    --namespace "$a" --from-file "token=$temporary/token-${b}" >/dev/null
+  acceptance_pod_manifest client-foreign "$a" \
+    "    cairn.example.invalid/acceptance-client: ${a}" \
+    acceptance-client-foreign "$temporary/client-foreign.yaml" \
+    /opt/acceptance/client.py denied "http://cairn:${probe_port}" - \
+    /var/run/secrets/acceptance/token
+  run_pod "$a" client-foreign "$temporary/client-foreign.yaml"
+  require_check credential-cross-selection two-instance http-401 "${pod_logs%% *}"
+  "$kubectl" delete --namespace "$a" pod/client-foreign --wait=true >/dev/null
+
+  prove_fixture_absent "$b" "$fixture_a"
+  prove_fixture_absent "$a" "$fixture_b"
+}
+
+# ------------------------------------------- backup and restore, fresh PVC
+
+json_operation() {
+  local operation=$1
+  jq -Rrc --arg operation "$operation" \
+    'fromjson? | select(.operation? == $operation)' | tail -n 1
+}
+
+deploy_replacement_index() {
+  local instance=$1
+  cat >"$temporary/replacement-index.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: falkordb-restored
+  namespace: ${instance}
+spec:
+  selector:
+    app.kubernetes.io/instance: ${instance}
+    app.kubernetes.io/name: falkordb
+    cairn.example.invalid/recovery: restored
+  ports:
+    - name: redis
+      port: ${index_port}
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: falkordb-restored
+  namespace: ${instance}
+spec:
+  replicas: 1
+  serviceName: falkordb-restored
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: ${instance}
+      app.kubernetes.io/name: falkordb
+      cairn.example.invalid/recovery: restored
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: ${instance}
+        app.kubernetes.io/name: falkordb
+        cairn.example.invalid/recovery: restored
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsGroup: 0
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: falkordb
+          image: ${falkordb_image}
+          env:
+            - name: REDIS_ARGS
+              value: /etc/falkordb/cairn.conf
+            - name: BROWSER
+              value: "0"
+            - name: TLS
+              value: "0"
+          ports:
+            - name: redis
+              containerPort: ${index_port}
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/falkordb/data
+            - name: index-config
+              mountPath: /etc/falkordb
+              readOnly: true
+      volumes:
+        - name: index-config
+          secret:
+            secretName: cairn-credentials
+            defaultMode: 288
+            items:
+              - key: falkordb.conf
+                path: cairn.conf
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        volumeMode: Filesystem
+EOF
+  "$kubectl" apply -f "$temporary/replacement-index.yaml" >/dev/null
+  "$kubectl" rollout status --namespace "$instance" \
+    statefulset/falkordb-restored --timeout=420s >/dev/null
+}
+
+# P-68's live-provider claim belongs to P-70, not this hermetic run. The
+# recovery candidate still has to exercise the production Graphiti adapter,
+# so only pods carrying the recovery label gain a direct route to the
+# deterministic provider. The serving instances in stages 1 and 2 retain the
+# committed CONNECT-only gateway posture unchanged.
+install_recovery_provider_route() {
+  local instance=$1
+  "$kubectl" apply --namespace "$instance" -f - >/dev/null <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cairn-recovery-allow-fake-provider
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: ${instance}
+      app.kubernetes.io/name: cairn
+    matchExpressions:
+      - key: cairn.example.invalid/recovery
+        operator: In
+        values:
+          - stage3
+          - restored
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${provider_namespace}
+          podSelector:
+            matchLabels:
+              cairn.example.invalid/acceptance-role: fake-provider
+      ports:
+        - protocol: TCP
+          port: ${provider_target_port}
+EOF
+}
+
+prepare_stage3_provider() {
+  local instance=$1 stage=$2
+  install_recovery_provider_route "$instance"
+  local endpoint="http://fake-provider.${provider_namespace}.svc.cluster.local:${provider_target_port}/v1"
+  "$kubectl" set env --namespace "$instance" statefulset/cairn \
+    "OPENAI_BASE_URL=${endpoint}" >/dev/null
+  "$kubectl" patch --namespace "$instance" statefulset/cairn --type=merge \
+    -p '{"spec":{"template":{"metadata":{"labels":{"cairn.example.invalid/recovery":"stage3"}}}}}' \
+    >/dev/null
+  local observed=rolled-out
+  "$kubectl" rollout status --namespace "$instance" statefulset/cairn \
+    --timeout=420s >/dev/null || observed=failed
+  require_check stage3-provider-rollout "$stage" rolled-out "$observed"
+}
+
+prepare_replacement_config() {
+  local instance=$1
+  "$kubectl" get --namespace "$instance" configmap/cairn-config \
+    -o jsonpath='{.data.config\.yaml}' >"$temporary/restored-config.yaml"
+  sed -i 's/^  host: falkordb$/  host: falkordb-restored/' \
+    "$temporary/restored-config.yaml"
+  grep -q '^  host: falkordb-restored$' "$temporary/restored-config.yaml" ||
+    fail "replacement config did not select its fresh index"
+  "$kubectl" create configmap cairn-restored-config \
+    --namespace "$instance" \
+    --from-file="config.yaml=$temporary/restored-config.yaml" >/dev/null
+}
+
+start_restore_pod() {
+  local instance=$1
+  cat >"$temporary/restore-pod.yaml" <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cairn-restored-data
+  namespace: ${instance}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cairn-restore
+  namespace: ${instance}
+  labels:
+    app.kubernetes.io/instance: ${instance}
+    app.kubernetes.io/name: cairn
+    cairn.example.invalid/recovery: restored
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: recovery
+      image: ${IMAGE}
+      imagePullPolicy: IfNotPresent
+      command:
+        - python
+      args:
+        - -c
+        - "import os,time; entries=set(os.listdir('/var/lib/cairn')); print('fresh' if entries <= {'lost+found'} else 'not-fresh', flush=True); time.sleep(600)"
+      env:
+        - name: OPENAI_BASE_URL
+          value: http://fake-provider.${provider_namespace}.svc.cluster.local:${provider_target_port}/v1
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - name: data
+          mountPath: /var/lib/cairn
+        - name: bundle
+          mountPath: /backup
+        - name: config
+          mountPath: /etc/cairn
+          readOnly: true
+        - name: credentials
+          mountPath: /var/run/secrets/cairn
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: cairn-restored-data
+    - name: bundle
+      emptyDir: {}
+    - name: config
+      configMap:
+        name: cairn-restored-config
+    - name: credentials
+      secret:
+        secretName: cairn-credentials
+        defaultMode: 288
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 256Mi
+EOF
+  "$kubectl" apply -f "$temporary/restore-pod.yaml" >/dev/null
+  "$kubectl" wait --namespace "$instance" --for=condition=Ready \
+    pod/cairn-restore --timeout=120s >/dev/null
+  wait_for_log "$instance" cairn-restore fresh
+}
+
+deploy_replacement_instance() {
+  local instance=$1
+  cat >"$temporary/replacement-cairn.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: cairn-restored
+  namespace: ${instance}
+spec:
+  selector:
+    app.kubernetes.io/instance: ${instance}
+    app.kubernetes.io/name: cairn
+    cairn.example.invalid/recovery: restored
+  ports:
+    - name: http
+      port: ${probe_port}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cairn-restored
+  namespace: ${instance}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: ${instance}
+      app.kubernetes.io/name: cairn
+      cairn.example.invalid/recovery: restored
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: ${instance}
+        app.kubernetes.io/name: cairn
+        cairn.example.invalid/recovery: restored
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cairn
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - --config
+            - /etc/cairn/config.yaml
+          env:
+            - name: OPENAI_BASE_URL
+              value: http://fake-provider.${provider_namespace}.svc.cluster.local:${provider_target_port}/v1
+          ports:
+            - name: http
+              containerPort: ${probe_port}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/cairn
+            - name: config
+              mountPath: /etc/cairn
+              readOnly: true
+            - name: credentials
+              mountPath: /var/run/secrets/cairn
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cairn-restored-data
+        - name: config
+          configMap:
+            name: cairn-restored-config
+        - name: credentials
+          secret:
+            secretName: cairn-credentials
+            defaultMode: 288
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+EOF
+  "$kubectl" apply -f "$temporary/replacement-cairn.yaml" >/dev/null
+  "$kubectl" rollout status --namespace "$instance" \
+    deployment/cairn-restored --timeout=420s >/dev/null
+}
+
+prove_backup_restore() {
+  local instance=$1
+  local stage=backup-restore
+  local marker="kind restore ${cluster} ${instance}"
+
+  prepare_stage3_provider "$instance" "$stage"
+
+  acceptance_pod_manifest restore-fixture "$instance" \
+    "    cairn.example.invalid/acceptance-client: ${instance}" \
+    acceptance-client "$temporary/restore-fixture.yaml" \
+    /opt/acceptance/client.py restore-fixture "http://cairn:${probe_port}" \
+    "$marker" /var/run/secrets/acceptance/token
+  run_pod "$instance" restore-fixture "$temporary/restore-fixture.yaml"
+  local restore_mutation=${pod_logs##* }
+  require_check pre-backup-attic-payload "$stage" present \
+    "$(attic_payload_presence "$instance" cairn-0 cairn "$marker")"
+  "$kubectl" delete --namespace "$instance" pod/restore-fixture --wait=true >/dev/null
+
+  acceptance_pod_manifest live-traffic "$instance" \
+    "    cairn.example.invalid/acceptance-client: ${instance}" \
+    acceptance-client "$temporary/live-traffic.yaml" \
+    /opt/acceptance/traffic.py "http://cairn:${probe_port}" \
+    /var/run/secrets/acceptance/token "live ${cluster}"
+  "$kubectl" apply -f "$temporary/live-traffic.yaml" >/dev/null
+  wait_for_log "$instance" live-traffic ready
+  wait_for_log "$instance" live-traffic "mutations 1"
+  local traffic_before traffic_after
+  traffic_before=$("$kubectl" logs --namespace "$instance" pod/live-traffic |
+    awk '/^mutations / {value=$2} END {print value+0}')
+
+  local backup_logs backup_payload observed=Succeeded
+  if ! backup_logs=$("$kubectl" exec --namespace "$instance" pod/cairn-0 -c cairn -- \
+    cairn backup --config /etc/cairn/config.yaml \
+    --output /var/lib/cairn/acceptance-backups 2>&1); then
+    observed=Failed
+  fi
+  require_check backup-exec "$stage" Succeeded "$observed"
+  backup_payload=$(printf '%s\n' "$backup_logs" | json_operation backup)
+  [[ -n "$backup_payload" ]] || fail "backup emitted no operation payload"
+  backup_barrier_ms=$(jq -r '.barrier_ms' <<<"$backup_payload")
+  awk 'BEGIN {exit !(ARGV[1] > 0)}' "$backup_barrier_ms" ||
+    fail "backup barrier was not positive: $backup_barrier_ms"
+  local bundle_path
+  bundle_path=$(jq -r '.bundle' <<<"$backup_payload")
+
+  traffic_after=$("$kubectl" logs --namespace "$instance" pod/live-traffic |
+    awk '/^mutations / {value=$2} END {print value+0}')
+  observed=inactive
+  if ((traffic_before >= 1 && traffic_after > traffic_before)); then
+    observed=mutating
+  fi
+  require_check backup-under-live-traffic "$stage" mutating "$observed"
+
+  local bundle_host="$temporary/exported-bundle"
+  observed=copied
+  "$kubectl" cp --namespace "$instance" -c cairn \
+    "cairn-0:${bundle_path}" "$bundle_host" >/dev/null 2>&1 || observed=failed
+  require_check backup-bundle-copied "$stage" copied "$observed"
+  [[ -f "$bundle_host/manifest.json" ]] || fail "copied bundle has no manifest"
+
+  observed=verified
+  while IFS=$'\t' read -r member bytes digest; do
+    local member_path="$bundle_host/$member"
+    if [[ ! -f "$member_path" ]] ||
+      [[ "$(wc -c <"$member_path" | tr -d ' ')" != "$bytes" ]] ||
+      [[ "$(sha256sum "$member_path" | awk '{print $1}')" != "$digest" ]]; then
+      observed=failed
+      break
+    fi
+  done < <(jq -r '.members[] | [.name, (.bytes|tostring), .sha256] | @tsv' \
+    "$bundle_host/manifest.json")
+  if ! jq -e '.members | map(.name) | sort == ["attic.sqlite3", "catalogue.sqlite3"]' \
+    "$bundle_host/manifest.json" >/dev/null; then
+    observed=failed
+  fi
+  require_check backup-member-digests "$stage" verified "$observed"
+
+  "$kubectl" delete --namespace "$instance" pod/live-traffic --wait=true >/dev/null
+  "$kubectl" scale --namespace "$instance" statefulset/cairn --replicas=0 >/dev/null
+  "$kubectl" wait --namespace "$instance" --for=delete pod/cairn-0 \
+    --timeout=120s >/dev/null
+  "$kubectl" scale --namespace "$instance" statefulset/falkordb --replicas=0 >/dev/null
+  "$kubectl" wait --namespace "$instance" --for=delete pod/falkordb-0 \
+    --timeout=120s >/dev/null
+  observed=$("$kubectl" get --namespace "$instance" statefulset/cairn \
+    -o jsonpath='{.spec.replicas}')
+  require_check original-quiesced "$stage" 0 "$observed"
+
+  # Keep the stable Service off the candidate until all acceptance checks
+  # below pass. The old PVC and StatefulSet remain the rollback target.
+  "$kubectl" patch --namespace "$instance" service/cairn --type=merge \
+    -p '{"spec":{"selector":{"cairn.example.invalid/recovery":"original"}}}' \
+    >/dev/null
+
+  prepare_replacement_config "$instance"
+  deploy_replacement_index "$instance"
+  start_restore_pod "$instance"
+  observed=$("$kubectl" logs --namespace "$instance" pod/cairn-restore | head -n 1)
+  require_check replacement-pvc-fresh "$stage" fresh "$observed"
+
+  "$kubectl" cp --namespace "$instance" -c recovery \
+    "$bundle_host" "cairn-restore:/backup/bundle" >/dev/null
+  local restore_logs restore_payload
+  observed=Succeeded
+  if ! restore_logs=$("$kubectl" exec --namespace "$instance" pod/cairn-restore \
+    -c recovery -- cairn restore --config /etc/cairn/config.yaml \
+    --bundle /backup/bundle 2>&1); then
+    observed=Failed
+  fi
+  require_check restore-command "$stage" Succeeded "$observed"
+  restore_payload=$(printf '%s\n' "$restore_logs" | json_operation restore)
+  [[ -n "$restore_payload" ]] || fail "restore emitted no operation payload"
+
+  local verify_logs verify_payload
+  observed=Succeeded
+  if ! verify_logs=$("$kubectl" exec --namespace "$instance" pod/cairn-restore \
+    -c recovery -- cairn verify --config /etc/cairn/config.yaml 2>&1); then
+    observed=Failed
+  fi
+  verify_payload=$(printf '%s\n' "$verify_logs" | json_operation verify)
+  if [[ -z "$verify_payload" ]] || [[ "$(jq -r '.fact_count' <<<"$verify_payload")" -lt 1 ]]; then
+    observed=Failed
+  fi
+  require_check restored-catalogue-integrity "$stage" Succeeded "$observed"
+
+  observed=matched
+  if [[ "$(jq -c '.audit_boundary' <<<"$restore_payload")" != \
+    "$(jq -c '.audit_boundary' "$bundle_host/manifest.json")" ]]; then
+    observed=mismatched
+  fi
+  require_check restored-audit-boundary "$stage" matched "$observed"
+
+  require_check restored-attic-payload "$stage" present \
+    "$(attic_payload_presence "$instance" cairn-restore recovery "$marker")"
+
+  local rebuild_logs rebuild_payload
+  observed=Succeeded
+  if ! rebuild_logs=$("$kubectl" exec --namespace "$instance" pod/cairn-restore \
+    -c recovery -- cairn rebuild-index --config /etc/cairn/config.yaml 2>&1); then
+    observed=Failed
+  fi
+  rebuild_payload=$(printf '%s\n' "$rebuild_logs" |
+    jq -Rrc 'fromjson? | select(.projected? != null)' | tail -n 1)
+  if [[ -z "$rebuild_payload" ]] ||
+    ! jq -e '.status == "ok" and .projected > 0 and .failed == 0 and .unreadable == 0' \
+      <<<"$rebuild_payload" >/dev/null; then
+    observed=Failed
+  fi
+  require_check rebuild-index "$stage" Succeeded "$observed"
+  require_check restored-index-episode "$stage" present \
+    "$(restored_index_episode_presence "$instance" "$marker")"
+
+  "$kubectl" delete --namespace "$instance" pod/cairn-restore --wait=true >/dev/null
+  deploy_replacement_instance "$instance"
+
+  acceptance_pod_manifest restored-rest "$instance" \
+    "    cairn.example.invalid/acceptance-client: ${instance}" \
+    acceptance-client "$temporary/restored-rest.yaml" \
+    /opt/acceptance/client.py restored-rest \
+    "http://cairn-restored:${probe_port}" "$marker" \
+    /var/run/secrets/acceptance/token "$restore_mutation"
+  run_pod "$instance" restored-rest "$temporary/restored-rest.yaml"
+  require_check restored-scoped-read-rest "$stage" ok "${pod_logs%% *}"
+  "$kubectl" delete --namespace "$instance" pod/restored-rest --wait=true >/dev/null
+
+  acceptance_pod_manifest restored-mcp "$instance" \
+    "    cairn.example.invalid/acceptance-client: ${instance}" \
+    acceptance-client "$temporary/restored-mcp.yaml" \
+    /opt/acceptance/client.py restored-mcp \
+    "http://cairn-restored:${probe_port}" "$marker" \
+    /var/run/secrets/acceptance/token "$restore_mutation"
+  run_pod "$instance" restored-mcp "$temporary/restored-mcp.yaml"
+  require_check restored-scoped-read-mcp "$stage" ok "${pod_logs%% *}"
+  "$kubectl" delete --namespace "$instance" pod/restored-mcp --wait=true >/dev/null
+
+  observed=retained
+  "$kubectl" get --namespace "$instance" pvc/data-cairn-0 >/dev/null 2>&1 ||
+    observed=absent
+  require_check original-pvc-retained "$stage" retained "$observed"
+
+  "$kubectl" patch --namespace "$instance" service/cairn --type=merge \
+    -p '{"spec":{"selector":{"cairn.example.invalid/recovery":"restored"}}}' \
+    >/dev/null
+  local replacement_ip endpoint_ip
+  replacement_ip=$("$kubectl" get --namespace "$instance" \
+    -l cairn.example.invalid/recovery=restored,app.kubernetes.io/name=cairn \
+    pod -o jsonpath='{.items[0].status.podIP}')
+  endpoint_ip=$(wait_for_service_endpoint "$instance" "$replacement_ip")
+  observed=moved
+  [[ "$endpoint_ip" == "$replacement_ip" ]] || observed=wrong-endpoint
+  require_check traffic-moved-after-acceptance "$stage" moved "$observed"
+}
+
+# ----------------------------------------------------------------- run
+
+install_tools
+create_cluster
+prove_enforcement_active
+install_shape_validation_crds
+validate_committed_renders
+deploy_egress_gateway
+deploy_fake_provider
+install_provider_dns_rewrite
+bring_up_instance cairn-a single-instance
+bootstrap_instance cairn-a single-instance
+prove_round_trip cairn-a single-instance
+fixture_a=$mutation_id
+prove_persistence_and_termination cairn-a
+prove_duplicate_refusal cairn-a
+completed_stage=single-instance
+
+bring_up_instance cairn-b two-instance
+bootstrap_instance cairn-b two-instance
+prove_round_trip cairn-b two-instance
+fixture_b=$mutation_id
+prove_isolation_matrix cairn-a cairn-b
+prove_gateway_allow_list cairn-a
+prove_endpoint_selection cairn-a cairn-b
+prove_cross_selection cairn-a cairn-b "$fixture_a" "$fixture_b"
+completed_stage=two-instance
+
+prove_backup_restore cairn-a
+completed_stage=backup-restore
+
+printf 'kind acceptance passed: bring-up, isolation and backup/restore\n'

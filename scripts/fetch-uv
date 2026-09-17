@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Extract the repository-pinned uv binary without trusting an ambient installer.
+set -euo pipefail
+set +x
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+umask 077
+
+fail() {
+  printf 'fetch-uv failed: %s\n' "$*" >&2
+  exit 1
+}
+
+uv_image=$(awk -F= '$1 == "ARG UV_IMAGE" { print $2 }' Dockerfile)
+[[ "$uv_image" =~ ^ghcr\.io/astral-sh/uv:0\.12\.14@sha256:[0-9a-f]{64}$ ]] ||
+  fail 'Dockerfile does not contain the required digest-pinned uv 0.12.14 image'
+
+destination=${UV_DESTINATION:-"$PWD/build/tools/uv"}
+[[ "$destination" == /* && "$destination" != / && ! -e "$destination" && ! -L "$destination" ]] ||
+  fail 'destination must be a new absolute non-symlink path'
+mkdir -p "$(dirname "$destination")"
+
+container_id=
+cleanup() {
+  [[ -z "$container_id" ]] || docker rm -f "$container_id" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+container_id=$(docker create "$uv_image") || fail 'could not create the digest-pinned uv image container'
+docker cp "${container_id}:/uv" "$destination" || fail 'could not extract /uv from the pinned image'
+docker rm "$container_id" >/dev/null || fail 'could not remove the temporary uv image container'
+container_id=
+chmod 0755 "$destination"
+[[ $("$destination" --version) == 'uv 0.12.14 '* ]] ||
+  fail 'extracted binary is not uv 0.12.14'

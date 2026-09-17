@@ -1,0 +1,1028 @@
+#!/usr/bin/env bash
+# The opt-in live proof of the real Graphiti adapter (P-39): project two
+# facts into distinct partitions, search each partition, prove partition
+# separation and clear(), and prove that a projection interrupted
+# mid-write converges on retry. Env-gated and skipped by default because
+# CI never constructs the real adapter — it needs a reachable FalkorDB and
+# whatever provider credentials graphiti-core's own environment
+# conventions require (OPENAI_API_KEY by default).
+#
+#   CAIRN_GRAPHITI_SMOKE=1 [FALKORDB_HOST=... FALKORDB_PORT=...] \
+#     scripts/graphiti-smoke
+#
+# A local FalkorDB for it:  docker run --rm -p 6379:6379 falkordb/falkordb
+set -euo pipefail
+
+if [[ "${CAIRN_GRAPHITI_SMOKE:-}" != "1" ]]; then
+	echo "graphiti-smoke: skipped (set CAIRN_GRAPHITI_SMOKE=1 to run)"
+	exit 0
+fi
+
+FALKORDB_HOST="${FALKORDB_HOST:-127.0.0.1}"
+FALKORDB_PORT="${FALKORDB_PORT:-6379}"
+
+exec uv run --locked python - "$FALKORDB_HOST" "$FALKORDB_PORT" <<'PYTHON'
+import sys
+import threading
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import graphiti_core.graphiti as graphiti_module
+from graphiti_core.edges import EntityEdge
+from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode
+from graphiti_core.utils.bulk_utils import add_nodes_and_edges_bulk_tx
+from graphiti_core.utils.maintenance.edge_operations import resolve_extracted_edges
+# The resolver's own exact-identity rule, imported rather than
+# reimplemented so the scans below cannot drift from what graphiti
+# actually treats as the same entity or the same fact.
+from graphiti_core.utils.maintenance.dedup_helpers import _normalize_string_exact
+
+from cairn.catalogue.audit import Classification, ScopeSegment, TrustClass
+from cairn.projection.adapter import FactProjected, ProjectedFactState
+from cairn.projection.graphiti import (
+    _PROJECTION_DONE,
+    GraphitiIndex,
+    GraphitiIndexError,
+)
+from cairn.projection.partition import (
+    canonical_partition,
+    canonical_segments_json,
+    derive_group_id,
+)
+
+host, port = sys.argv[1], int(sys.argv[2])
+now = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
+
+api = canonical_partition(
+    "smoke", canonical_segments_json((ScopeSegment("repo", "api"),))
+)
+web = canonical_partition(
+    "smoke", canonical_segments_json((ScopeSegment("repo", "web"),))
+)
+
+
+def state(partition: str, body: str) -> ProjectedFactState:
+    return ProjectedFactState(
+        fact_id=uuid4(),
+        partition_key=partition,
+        body=body,
+        realm_id="smoke",
+        segments=(ScopeSegment("repo", "api"),),
+        classification=Classification.INTERNAL,
+        trust=TrustClass.VALIDATED,
+        recorded_at=now,
+        valid_from=None,
+        valid_to=None,
+        invalidated_at=None,
+    )
+
+
+index = GraphitiIndex(host=host, port=port)
+try:
+    # Start clean so a rerun is deterministic.
+    index.clear((api, web))
+
+    api_fact = state(api, "the deploy pipeline retries three times before failing")
+    web_fact = state(web, "the web frontend caches sessions in redis")
+
+    assert index.project(api_fact) == FactProjected(), "project(api) failed"
+    assert index.project(web_fact) == FactProjected(), "project(web) failed"
+    assert index.project(api_fact) == FactProjected(), "re-project not idempotent"
+    print("projected: 2 facts, re-projection idempotent")
+
+    api_hits = index.search("deploy pipeline retries", 10, (api,))
+    assert api_fact.fact_id in api_hits, f"api fact not found: {api_hits}"
+    assert web_fact.fact_id not in api_hits, "partition separation violated"
+    print(f"search(api): {len(api_hits)} hit(s), separation held")
+
+    cross_hits = index.search("deploy pipeline retries", 10, (api, web))
+    assert api_fact.fact_id in cross_hits, "fan-out lost the api fact"
+    print(f"search(api+web): {len(cross_hits)} hit(s) across partitions")
+
+    # The recall floor, isolated. A hit alone does not say which layer
+    # produced it, so this projects a body with no relation to extract,
+    # asserts the episode really has no edges, and only then asserts it is
+    # still found — which the edge-only default search could not do, and
+    # is the exact defect the first live run surfaced.
+    floor_fact = state(api, "quiescent")
+    assert index.project(floor_fact) == FactProjected(), "project(floor) failed"
+
+    identity = str(floor_fact.fact_id)
+    driver = index._driver.clone(database=derive_group_id(api))
+    episode = index._call(EpisodicNode.get_by_uuid(driver, identity))
+    assert not episode.entity_edges, (
+        f"floor fact extracted edges ({episode.entity_edges}); it no longer "
+        "isolates the episode layer — choose a body that extracts nothing"
+    )
+    # P-38's completion invariant, proved against a real store.
+    assert episode.source_description == _PROJECTION_DONE, (
+        f"completion marker not written: {episode.source_description!r}"
+    )
+
+    floor_hits = index.search("quiescent", 10, (api,))
+    assert floor_fact.fact_id in floor_hits, (
+        "an edgeless fact was invisible to its own search: the episode BM25 "
+        "recall floor is not working"
+    )
+    print("recall floor: edgeless fact found, completion marker written")
+
+    # Retry convergence over residue. Dropping the compensating delete
+    # means a projection that dies mid-write leaves the episode *and*
+    # whatever had already been committed, and the retry re-runs
+    # extraction over it. Every graph write for one add_episode happens in
+    # a single add_nodes_and_edges_bulk, which under FalkorDB is four
+    # sequential tx.run calls with no rollback — so residue is confined to
+    # that window: (1) episode node, (2) entity nodes, (3) episodic
+    # MENTIONS edges, (4) entity RELATES_TO edges. Two boundaries are
+    # exercised, because they converge differently — proven, not assumed.
+    residue = canonical_partition(
+        "smoke", canonical_segments_json((ScopeSegment("repo", "residue"),))
+    )
+    control = canonical_partition(
+        "smoke", canonical_segments_json((ScopeSegment("repo", "control"),))
+    )
+    partial = canonical_partition(
+        "smoke", canonical_segments_json((ScopeSegment("repo", "partial"),))
+    )
+    index.clear((residue, control, partial))
+
+    # Chosen because it demonstrably extracts: three entity nodes and two
+    # edges under the configured provider. A body that extracts nothing
+    # leaves no residue and would make this case prove nothing, which is
+    # why the assertions below fail loudly rather than passing quietly.
+    body = "the billing service depends on the invoicing service, which Priya Raman maintains"
+    residue_fact = state(residue, body)
+    control_fact = state(control, body)
+    partial_fact = state(partial, body)
+
+    def graph_counts(partition: str) -> tuple[int, int, int]:
+        driver = index._driver.clone(database=derive_group_id(partition))
+
+        async def counted() -> tuple[int, int, int]:
+            nodes, _, _ = await driver.execute_query(
+                "MATCH (n:Entity) RETURN count(n) AS total"
+            )
+            relates, _, _ = await driver.execute_query(
+                "MATCH ()-[r:RELATES_TO]->() RETURN count(r) AS total"
+            )
+            mentions, _, _ = await driver.execute_query(
+                "MATCH ()-[m:MENTIONS]->() RETURN count(m) AS total"
+            )
+            return int(nodes[0]["total"]), int(relates[0]["total"]), int(mentions[0]["total"])
+
+        return index._call(counted())
+
+    def mentions_per_pair(partition: str) -> list[int]:
+        driver = index._driver.clone(database=derive_group_id(partition))
+
+        async def counted() -> list[int]:
+            rows, _, _ = await driver.execute_query(
+                "MATCH (e:Episodic)-[m:MENTIONS]->(n:Entity) "
+                "RETURN e.uuid AS ep, n.uuid AS node, count(m) AS c"
+            )
+            return [int(row["c"]) for row in rows]
+
+        return index._call(counted())
+
+    # Aggregate counts alone cannot show *no duplication happened* — two
+    # graphs can share a total while differing in what makes it up. What
+    # can be checked, and directly answers that: whether resolution
+    # actually folded a retry's re-extracted candidates onto the same
+    # node or relationship rather than creating a second one beside it.
+    # That is a property of one graph, not a comparison between two —
+    # residue and control are separate partitions (separate FalkorDB
+    # databases per P-39), so their entity uuids are independently
+    # generated and were never going to match each other regardless of
+    # correctness; a uuid-level comparison across them would prove
+    # nothing.
+    #
+    # The equivalence rule matters as much as the direction. Grouping by
+    # raw ``n.name``, or by ``r.name`` for relationships, is *not* what
+    # graphiti treats as the same thing: entity exact-identity is
+    # ``_normalize_string_exact(name)`` (lowercased, whitespace
+    # collapsed), and an edge's exact-duplicate identity is its endpoints
+    # plus ``_normalize_string_exact(edge.fact)`` — the relation name is
+    # not part of it (``edge_operations.py``'s fast path). Both scans
+    # below therefore normalise in Python using the resolver's own
+    # imported function.
+    #
+    # What this establishes is exactly graphiti's **exact**-duplicate
+    # rule and no more. Above that rule sit a fuzzy (MinHash/Jaccard)
+    # layer and an LLM-assisted semantic layer (``dedup_helpers.py``,
+    # ``resolve_edge``'s fallback), which are non-deterministic and
+    # cannot be replayed by a query. Two nodes the semantic layer would
+    # have merged but whose normalised names differ will pass these
+    # scans. That residual uncertainty is stated in the evidence record
+    # rather than papered over.
+    def duplicate_entity_names(partition: str) -> list[str]:
+        driver = index._driver.clone(database=derive_group_id(partition))
+
+        async def counted() -> list[str]:
+            rows, _, _ = await driver.execute_query(
+                "MATCH (n:Entity) RETURN n.name AS name"
+            )
+            seen: dict[str, int] = {}
+            for row in rows:
+                key = _normalize_string_exact(str(row["name"]))
+                seen[key] = seen.get(key, 0) + 1
+            return sorted(key for key, count in seen.items() if count > 1)
+
+        return index._call(counted())
+
+    def duplicate_relates_to(partition: str) -> list[tuple[str, str, str]]:
+        driver = index._driver.clone(database=derive_group_id(partition))
+
+        async def counted() -> list[tuple[str, str, str]]:
+            rows, _, _ = await driver.execute_query(
+                "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) "
+                "RETURN s.uuid AS s, t.uuid AS t, r.fact AS fact"
+            )
+            seen: dict[tuple[str, str, str], int] = {}
+            for row in rows:
+                key = (
+                    str(row["s"]),
+                    str(row["t"]),
+                    _normalize_string_exact(str(row["fact"])),
+                )
+                seen[key] = seen.get(key, 0) + 1
+            return sorted(key for key, count in seen.items() if count > 1)
+
+        return index._call(counted())
+
+    class BulkWriteInterrupted(RuntimeError):
+        """Injected here, standing for any process death or connection
+        loss between the bulk write's four statements."""
+
+    class InterruptingTx:
+        def __init__(self, session, fail_on: int) -> None:
+            self._session = session
+            self._fail_on = fail_on
+            self._calls = 0
+
+        async def run(self, query, **kwargs):
+            self._calls += 1
+            if self._calls >= self._fail_on:
+                raise BulkWriteInterrupted(
+                    f"injected after {self._calls - 1} of the bulk write's statements"
+                )
+            return await self._session.run(query, **kwargs)
+
+    def make_interrupted_bulk(fail_on: int):
+        async def interrupted_bulk(
+            driver, episodic_nodes, episodic_edges, entity_nodes, entity_edges, embedder
+        ):
+            session = driver.session()
+            try:
+                await add_nodes_and_edges_bulk_tx(
+                    InterruptingTx(session, fail_on=fail_on),
+                    episodic_nodes,
+                    episodic_edges,
+                    entity_nodes,
+                    entity_edges,
+                    embedder,
+                    driver=driver,
+                )
+            finally:
+                await session.close()
+
+        return interrupted_bulk
+
+    def project_interrupted(fact: ProjectedFactState, *, fail_on: int) -> None:
+        real_bulk = graphiti_module.add_nodes_and_edges_bulk
+        graphiti_module.add_nodes_and_edges_bulk = make_interrupted_bulk(fail_on)
+        try:
+            index.project(fact)
+        except GraphitiIndexError as error:
+            print(f"interrupted projection raised {error.code}, as the deliverer needs")
+        else:
+            raise AssertionError("the injected bulk-write failure did not surface")
+        finally:
+            graphiti_module.add_nodes_and_edges_bulk = real_bulk
+
+    # Case 1: fail before any edge statement (statement 3). Nothing but
+    # the episode and entity nodes land, so the retry re-runs extraction
+    # over a graph with no prior edges of either kind — the case the
+    # first live proof of this invariant covered. Convergence is checked
+    # two ways below: aggregate counts against a clean control (weak
+    # alone — matching totals do not rule out an offsetting duplicate),
+    # and a direct scan of residue's own graph for the entities or
+    # relationships resolution should have folded into one and did not.
+    project_interrupted(residue_fact, fail_on=3)
+
+    residue_nodes, residue_relates, residue_mentions = graph_counts(residue)
+    assert residue_nodes > 0, (
+        "the injection committed nothing, so this proves nothing about residue "
+        "— check that the bulk write still runs four statements in order"
+    )
+    assert residue_mentions == 0, (
+        f"expected no edges of either kind before statement 3, got "
+        f"{residue_mentions} MENTIONS edge(s) — the injection point moved"
+    )
+    print(
+        f"residue after interruption (before edges): {residue_nodes} node(s), "
+        f"{residue_relates} RELATES_TO edge(s)"
+    )
+
+    identity = str(residue_fact.fact_id)
+    driver = index._driver.clone(database=derive_group_id(residue))
+    stranded = index._call(EpisodicNode.get_by_uuid(driver, identity))
+    assert stranded.source_description != _PROJECTION_DONE, (
+        "an interrupted projection was stamped complete"
+    )
+
+    assert index.project(residue_fact) == FactProjected(), "the retry failed"
+    assert index.project(control_fact) == FactProjected(), "the control failed"
+
+    converged = index._call(EpisodicNode.get_by_uuid(driver, identity))
+    assert converged.source_description == _PROJECTION_DONE, (
+        "the retry did not stamp completion"
+    )
+
+    # The control's counts are reported, never asserted equal. They were
+    # asserted equal until this run, when the retry extracted 0
+    # RELATES_TO and 1 MENTIONS against the control's 2 and 3 from the
+    # identical body — the LLM-extraction variance already documented in
+    # case 2, now demonstrated to break the assertion outright rather
+    # than merely threaten it. Every prior green run of that assertion
+    # passed on luck. It is dropped rather than loosened because it never
+    # established convergence anyway: matching totals across two
+    # independently keyed graphs cannot show neither holds a duplicate,
+    # which is the whole reason the scans below exist.
+    retried_nodes, retried_relates, retried_mentions = graph_counts(residue)
+    control_nodes, control_relates, control_mentions = graph_counts(control)
+
+    # Entity folding *is* exercised here: entity nodes from the failed
+    # attempt survived the interruption, so the retry's re-extracted
+    # candidates had something to be resolved against. RELATES_TO folding
+    # is *not* exercised at this boundary — the injection precedes both
+    # edge statements, so no prior RELATES_TO edge exists for the retry
+    # to fold onto, and this scan can only show the retry's own single
+    # write did not duplicate internally. Case 3 covers the folding case.
+    residue_dup_entities = duplicate_entity_names(residue)
+    residue_dup_relates = duplicate_relates_to(residue)
+    assert not residue_dup_entities and not residue_dup_relates, (
+        f"the retry left duplicates within residue's own graph despite "
+        f"matching aggregate counts: entity names {residue_dup_entities}, "
+        f"RELATES_TO facts {residue_dup_relates} — resolution duplicated "
+        "rather than merged"
+    )
+
+    retried_hits = index.search(
+        "billing service depends on the invoicing service", 10, (residue,)
+    )
+    assert retried_hits == (residue_fact.fact_id,), (
+        f"the resumed fact is not uniquely recallable: {retried_hits}"
+    )
+    print(
+        f"retry convergence: {retried_nodes} node(s), {retried_relates} RELATES_TO, "
+        f"{retried_mentions} MENTIONS (clean control, for reference only: "
+        f"{control_nodes}/{control_relates}/{control_mentions}) — entity folding "
+        "left no exact-rule duplicate; fact recallable"
+    )
+
+    # Case 2: fail after the MENTIONS write, before RELATES_TO (statement
+    # 4). Val's review of the first proof found the gap this closes: it
+    # never exercised the boundary where residue includes an edge type
+    # that graphiti never resolves against the existing graph.
+    # EpisodicEdge.uuid defaults to a fresh uuid4() per Python object
+    # (graphiti_core/edges.py), and the save query is
+    # MERGE (episode)-[e:MENTIONS {uuid: edge.uuid}]->(node) — keyed on
+    # that fresh uuid, so a retry's freshly-built MENTIONS edges never
+    # match the ones already committed and MERGE creates duplicates
+    # instead of converging. Confirmed live below rather than argued.
+    #
+    # This is accepted, not fixed: graphiti_core.search.search_config
+    # .SearchResults.edges is typed list[EntityEdge], never
+    # EpisodicEdge/MENTIONS, so this class of edge can never reach
+    # IndexAdapter.search — the duplication is real graph bloat and never
+    # a disclosed candidate. Node convergence (MERGE by uuid) and the
+    # completion marker are still asserted exactly; RELATES_TO's count is
+    # not compared against a control here, because extraction is an LLM
+    # call and its count is not guaranteed identical run to run — a
+    # difference on this boundary would say nothing about the adapter.
+    project_interrupted(partial_fact, fail_on=4)
+
+    partial_nodes, partial_relates, partial_mentions = graph_counts(partial)
+    assert partial_mentions > 0, (
+        "expected MENTIONS edges committed before the injected RELATES_TO "
+        "failure — the injection point moved, or this body no longer "
+        "extracts any relation to mention"
+    )
+    assert partial_relates == 0, (
+        f"expected RELATES_TO still unwritten at this boundary, got {partial_relates}"
+    )
+    print(
+        f"partial residue (after MENTIONS, before RELATES_TO): {partial_nodes} node(s), "
+        f"{partial_mentions} MENTIONS edge(s)"
+    )
+
+    partial_identity = str(partial_fact.fact_id)
+    partial_driver = index._driver.clone(database=derive_group_id(partial))
+    partial_stranded = index._call(EpisodicNode.get_by_uuid(partial_driver, partial_identity))
+    assert partial_stranded.source_description != _PROJECTION_DONE, (
+        "an interrupted projection was stamped complete"
+    )
+
+    assert index.project(partial_fact) == FactProjected(), "the retry failed"
+
+    partial_converged = index._call(EpisodicNode.get_by_uuid(partial_driver, partial_identity))
+    assert partial_converged.source_description == _PROJECTION_DONE, (
+        "the retry did not stamp completion"
+    )
+
+    _, _, partial_mentions_after = graph_counts(partial)
+    pairs_after = mentions_per_pair(partial)
+    duplicated = [count for count in pairs_after if count > 1]
+    assert partial_mentions_after > partial_mentions and duplicated, (
+        "expected MENTIONS duplication on this boundary and did not observe "
+        "it — either graphiti now resolves episodic edges against the "
+        "existing graph (the accepted-residue disposition can be dropped) "
+        "or this run's extraction did not reach the same boundary; do not "
+        "treat a quiet pass here as the invariant now holding"
+    )
+
+    # Entity nodes are resolved against the existing graph before saving
+    # (unlike MENTIONS), so this boundary should not duplicate them even
+    # though it does duplicate MENTIONS. Checked directly rather than
+    # assumed from the accepted-residue argument alone.
+    partial_dup_entities = duplicate_entity_names(partial)
+    assert not partial_dup_entities, (
+        f"entity nodes duplicated at the post-MENTIONS boundary too: "
+        f"{partial_dup_entities} — the accepted-residue disposition covers "
+        "MENTIONS only and would need to be revisited"
+    )
+
+    partial_hits = index.search(
+        "billing service depends on the invoicing service", 10, (partial,)
+    )
+    assert partial_hits == (partial_fact.fact_id,), (
+        f"MENTIONS duplication leaked into disclosed candidates: {partial_hits}"
+    )
+    print(
+        f"MENTIONS residue: {partial_mentions} -> {partial_mentions_after} edge(s) "
+        f"({sum(duplicated)} duplicated pair count), confirmed and accepted — "
+        "never disclosed, fact recallable exactly once"
+    )
+
+    # Case 3: every bulk statement lands, then the projection dies before
+    # the completion stamp. This is the only boundary that can exercise
+    # RELATES_TO *folding* — cases 1 and 2 fail before the RELATES_TO
+    # statement, so the retry has no prior edge to fold onto. Here the
+    # episode is left pending beneath a complete graph, precisely the
+    # interrupted state P-38's marker exists to detect, and the retry
+    # re-runs extraction over entity nodes, MENTIONS and RELATES_TO that
+    # are all already present.
+    #
+    # A count holding at "2 -> 2" proves nothing on its own: a retry that
+    # extracted no relationship, or only unrelated ones, leaves the count
+    # untouched without any folding having occurred. Measured directly,
+    # the retry's re-extraction turns out to be a coin flip — observed
+    # live returning two relationship candidates on one run and zero on
+    # the next, from an identical body. Any proof that needs the LLM to
+    # re-extract is therefore inherently flaky, which is why the two
+    # properties below are established separately and neither depends on
+    # it.
+    #
+    # 1. THE RETRY NEVER CORRUPTS STATE (end-to-end, LLM-tolerant). The
+    #    whole canonical state is compared before and after the retry,
+    #    uuid by uuid rather than by cardinality. Not *identical* — the
+    #    retry re-runs extraction, and a fuller second extraction may add
+    #    entities and edges the interrupted first pass missed (observed
+    #    live, 25 August 2026: a one-node residue grew to three nodes on
+    #    retry, correctly). What can never happen, whatever the LLM does:
+    #    anything pre-existing lost or re-minted under a new uuid, an
+    #    exact-rule duplicate created beside an existing node or edge, or
+    #    a pre-existing MENTIONS pair dropped (multiplicity may grow —
+    #    case 2's accepted residue, which this boundary reproduces). A
+    #    retry that duplicated or re-minted would fail here; growth by
+    #    genuinely new extraction passes, because it is not corruption.
+    # 2. THE FOLD RULE FOLDS (deterministic, no extraction at all). A
+    #    candidate edge is hand-built to carry the exact identity of an
+    #    edge already in the graph — same endpoints, same fact — and
+    #    handed straight to ``resolve_extracted_edge``. Its exact-duplicate
+    #    fast path compares endpoints plus normalised fact and returns
+    #    *before* any LLM call, so this is reproducible: the resolver
+    #    must return the pre-existing edge's uuid rather than the fresh
+    #    one the candidate was minted with. That is what folding means
+    #    mechanically — MERGE then writes to the same relationship
+    #    instead of creating a second beside it.
+    #
+    # The injected failure must leave an unmarked episodic residue.  The
+    # presence of extracted relationships is deliberately not a setup
+    # condition: model output is variable, while the completion marker and
+    # retry contract are not.  The deterministic resident-edge fixture below
+    # proves relationship folding independently of extraction.
+
+    def canonical_state(partition: str) -> dict[str, object]:
+        """Every material projection artefact, keyed the way the resolver
+        keys it, with uuids retained. Sorted so two snapshots compare as
+        values rather than as query orderings."""
+        driver = index._driver.clone(database=derive_group_id(partition))
+
+        async def snapshot() -> dict[str, object]:
+            entity_rows, _, _ = await driver.execute_query(
+                "MATCH (n:Entity) RETURN n.uuid AS uuid, n.name AS name"
+            )
+            relates_rows, _, _ = await driver.execute_query(
+                "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) "
+                "RETURN r.uuid AS uuid, s.uuid AS s, t.uuid AS t, r.fact AS fact"
+            )
+            mentions_rows, _, _ = await driver.execute_query(
+                "MATCH (e:Episodic)-[m:MENTIONS]->(n:Entity) "
+                "RETURN e.uuid AS ep, n.uuid AS node"
+            )
+            return {
+                "entities": sorted(
+                    (_normalize_string_exact(str(row["name"])), str(row["uuid"]))
+                    for row in entity_rows
+                ),
+                "relates_to": sorted(
+                    (
+                        str(row["s"]),
+                        str(row["t"]),
+                        _normalize_string_exact(str(row["fact"])),
+                        str(row["uuid"]),
+                    )
+                    for row in relates_rows
+                ),
+                "mentions_pairs": sorted(
+                    {(str(row["ep"]), str(row["node"])) for row in mentions_rows}
+                ),
+                "mentions_total": len(mentions_rows),
+            }
+
+        return index._call(snapshot())
+
+    real_bulk = graphiti_module.add_nodes_and_edges_bulk
+
+    async def bulk_then_fail(*args, **kwargs):
+        await real_bulk(*args, **kwargs)
+        raise BulkWriteInterrupted(
+            "injected after all four statements, before the completion stamp"
+        )
+
+    folding = canonical_partition(
+        "smoke", canonical_segments_json((ScopeSegment("repo", "folding"),))
+    )
+    index.clear((folding,))
+    folding_fact = state(folding, body)
+    submitted_edges: list[tuple[str, str, str, str]] = []
+    collisions: list[tuple[str, str, str, str]] = []
+
+    graphiti_module.add_nodes_and_edges_bulk = bulk_then_fail
+    try:
+        index.project(folding_fact)
+    except GraphitiIndexError as error:
+        print(f"interrupted projection raised {error.code}, as the deliverer needs")
+    else:
+        raise AssertionError("the injected post-bulk failure did not surface")
+    finally:
+        graphiti_module.add_nodes_and_edges_bulk = real_bulk
+
+    before_state = canonical_state(folding)
+    print(
+        f"interrupted residue (all statements, no stamp): "
+        f"{len(before_state['entities'])} node(s), "
+        f"{len(before_state['relates_to'])} RELATES_TO, "
+        f"{before_state['mentions_total']} MENTIONS edge(s)"
+    )
+
+    folding_identity = str(folding_fact.fact_id)
+    folding_driver = index._driver.clone(database=derive_group_id(folding))
+    folding_stranded = index._call(
+        EpisodicNode.get_by_uuid(folding_driver, folding_identity)
+    )
+    assert folding_stranded.source_description != _PROJECTION_DONE, (
+        "a projection interrupted before its stamp was treated as complete — "
+        "this is the exact state P-38's marker exists to detect"
+    )
+
+    # Capture what the resolver hands the bulk write on the retry. These
+    # are post-resolution candidates: whatever uuid they carry is the uuid
+    # resolution decided on. Reported, never asserted upon — whether the
+    # LLM re-extracts at all is the coin flip described above.
+    submitted_edges = []
+
+    async def capturing_bulk(
+        driver, episodic_nodes, episodic_edges, entity_nodes, entity_edges, embedder
+    ):
+        for edge in entity_edges:
+            submitted_edges.append(
+                (
+                    str(edge.source_node_uuid),
+                    str(edge.target_node_uuid),
+                    _normalize_string_exact(str(edge.fact)),
+                    str(edge.uuid),
+                )
+            )
+        return await real_bulk(
+            driver, episodic_nodes, episodic_edges, entity_nodes, entity_edges, embedder
+        )
+
+    graphiti_module.add_nodes_and_edges_bulk = capturing_bulk
+    try:
+        assert index.project(folding_fact) == FactProjected(), "the retry failed"
+    finally:
+        graphiti_module.add_nodes_and_edges_bulk = real_bulk
+
+    folding_converged = index._call(
+        EpisodicNode.get_by_uuid(folding_driver, folding_identity)
+    )
+    assert folding_converged.source_description == _PROJECTION_DONE, (
+        "the retry did not stamp completion"
+    )
+
+    # Property 1: the retry corrupts nothing. Uuid-for-uuid, not by
+    # count, and subset rather than identity — growth by genuinely new
+    # extraction is not corruption.
+    after_state = canonical_state(folding)
+    assert set(before_state["entities"]) <= set(after_state["entities"]), (
+        "the retry lost or re-minted pre-existing entity nodes:\n"
+        f"  before: {before_state['entities']}\n"
+        f"  after:  {after_state['entities']}"
+    )
+    after_names = [name for name, _ in after_state["entities"]]
+    assert len(after_names) == len(set(after_names)), (
+        "the retry left exact-rule duplicate entity nodes — two nodes share a "
+        f"normalised name: {after_state['entities']}"
+    )
+    assert set(before_state["relates_to"]) <= set(after_state["relates_to"]), (
+        "the retry lost or re-minted pre-existing RELATES_TO edges:\n"
+        f"  before: {before_state['relates_to']}\n"
+        f"  after:  {after_state['relates_to']}"
+    )
+    after_edge_keys = [(s, t, fact) for s, t, fact, _ in after_state["relates_to"]]
+    assert len(after_edge_keys) == len(set(after_edge_keys)), (
+        "the retry left exact-rule duplicate RELATES_TO edges — two edges share "
+        f"endpoints and normalised fact: {after_state['relates_to']}"
+    )
+    assert set(before_state["mentions_pairs"]) <= set(after_state["mentions_pairs"]), (
+        "the retry dropped pre-existing MENTIONS pairs — the accepted residue "
+        "is duplicate edges over existing pairs, or pairs to genuinely new "
+        "entities, never a lost pair:\n"
+        f"  before: {before_state['mentions_pairs']}\n"
+        f"  after:  {after_state['mentions_pairs']}"
+    )
+
+    # If the LLM did re-extract a colliding candidate this run, its uuid
+    # must be the pre-existing one. Opportunistic: reported when it
+    # happens, and never the thing the case rests on.
+    before_keys = {
+        (s, t, fact): uuid for s, t, fact, uuid in before_state["relates_to"]
+    }
+    collisions = [c for c in submitted_edges if c[:3] in before_keys]
+    misfolded = [
+        (candidate, before_keys[candidate[:3]])
+        for candidate in collisions
+        if candidate[3] != before_keys[candidate[:3]]
+    ]
+    assert not misfolded, (
+        "the resolver did NOT fold: a re-extracted relationship whose exact "
+        "identity already existed was assigned a fresh uuid, which MERGE writes "
+        f"as a second edge beside the original — {misfolded}"
+    )
+
+    folding_hits = index.search(
+        "billing service depends on the invoicing service", 10, (folding,)
+    )
+    assert folding_hits == (folding_fact.fact_id,), (
+        f"the resumed fact is not uniquely recallable: {folding_hits}"
+    )
+    print(
+        f"retry corrupted nothing: {len(before_state['entities'])} -> "
+        f"{len(after_state['entities'])} node(s), "
+        f"{len(before_state['relates_to'])} -> "
+        f"{len(after_state['relates_to'])} RELATES_TO, all pre-existing uuids "
+        f"preserved, no exact-rule duplicates; MENTIONS multiplicity "
+        f"{before_state['mentions_total']} -> {after_state['mentions_total']} "
+        f"(accepted residue); the retry re-extracted {len(submitted_edges)} "
+        f"candidate(s), {len(collisions)} colliding, none misfolded; fact "
+        "recallable"
+    )
+
+    # Property 2: folding, deterministically, *including* the discovery
+    # step production depends on.
+    #
+    # An earlier version of this called ``resolve_extracted_edge`` — the
+    # singular resolver — with a hand-built ``[resident]`` list. That
+    # proved the fast path folds once the resident has been handed to it,
+    # and nothing about whether production finds the resident in the first
+    # place. Val's review of `6db9f0c` made the point: if the lookup ever
+    # stopped returning the resident edge, the fast path would never see
+    # it, a fresh uuid would be minted, and that test would still pass.
+    #
+    # ``resolve_extracted_edges`` — plural — is the function
+    # ``add_episode`` actually calls, and it does the discovery itself:
+    # ``EntityEdge.get_between_nodes`` against the live driver, then a
+    # filtered hybrid search, and only then the per-edge resolver
+    # (``edge_operations.py``). Calling it with a hand-built candidate
+    # therefore exercises lookup *and* resolution against the real graph,
+    # while keeping the outcome deterministic: an exact match on
+    # endpoints plus normalised fact short-circuits before any LLM
+    # completion. Embedding calls still happen; they do not change which
+    # edge is returned.
+    #
+    # What this still does not cover is ``add_episode``'s own wiring —
+    # that it passes its extracted edges to this function correctly. That
+    # is covered empirically instead, by the real-path collisions this
+    # run reports above, and is stated rather than glossed.
+    #
+    # The resident edge is *built*, not extracted. Relying on the LLM to
+    # produce one made the previous version of this case fail its setup
+    # three attempts running on a live run — the same dependency this
+    # whole restructuring exists to remove, one level up. Nothing about
+    # the property under test needs the fixture to have come from
+    # extraction: it needs a resident edge in the graph and a candidate
+    # carrying its exact identity.
+    fold = canonical_partition(
+        "smoke", canonical_segments_json((ScopeSegment("repo", "fold"),))
+    )
+    index.clear((fold,))
+    group = derive_group_id(fold)
+    fold_driver = index._driver.clone(database=group)
+    embedder = index._graphiti.clients.embedder
+
+    existing_fact = "the billing service depends on the invoicing service"
+    source_node = EntityNode(
+        name="billing service", group_id=group, labels=["Entity"], created_at=now
+    )
+    target_node = EntityNode(
+        name="invoicing service", group_id=group, labels=["Entity"], created_at=now
+    )
+    resident = EntityEdge(
+        source_node_uuid=source_node.uuid,
+        target_node_uuid=target_node.uuid,
+        name="DEPENDS_ON",
+        fact=existing_fact,
+        group_id=group,
+        created_at=now,
+        episodes=[],
+    )
+
+    async def install_fixture() -> None:
+        # Embeddings on the resident too: the discovery path filters a
+        # hybrid search to the uuids ``get_between_nodes`` returned, so an
+        # unembedded resident could be found by the lookup and then lost
+        # by the search.
+        for node in (source_node, target_node):
+            await node.generate_name_embedding(embedder)
+            await node.save(fold_driver)
+        await resident.generate_embedding(embedder)
+        await resident.save(fold_driver)
+
+    index._call(install_fixture())
+    existing_uuid = resident.uuid
+
+    duplicate_candidate = EntityEdge(
+        source_node_uuid=source_node.uuid,
+        target_node_uuid=target_node.uuid,
+        # A different relation name deliberately: graphiti's exact
+        # identity is endpoints plus normalised fact, and ``name`` forms
+        # no part of it. If this folds, it folded on the rule the resolver
+        # actually uses rather than on a coincidence of naming.
+        name="RELATES_TO",
+        fact=existing_fact.upper(),
+        group_id=group,
+        created_at=now,
+        episodes=[],
+    )
+    assert duplicate_candidate.uuid != existing_uuid, (
+        "the candidate was not minted with a fresh uuid, so returning the "
+        "existing one would prove nothing"
+    )
+    # The clients the resolver reads, with the driver pointed at this
+    # partition's own database — a partition is its own graph under P-39,
+    # so a lookup against the wrong database would find nothing and the
+    # candidate would resolve to itself.
+    discovery_clients = index._graphiti.clients.model_copy(
+        update={"driver": fold_driver}
+    )
+    fixture_episode = EpisodicNode(
+        uuid=str(uuid4()),
+        name="fold-fixture",
+        group_id=group,
+        labels=[],
+        source=EpisodeType.text,
+        content=existing_fact,
+        source_description="fold fixture",
+        created_at=now,
+        valid_at=now,
+    )
+    resolved_edges, _, new_edges = index._call(
+        resolve_extracted_edges(
+            discovery_clients,
+            [duplicate_candidate],
+            fixture_episode,
+            [source_node, target_node],
+            {},
+            {},
+        )
+    )
+    assert len(resolved_edges) == 1, (
+        f"expected one resolved edge for one candidate, got {len(resolved_edges)}"
+    )
+    assert resolved_edges[0].uuid == existing_uuid, (
+        "resolution did NOT fold through the production discovery path: a "
+        "candidate carrying an existing edge's exact identity resolved to "
+        f"{resolved_edges[0].uuid} rather than the resident {existing_uuid}, so "
+        "MERGE would write a second edge beside the original"
+    )
+    assert not new_edges, (
+        f"the candidate was reported as new despite folding onto {existing_uuid}; "
+        "add_episode would then write it as a separate relationship"
+    )
+    print(
+        f"fold rule (deterministic, real discovery): candidate "
+        f"{duplicate_candidate.uuid[:8]} was looked up via get_between_nodes "
+        f"against the live graph and resolved onto resident "
+        f"{existing_uuid[:8]} — folded, not duplicated, and reported as not new"
+    )
+
+    index.clear((residue, control, partial, folding, fold))
+
+    # P-82: the bulk projection path. project_many batches several states
+    # sharing one partition key through a single add_episode_bulk call,
+    # rather than one add_episode per fact — proved here against the same
+    # four properties the single-fact path already proved above, exercised
+    # through the batch call instead of sequential project() calls.
+    bulk_a = canonical_partition(
+        "smoke", canonical_segments_json((ScopeSegment("repo", "bulk-a"),))
+    )
+    bulk_b = canonical_partition(
+        "smoke", canonical_segments_json((ScopeSegment("repo", "bulk-b"),))
+    )
+    index.clear((bulk_a, bulk_b))
+
+    def episode_count(partition: str) -> int:
+        driver = index._driver.clone(database=derive_group_id(partition))
+
+        async def counted() -> int:
+            rows, _, _ = await driver.execute_query(
+                "MATCH (e:Episodic) RETURN count(e) AS total"
+            )
+            return int(rows[0]["total"])
+
+        return index._call(counted())
+
+    bulk_fact_1 = state(bulk_a, "the payments queue drains into the ledger service")
+    bulk_fact_2 = state(bulk_a, "the search index rebuilds nightly from the catalogue")
+    bulk_fact_3 = state(bulk_a, "the auth gateway rotates tokens every fifteen minutes")
+    batch = (bulk_fact_1, bulk_fact_2, bulk_fact_3)
+
+    # Item 1: pre-saved pending episodes flow through add_episode_bulk and
+    # come out stamped complete, same as the single-fact path's marker.
+    batch_results = index.project_many(batch)
+    assert batch_results == (FactProjected(), FactProjected(), FactProjected()), (
+        f"project_many did not project all three facts: {batch_results}"
+    )
+
+    bulk_driver = index._driver.clone(database=derive_group_id(bulk_a))
+    for fact in batch:
+        episode = index._call(EpisodicNode.get_by_uuid(bulk_driver, str(fact.fact_id)))
+        assert episode.source_description == _PROJECTION_DONE, (
+            f"bulk-projected episode not stamped complete: {episode.source_description!r}"
+        )
+    print("project_many: 3 facts projected in one batch, all stamped complete")
+
+    # Item 2: EntityEdge.episodes is populated so search maps back to fact
+    # uuids, same as the single-fact path — proved per fact here because
+    # project_many extracts each episode independently.
+    hits_1 = index.search("payments queue drains into the ledger", 10, (bulk_a,))
+    assert bulk_fact_1.fact_id in hits_1, f"bulk fact 1 not found: {hits_1}"
+    hits_2 = index.search("search index rebuilds nightly from the catalogue", 10, (bulk_a,))
+    assert bulk_fact_2.fact_id in hits_2, f"bulk fact 2 not found: {hits_2}"
+    hits_3 = index.search("auth gateway rotates tokens", 10, (bulk_a,))
+    assert bulk_fact_3.fact_id in hits_3, f"bulk fact 3 not found: {hits_3}"
+    print("search(bulk_a): all three bulk-projected facts recallable via EntityEdge.episodes")
+
+    # Item 3: a second project_many into a different partition does not
+    # disturb the first — proving the library's driver mutation on group_id
+    # (each call clones a fresh driver from the pinned base) is benign under
+    # strictly sequential calls interleaved with search from other threads,
+    # exactly as the spec words it: while the bulk call runs here, a second
+    # thread hammers search against the first partition and every answer
+    # must stay correct.
+    other_fact_1 = state(bulk_b, "the notification worker retries failed sends hourly")
+    other_fact_2 = state(bulk_b, "the export job streams reports to object storage")
+
+    # The proof is pinned to the shared-driver mutation itself, not the
+    # wider project_many call: _project_many performs episode reads and
+    # pending pre-saves before it enters add_episode_bulk, so a counter
+    # scoped to the whole call could be satisfied by a search that
+    # finished before the mutation began. The marker below brackets
+    # exactly the add_episode_bulk interval — delegating to the real
+    # method with its arguments and result untouched — and only a search
+    # that started AND finished inside that interval counts.
+    real_add_episode_bulk = index._graphiti.add_episode_bulk
+    bulk_interval_entered = threading.Event()
+    bulk_interval_active = threading.Event()
+
+    async def marked_add_episode_bulk(*args: object, **kwargs: object) -> object:
+        bulk_interval_entered.set()
+        bulk_interval_active.set()
+        try:
+            return await real_add_episode_bulk(*args, **kwargs)
+        finally:
+            bulk_interval_active.clear()
+
+    search_failures: list[str] = []
+    searches_inside_bulk = [0]
+    first_search_done = threading.Event()
+    keep_searching = threading.Event()
+    keep_searching.set()
+
+    def search_bulk_a_repeatedly() -> None:
+        while keep_searching.is_set():
+            active_at_start = bulk_interval_active.is_set()
+            try:
+                found = index.search(
+                    "payments queue drains into the ledger", 10, (bulk_a,)
+                )
+            except Exception as error:  # noqa: BLE001 - any error is the finding
+                search_failures.append(f"search raised: {error!r}")
+                return
+            if bulk_fact_1.fact_id not in found:
+                search_failures.append(f"search lost the fact mid-bulk: {found!r}")
+                return
+            if active_at_start and bulk_interval_active.is_set():
+                searches_inside_bulk[0] += 1
+            first_search_done.set()
+
+    index._graphiti.add_episode_bulk = marked_add_episode_bulk
+    searcher = threading.Thread(target=search_bulk_a_repeatedly)
+    searcher.start()
+    try:
+        # Overlap is guaranteed, not hoped for: the searcher must have
+        # completed one search before the bulk call starts, and at least
+        # one search must start and finish while add_episode_bulk is in
+        # flight — a search wholly inside that interval necessarily ran
+        # against the driver the library was mutating.
+        assert first_search_done.wait(timeout=60.0), (
+            "the search thread never completed a search before the bulk call"
+        )
+        other_results = index.project_many((other_fact_1, other_fact_2))
+    finally:
+        keep_searching.clear()
+        searcher.join(timeout=30.0)
+        index._graphiti.add_episode_bulk = real_add_episode_bulk
+    assert not searcher.is_alive(), "the concurrent search thread failed to stop"
+    assert search_failures == [], (
+        f"search from another thread broke during the bulk call: {search_failures}"
+    )
+    assert bulk_interval_entered.is_set(), (
+        "project_many(bulk_b) never entered add_episode_bulk — the interval "
+        "this proof pins its counter to did not occur"
+    )
+    assert searches_inside_bulk[0] >= 1, (
+        "no search started and finished while add_episode_bulk was in flight "
+        "— the overlap this proof exists to establish did not happen"
+    )
+    assert other_results == (FactProjected(), FactProjected()), (
+        f"project_many(bulk_b) did not project both facts: {other_results}"
+    )
+    print(
+        f"search(bulk_a) from a second thread: {searches_inside_bulk[0]} search(es) "
+        "started and finished inside the add_episode_bulk interval, all correct"
+    )
+
+    hits_1_again = index.search("payments queue drains into the ledger", 10, (bulk_a,))
+    assert bulk_fact_1.fact_id in hits_1_again, (
+        "a second project_many into a different partition disturbed the first"
+    )
+    disjoint = index.search("notification worker retries failed sends", 10, (bulk_a,))
+    assert other_fact_1.fact_id not in disjoint, "partition separation violated for bulk_b"
+    print("project_many(bulk_b): second batch in a different partition left bulk_a undisturbed")
+
+    # Item 4: the adapter stamps completion only for episodes named in the
+    # AddBulkEpisodeResults the library returns, so the all-FactProjected
+    # assertions above are the live proof of that result shape's coverage —
+    # a batch the results under-reported would have come back with
+    # ProjectionFailed("bulk_incomplete") entries instead. The re-run below
+    # adds the idempotence half: same batch, no new episodes.
+    before_count = episode_count(bulk_a)
+    repeat_results = index.project_many(batch)
+    assert repeat_results == (FactProjected(), FactProjected(), FactProjected()), (
+        f"re-running project_many was not idempotent: {repeat_results}"
+    )
+    after_count = episode_count(bulk_a)
+    assert after_count == before_count, (
+        f"re-projecting the same batch created new episodes: {before_count} -> {after_count}"
+    )
+    print(f"project_many re-run: idempotent no-op, {after_count} episode(s) unchanged")
+
+    index.clear((bulk_a, bulk_b))
+
+    index.clear((api,))
+    cleared = index.search("deploy pipeline retries", 10, (api,))
+    assert api_fact.fact_id not in cleared, "clear(api) left the fact findable"
+    remaining = index.search("web frontend caches", 10, (web,))
+    assert web_fact.fact_id in remaining, "clear(api) reached the web partition"
+    print("clear(partition): cleared api, web untouched")
+
+    index.clear(None)
+    print("clear(None): derived graphs dropped")
+finally:
+    index.close()
+
+print("graphiti-smoke: OK")
+PYTHON

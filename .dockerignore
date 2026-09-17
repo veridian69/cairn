@@ -1,0 +1,26 @@
+.venv/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.env
+*.db
+*.db-shm
+*.db-wal
+.git/
+AGENTS.md
+Makefile
+config/
+docs/
+scripts/
+tests/
+
+# Garden is built independently of the Cairn service image.
+a2a/

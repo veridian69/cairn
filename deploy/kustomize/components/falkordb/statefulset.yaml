@@ -1,0 +1,153 @@
+# I-91: one FalkorDB per instance, one replica, digest-pinned and
+# authenticated. It is not a shared service and never becomes one — a
+# second instance's index is a second workload in a second namespace,
+# because the scope isolation Cairn enforces above the index would be
+# worth nothing if two instances shared the store beneath it.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: falkordb
+  labels:
+    app.kubernetes.io/name: falkordb
+    app.kubernetes.io/instance: cairn
+spec:
+  replicas: 1
+  serviceName: falkordb
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falkordb
+      app.kubernetes.io/instance: cairn
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: falkordb
+        app.kubernetes.io/instance: cairn
+    spec:
+      # The index talks to nothing and nothing talks to it but this
+      # namespace's Cairn pod, so it needs no API access either.
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      # The base's posture, carried over — with one difference an
+      # including overlay must close. The upstream image declares no
+      # USER, so `runAsNonRoot` here is a promise the image cannot keep
+      # on its own: a cluster that does not assign a UID needs the
+      # overlay to supply `runAsUser`, and the kind overlay does exactly
+      # that. OpenShift assigns one from the namespace range and needs
+      # nothing. Fixing a UID here instead would break that assignment,
+      # which is the same reason I-11 fixes none for Cairn.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: falkordb
+          image: ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578
+          env:
+            # A *path*, not a password: the entrypoint expands REDIS_ARGS
+            # ahead of every other argument, and redis-server reads its
+            # first argument as a configuration file. The credential
+            # therefore arrives from the Secret as a file, like every
+            # other credential here (I-19), and enters no environment
+            # variable and no command line — P-63 as amended, whose
+            # reasoning is recorded there rather than repeated here.
+            - name: REDIS_ARGS
+              value: /etc/falkordb/cairn.conf
+            # The image ships a web console and starts it beside redis
+            # unless told not to. Nothing in Cairn uses it, no policy
+            # would reach it, and an unauthenticated console next to the
+            # index is not a surface to leave to a default.
+            - name: BROWSER
+              value: "0"
+            # No TLS: the connection never leaves the namespace and the
+            # policy pair below is what confines it. The image's TLS mode
+            # generates its own certificates at start, which is a weaker
+            # claim than it looks.
+            - name: TLS
+              value: "0"
+            # P-82 gate-4 ruling (25 August 2026): the queued-query
+            # ceiling the chunk-size sweep hit at its compiled default of
+            # 25. The entrypoint appends this to the `--loadmodule` line.
+            # Preserve the pinned image's result-set control while changing
+            # the queued-query ceiling. Gate-5's exact replay measured the
+            # retained graph's relationship full-text query at 1,207.9 ms,
+            # beyond the image's 1,000 ms timeout; keep a bounded 5,000 ms
+            # ceiling with margin. The delivery process's own
+            # `graphiti.index_concurrency_limit` stays below this value.
+            - name: FALKORDB_ARGS
+              value: "MAX_QUEUED_QUERIES 200 TIMEOUT 5000 RESULTSET_SIZE 10000"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          # A TCP probe, not `redis-cli PING`: an exec probe would have
+          # to carry the password on a command line, and a listening
+          # socket is the whole of what a readiness check can honestly
+          # claim about a database this side of authentication.
+          startupProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # The image's FALKORDB_DATA_PATH, and the only path its
+            # entrypoint or redis writes to — verified against the pinned
+            # image, which starts with the root filesystem read-only.
+            - name: data
+              mountPath: /var/lib/falkordb/data
+            # The configuration file REDIS_ARGS names, projected from the
+            # instance's Secret. Not optional, unlike Cairn's credential
+            # mount: an index that started without it would start without
+            # a password.
+            - name: index-config
+              mountPath: /etc/falkordb
+              readOnly: true
+      volumes:
+        # I-19 again: the credential arrives as a file. The key holds a
+        # whole `requirepass <token>` line rather than a bare value,
+        # because redis reads a configuration file and not a secret.
+        #
+        # 0440 for the base's reason, measured there: a Secret volume's
+        # files are owned root:root unless an fsGroup is injected, and no
+        # fsGroup is fixed anywhere in this deployment, so 0400 would
+        # leave the workload UID unable to read its own credential.
+        - name: index-config
+          secret:
+            secretName: cairn-credentials
+            items:
+              - key: falkordb.conf
+                path: cairn.conf
+            defaultMode: 0440
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: falkordb
+          app.kubernetes.io/instance: cairn
+      spec:
+        volumeMode: Filesystem
+        # The index is derived state, not a source of truth: the backup
+        # bundle excludes it deliberately (P-65), and losing it is a
+        # recovery completed by `cairn rebuild-index` rather than a data
+        # loss. The claim is still exclusive, because two processes on
+        # one redis directory corrupt it.
+        accessModes:
+          - ReadWriteOncePod
+        resources:
+          requests:
+            storage: 10Gi
+        # No storageClassName, for the base's reason: the component is
+        # portable and names no cluster's provisioner.

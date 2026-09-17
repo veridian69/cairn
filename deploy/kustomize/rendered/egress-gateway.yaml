@@ -1,0 +1,210 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+  name: cairn-egress
+---
+apiVersion: v1
+data:
+  squid.conf: |
+    http_port 3128
+    # Container runtimes may inherit billion-entry descriptor limits. Bound
+    # Squid's descriptor table before startup; each CONNECT uses two sockets.
+    max_filedescriptors 65536
+
+    # THE OPERATOR-EDITABLE VALUE. Every destination Cairn instances on
+    # this cluster may reach, and nothing else is reachable at all — not
+    # by a different instance, not by a mistyped model endpoint, not by
+    # anything that later reads a provider base URL from configuration.
+    acl allowed_fqdns dstdomain api.openai.com
+    acl SSL_ports port 443
+    acl CONNECT method CONNECT
+
+    # I-93's posture, in four lines and this order:
+    # nothing but CONNECT, nothing but 443, nothing but the allow-list,
+    # and then a deny that catches everything the three above did not.
+    http_access deny !CONNECT
+    http_access deny CONNECT !SSL_ports
+    http_access allow CONNECT allowed_fqdns
+    http_access deny all
+
+    # A tunnel has nothing to cache, and a proxy that stores nothing has
+    # nothing to leak from disk. No cache_dir is configured either, so
+    # the on-disk store never exists rather than existing and being
+    # bypassed.
+    cache deny all
+
+    # Logs to stdout, where a container's logs belong; no pid file,
+    # because the root filesystem is read-only and a foreground process
+    # supervised by the kubelet has no use for one. `cache_log` takes a
+    # plain path and not the `stdio:` module `access_log` accepts —
+    # writing the module form here silently falls back to the default
+    # file and errors against the read-only filesystem.
+    access_log stdio:/dev/stdout
+    cache_log /dev/stdout
+    pid_filename none
+
+    # Shorter than the 30-second default so that squid finishes inside a
+    # pod's termination grace rather than being killed at the end of it.
+    shutdown_lifetime 10 seconds
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+  name: egress-gateway-config
+  namespace: cairn-egress
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+  name: cairn-egress-gateway
+  namespace: cairn-egress
+spec:
+  ports:
+  - name: proxy
+    port: 3128
+    protocol: TCP
+    targetPort: proxy
+  selector:
+    app.kubernetes.io/name: cairn-egress-gateway
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+  name: cairn-egress-gateway
+  namespace: cairn-egress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cairn-egress-gateway
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - -f
+        - /etc/squid/squid.conf
+        - -NYC
+        command:
+        - /usr/sbin/squid-gnutls
+        image: ubuntu/squid:7.2-26.04_edge@sha256:44eee73a21554c4732d6a5daee675f3a33395f36017d7bf7cc8ccb455b1f9665
+        livenessProbe:
+          periodSeconds: 20
+          tcpSocket:
+            port: proxy
+        name: squid
+        ports:
+        - containerPort: 3128
+          name: proxy
+          protocol: TCP
+        readinessProbe:
+          periodSeconds: 10
+          tcpSocket:
+            port: proxy
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 12
+          periodSeconds: 5
+          tcpSocket:
+            port: proxy
+        volumeMounts:
+        - mountPath: /etc/squid/squid.conf
+          name: config
+          readOnly: true
+          subPath: squid.conf
+      securityContext:
+        runAsGroup: 13
+        runAsNonRoot: true
+        runAsUser: 13
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - configMap:
+          name: egress-gateway-config
+        name: config
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+  name: egress-gateway-allow-cairn-ingress
+  namespace: cairn-egress
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchExpressions:
+        - key: cairn.example.invalid/instance
+          operator: Exists
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: cairn
+    ports:
+    - port: 3128
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+  name: egress-gateway-allow-egress
+  namespace: cairn-egress
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  - ports:
+    - port: 443
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway
+  name: egress-gateway-default-deny
+  namespace: cairn-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn-egress-gateway
+  policyTypes:
+  - Ingress
+  - Egress

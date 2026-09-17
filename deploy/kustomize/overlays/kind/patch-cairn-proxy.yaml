@@ -1,0 +1,25 @@
+# P-64: Cairn reaches the model provider through the cluster's egress
+# gateway, selected by the standard proxy variable that graphiti-core's
+# httpx client honours natively.
+#
+# This is non-secret operational configuration in the manifest, which is
+# what I-93 already blessed: it overrides no `cairn.config/v1` key, so
+# I-19 is untouched. It is set here rather than in the component because
+# the gateway is a fact about the cluster — one per cluster, in its own
+# namespace — and not about the instance's index.
+#
+# Only HTTPS_PROXY, and no NO_PROXY beside it: the sole in-cluster
+# connection the process makes outside its own namespace's index is a
+# redis TCP connection, which no proxy variable touches.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cairn
+spec:
+  template:
+    spec:
+      containers:
+        - name: cairn
+          env:
+            - name: HTTPS_PROXY
+              value: http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128

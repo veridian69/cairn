@@ -1,0 +1,123 @@
+# One Cairn instance on one host (P-69, and I-94 as amended 12 August
+# 2026 — Compose is a production target, not an evaluation convenience).
+#
+# **One project is one instance.** The project name *is* the instance
+# name: Compose prefixes this project's network and its volumes with it,
+# so `cairn-a` and `cairn-b` on one host share nothing but the daemon.
+# Two instances in one project would share a data volume, which the
+# instance lease refuses at startup — loudly, but far later than it
+# needed to.
+#
+# **The image pin lives in `deploy/images.lock` and nowhere else**
+# (P-61). That file is `KEY=value` and therefore a valid env file, so the
+# project reads it directly rather than keeping a second copy that could
+# drift:
+#
+#     docker compose --env-file ../images.lock --env-file .env ...
+#
+# Every command in README.md carries both, in that order, and `.env`
+# deliberately sets no image variable.
+#
+# **Retrieval is included by choice** (I-91), the same as the Kustomize
+# component: this file has no index and no proxy variable in it at all.
+# `compose.graphiti.yaml` adds FalkorDB, and an instance without it opens
+# no index connection and needs no adapter credentials.
+
+services:
+  cairn:
+    image: ${CAIRN_IMAGE:?read it from deploy/images.lock with --env-file}
+    # The image's ENTRYPOINT is `cairn` and its CMD is
+    # `serve --config /etc/cairn/config.yaml`, so neither is restated
+    # here. `docker compose run --rm --no-deps cairn migrate --config
+    # /etc/cairn/config.yaml` reaches the other subcommands through the
+    # same entrypoint — which is why first boot and upgrade need no
+    # second service definition.
+    #
+    # I-12's loopback rule, made structural: the published address is not
+    # a parameter. Publishing beyond this host is a TLS-terminating
+    # reverse proxy in front of this port — explicit operator work, and
+    # not something an `.env` value can switch on by accident.
+    ports:
+      - "127.0.0.1:${CAIRN_HOST_PORT:?the loopback port to publish this instance on}:8000"
+    # I-11's posture in Compose's vocabulary. `user:` is deliberately
+    # absent: the image already declares 65532:0 and owns
+    # /var/lib/cairn as 0770 65532:0, which is also what makes a fresh
+    # named volume come out writable — Docker copies the image's
+    # ownership onto it. Naming a different UID here would take that
+    # away and gain nothing.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      # The Compose spelling of allowPrivilegeEscalation: false.
+      - no-new-privileges:true
+    # readOnlyRootFilesystem leaves nowhere to write and SQLite wants a
+    # temporary directory. Bounded, for the base's reason: a runaway
+    # cannot then consume the host's memory.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    volumes:
+      # I-19: configuration and credentials arrive as read-only files.
+      # Both paths are relative to this directory and are the operator's
+      # own — neither is committed.
+      #
+      # `create_host_path: false` on both: Docker's default is to create
+      # a missing bind source as an empty directory, which would turn a
+      # forgotten `cp` into a configuration document that is silently a
+      # directory. Refusing to start is the better answer.
+      - type: bind
+        source: ${CAIRN_CONFIG_FILE:?the instance cairn.config/v1 document}
+        target: /etc/cairn/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CAIRN_CREDENTIALS_DIR:?the I-92 adapter-credential directory}
+        target: /var/run/secrets/cairn
+        read_only: true
+        bind:
+          create_host_path: false
+      # A named volume, project-prefixed. See the volumes block below.
+      - type: volume
+        source: cairn-data
+        target: /var/lib/cairn
+    # The image ships no curl and does not grow one for a health probe:
+    # this is the standard library that is already in it. A non-200
+    # answer raises and exits non-zero, which is the whole of what a
+    # health check has to decide.
+    #
+    # The timings mirror the base's probes — the startup case is slow
+    # (catalogue verification on a large instance) and the steady-state
+    # one is not — with one difference worth stating plainly: Docker
+    # acts on `exited`, never on `unhealthy`. `restart` below covers a
+    # process that dies; nothing here restarts a container that is up and
+    # failing its check, and Kubernetes' liveness probe has no Compose
+    # equivalent. The check's job here is the `depends_on` condition and
+    # the operator's `docker compose ps`.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request
+          urllib.request.urlopen("http://127.0.0.1:8000/health/ready", timeout=2)
+      start_period: 300s
+      start_interval: 5s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    # I-20's termination contract, verbatim: 60 seconds to finish
+    # in-flight work and close the catalogue before SIGKILL.
+    stop_grace_period: 60s
+    # A crashed instance returns without an operator; one stopped on
+    # purpose stays stopped.
+    restart: unless-stopped
+
+volumes:
+  # Not given an explicit `name:`, and that is the point: Compose
+  # prefixes it with the project name, so the volume of `cairn-a` is
+  # `cairn-a_cairn-data` and cannot collide with `cairn-b`'s. An explicit
+  # name would be one more thing to remember to change per instance, and
+  # forgetting it would put two instances on one catalogue.
+  cairn-data:

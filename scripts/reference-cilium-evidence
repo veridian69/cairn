@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Read-only, separately immutable Cilium evidence for one reviewed Task 11 report.
+set -euo pipefail
+set +x
+
+script_path=${BASH_SOURCE[0]}
+if [[ $script_path != /* ]]; then
+  script_path=$PWD/$script_path
+fi
+script_dir=${script_path%/*}
+cd -- "$script_dir/.."
+
+[[ -x /usr/bin/git && -x /usr/bin/python3 ]] || {
+  printf 'reference Cilium evidence requires trusted /usr/bin/git and /usr/bin/python3\n' >&2
+  exit 2
+}
+
+if ! collector_status=$(
+  /usr/bin/git status --porcelain --untracked-files=all
+); then
+  printf 'reference Cilium evidence cannot establish collector worktree state\n' >&2
+  exit 2
+fi
+if [[ -n $collector_status ]]; then
+  printf 'reference Cilium evidence collector worktree is not clean, including untracked files\n' >&2
+  exit 2
+fi
+if ! ignored_scripts=$(
+  /usr/bin/git ls-files --others --ignored --exclude-standard -- scripts
+); then
+  printf 'reference Cilium evidence cannot inspect ignored files under scripts\n' >&2
+  exit 2
+fi
+if [[ -n $ignored_scripts ]]; then
+  printf 'reference Cilium evidence collector has ignored files under scripts\n' >&2
+  exit 2
+fi
+if ! collector_revision=$(/usr/bin/git rev-parse HEAD); then
+  printf 'reference Cilium evidence cannot establish collector revision\n' >&2
+  exit 2
+fi
+if [[ ! $collector_revision =~ ^[0-9a-f]{40}$ ]]; then
+  printf 'reference Cilium evidence collector revision is malformed\n' >&2
+  exit 2
+fi
+
+exec /usr/bin/python3 -I -B scripts/reference_acceptance_state.py \
+  write-cilium-supplement "$@" --collector-revision "$collector_revision"

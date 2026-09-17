@@ -1,0 +1,1586 @@
+#!/usr/bin/env python3
+"""P-69 Compose production acceptance harness and evidence validator."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import secrets
+import shlex
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+
+class EvidenceError(ValueError):
+    """The report cannot support the Compose production claim."""
+
+
+REQUIRED_CHECKS = (
+    "compose-config:cairn-a",
+    "compose-config:cairn-b",
+    "compose-config:cairn-retrieval",
+    "first-boot:cairn-a",
+    "first-boot:cairn-b",
+    "first-boot:cairn-retrieval",
+    "health-live:cairn-a",
+    "health-startup:cairn-a",
+    "health-ready:cairn-a",
+    "health-live:cairn-b",
+    "health-startup:cairn-b",
+    "health-ready:cairn-b",
+    "authenticated-rest-instance:cairn-a",
+    "authenticated-rest-instance:cairn-b",
+    "authenticated-mcp-initialize:cairn-a",
+    "authenticated-mcp-tools-list:cairn-a",
+    "authenticated-mcp-instance:cairn-a",
+    "authenticated-mcp-initialize:cairn-b",
+    "authenticated-mcp-tools-list:cairn-b",
+    "authenticated-mcp-instance:cairn-b",
+    "authenticated-rest-ingest:cairn-a",
+    "authenticated-rest-ingest:cairn-b",
+    "persistence-across-restart:cairn-a",
+    "persistence-across-restart:cairn-b",
+    "duplicate-process-lock-exclusion:cairn-a",
+    "duplicate-process-lock-exclusion:cairn-b",
+    "bounded-termination:cairn-a",
+    "bounded-termination:cairn-b",
+    "backup-live:cairn-a",
+    "backup-bundle-copied:cairn-a",
+    "backup-member-digests:cairn-a",
+    "restore-bundle-copied:cairn-a",
+    "restore-round-trip:cairn-a",
+    "image-replacement-upgrade:cairn-a",
+    "two-project-networks-distinct",
+    "two-project-volumes-distinct",
+    "cross-project-positive-control",
+    "cross-project-refusal",
+    "retrieval-falkordb-init",
+    "retrieval-falkordb-health",
+    "retrieval-cairn-ready",
+    "retrieval-authenticated-rest",
+    "retrieval-authenticated-mcp",
+)
+
+REQUIRED_BOUNDARIES = (
+    "Only synthetic acceptance credentials and disposable Cairn data were used; no productive or legacy credential, service or data was read.",
+    "Compose carries no Kubernetes NetworkPolicy evidence; project networks and namespaces prove only the separation recorded by this run.",
+    "The upgrade rehearsal proves the documented stop, migrate and replace procedure against a genuinely distinct image; it applies no migration, because v0.1 has a single schema version and none exists to apply.",
+    "The retrieval projects prove that the retrieval-enabled composition starts, reports healthy and serves authenticated requests; no retrieval round trip was performed and no provider was called.",
+    "This record reports observed execution; Operator's acceptance gate remains separate.",
+)
+
+# `host_os` is recorded by every run from 16 August 2026 but is deliberately
+# not required yet: the committed Task 10 evidence was produced before the
+# field existed, and the only honest ways to satisfy a gate it cannot meet
+# are to re-run the suite on the host or to invent an observation. It joins
+# this tuple with the next `make compose-acceptance` run on `reference`.
+REQUIRED_IDENTITIES = (
+    "host",
+    "docker_engine",
+    "docker_compose",
+    "cairn_image",
+    "cairn_image_id",
+    "cairn_upgrade_image",
+    "cairn_upgrade_image_id",
+    "falkordb_image",
+)
+
+REPOSITORY = Path(__file__).resolve().parents[1]
+COMPOSE_FILE = REPOSITORY / "deploy" / "compose" / "compose.yaml"
+GRAPHITI_FILE = REPOSITORY / "deploy" / "compose" / "compose.graphiti.yaml"
+IMAGES_LOCK = REPOSITORY / "deploy" / "images.lock"
+MCP_PROTOCOL = "2025-11-25"
+BOOTSTRAP_LABEL = "acceptance"
+
+
+class AcceptanceError(RuntimeError):
+    """The live Compose suite observed a failed requirement."""
+
+
+class Instance:
+    """One disposable Compose project and its operator-owned files."""
+
+    def __init__(
+        self,
+        logical_name: str,
+        project: str,
+        instance_id: str,
+        port: int,
+        directory: Path,
+        retrieval: bool,
+    ) -> None:
+        self.logical_name = logical_name
+        self.project = project
+        self.instance_id = instance_id
+        self.port = port
+        self.directory = directory
+        self.retrieval = retrieval
+        self.config = directory / "config.yaml"
+        self.credentials = directory / "credentials"
+        self.falkordb_config = directory / "falkordb.conf"
+        self.env_file = directory / ".env"
+        self.token_file = directory / "bootstrap-token"
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    @property
+    def data_volume(self) -> str:
+        return f"{self.project}_cairn-data"
+
+    @property
+    def network(self) -> str:
+        return f"{self.project}_default"
+
+
+class Recorder:
+    """Collect literal checks, refusing immediately on a wrong outcome."""
+
+    def __init__(self) -> None:
+        self.checks: list[dict[str, Any]] = []
+
+    def require(
+        self,
+        name: str,
+        expected: dict[str, Any],
+        observed: dict[str, Any],
+        passed: bool,
+    ) -> None:
+        self.checks.append(
+            {
+                "name": name,
+                "expected": expected,
+                "observed": observed,
+                "outcome": "passed" if passed else "failed",
+            }
+        )
+        if not passed:
+            raise AcceptanceError(
+                f"{name} observed {observed!r}, expected {expected!r}"
+            )
+
+
+class Runner:
+    """Execute the P-69 procedure against one Docker daemon."""
+
+    def __init__(
+        self,
+        report_path: Path,
+        work_path: Path,
+        project_prefix: str,
+        base_port: int,
+        keep_resources: bool,
+    ) -> None:
+        self.report_path = report_path
+        self.work_path = work_path
+        self.project_prefix = project_prefix
+        self.base_port = base_port
+        self.keep_resources = keep_resources
+        self.recorder = Recorder()
+        self.revision = _source_revision()
+        self.base_image = _lock_value(IMAGES_LOCK, "CAIRN_IMAGE")
+        self.falkordb_image = _lock_value(IMAGES_LOCK, "FALKORDB_IMAGE")
+        self.upgrade_image = f"{self.base_image}-acceptance-{self.revision[:12]}"
+        self.upgrade_lock = work_path / "images-upgrade.lock"
+        self.instances = (
+            Instance(
+                "cairn-a",
+                f"{project_prefix}-a",
+                "11111111-1111-4111-8111-111111111111",
+                base_port,
+                work_path / "cairn-a",
+                False,
+            ),
+            Instance(
+                "cairn-b",
+                f"{project_prefix}-b",
+                "99999999-9999-4999-8999-999999999999",
+                base_port + 1,
+                work_path / "cairn-b",
+                False,
+            ),
+            Instance(
+                "cairn-retrieval",
+                f"{project_prefix}-retrieval",
+                "77777777-7777-4777-8777-777777777777",
+                base_port + 2,
+                work_path / "cairn-retrieval",
+                True,
+            ),
+        )
+        self.base_image_id = ""
+        self.upgrade_image_id = ""
+
+    def execute(self) -> None:
+        _require_program("docker")
+        try:
+            self._prepare_work_path()
+            self._record_versions()
+            self._build_images()
+            for instance in self.instances:
+                self._write_instance(instance)
+                self._clean_instance(instance)
+                self._compose_config(instance)
+                self._first_boot(instance)
+                self._start(instance)
+            for instance in self.instances[:2]:
+                self._exercise_base_instance(instance)
+            self._backup_restore(self.instances[0])
+            self._upgrade(self.instances[0])
+            self._separation(self.instances[0], self.instances[1])
+            self._exercise_retrieval(self.instances[2])
+            report = self._report("observed-pass")
+            write_report(self.report_path, report)
+        except Exception:
+            self._write_failed_report()
+            raise
+        finally:
+            if not self.keep_resources:
+                for instance in self.instances:
+                    self._clean_instance(instance)
+
+    def _prepare_work_path(self) -> None:
+        if self.work_path.exists():
+            shutil.rmtree(self.work_path)
+        self.work_path.mkdir(parents=True, mode=0o700)
+
+    def _record_versions(self) -> None:
+        engine = _run(
+            ["docker", "version", "--format", "{{.Server.Version}}"]
+        ).stdout.strip()
+        compose = _run(["docker", "compose", "version", "--short"]).stdout.strip()
+        if engine != "29.7.2" or compose.lstrip("v") != "5.4.0":
+            raise AcceptanceError(
+                f"reference versions drifted: Docker {engine}, Compose {compose}"
+            )
+
+    def _build_images(self) -> None:
+        _run(
+            [
+                "docker",
+                "build",
+                "--pull=false",
+                "--build-arg",
+                f"REVISION={self.revision}",
+                "--tag",
+                self.base_image,
+                ".",
+            ],
+            cwd=REPOSITORY,
+        )
+        self.base_image_id = _image_id(self.base_image)
+        upgrade_dockerfile = self.work_path / "Dockerfile.upgrade"
+        upgrade_dockerfile.write_text(
+            f"FROM {self.base_image}\n"
+            f'LABEL invalid.example.cairn.compose-acceptance-revision="{self.revision}"\n',
+            encoding="utf-8",
+        )
+        _run(
+            [
+                "docker",
+                "build",
+                "--pull=false",
+                "--file",
+                str(upgrade_dockerfile),
+                "--tag",
+                self.upgrade_image,
+                str(self.work_path),
+            ]
+        )
+        self.upgrade_image_id = _image_id(self.upgrade_image)
+        if self.base_image_id == self.upgrade_image_id:
+            raise AcceptanceError("the upgrade build reused the base image ID")
+        lock = IMAGES_LOCK.read_text(encoding="utf-8")
+        self.upgrade_lock.write_text(
+            _replace_lock_value(lock, "CAIRN_IMAGE", self.upgrade_image),
+            encoding="utf-8",
+        )
+
+    def _write_instance(self, instance: Instance) -> None:
+        instance.directory.mkdir(mode=0o700)
+        instance.credentials.mkdir(mode=0o755)
+        instance.config.write_text(
+            instance_config(instance.instance_id, instance.retrieval), encoding="utf-8"
+        )
+        instance.config.chmod(0o644)
+        falkordb_path: Path | None = None
+        if instance.retrieval:
+            password = secrets.token_hex(32)
+            password_path = instance.credentials / "falkordb-password"
+            provider_path = instance.credentials / "openai-api-key"
+            password_path.write_text(f"{password}\n", encoding="utf-8")
+            provider_path.write_text(
+                "sk-cairn-compose-acceptance-not-a-provider-key\n", encoding="utf-8"
+            )
+            instance.falkordb_config.write_text(
+                f"requirepass {password}\n", encoding="utf-8"
+            )
+            for path in (password_path, provider_path):
+                path.chmod(0o400)
+                os.chown(path, 65532, 0)
+            instance.falkordb_config.chmod(0o400)
+            os.chown(instance.falkordb_config, 10001, 0)
+            falkordb_path = instance.falkordb_config.resolve()
+        instance.env_file.write_text(
+            instance_environment(
+                instance.project,
+                instance.port,
+                instance.config.resolve(),
+                instance.credentials.resolve(),
+                falkordb_path,
+            ),
+            encoding="utf-8",
+        )
+        instance.env_file.chmod(0o600)
+
+    def _compose_command(
+        self, instance: Instance, *arguments: str, upgrade: bool = False
+    ) -> list[str]:
+        command = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(self.upgrade_lock if upgrade else IMAGES_LOCK),
+            "--env-file",
+            str(instance.env_file),
+            "-f",
+            str(COMPOSE_FILE),
+        ]
+        if instance.retrieval:
+            command.extend(["-f", str(GRAPHITI_FILE)])
+        return [*command, *arguments]
+
+    def _compose(
+        self,
+        instance: Instance,
+        *arguments: str,
+        upgrade: bool = False,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return _run(
+            self._compose_command(instance, *arguments, upgrade=upgrade),
+            check=check,
+            timeout=timeout,
+        )
+
+    def _clean_instance(self, instance: Instance) -> None:
+        if not instance.env_file.exists():
+            return
+        self._compose(
+            instance,
+            "down",
+            "--volumes",
+            "--remove-orphans",
+            check=False,
+            timeout=120,
+        )
+
+    def _compose_config(self, instance: Instance) -> None:
+        result = self._compose(instance, "config", "-q", check=False)
+        self.recorder.require(
+            f"compose-config:{instance.logical_name}",
+            {"exit_code": 0},
+            {"exit_code": result.returncode},
+            result.returncode == 0,
+        )
+
+    def _first_boot(self, instance: Instance) -> None:
+        migrated = self._compose(
+            instance,
+            "run",
+            "--rm",
+            "--no-deps",
+            "cairn",
+            "migrate",
+            "--config",
+            "/etc/cairn/config.yaml",
+        )
+        migration = _last_json(migrated.stdout)
+        bootstrapped = self._compose(
+            instance,
+            "run",
+            "--rm",
+            "--no-deps",
+            "cairn",
+            "bootstrap",
+            "--realm",
+            "local",
+            "--label",
+            BOOTSTRAP_LABEL,
+        )
+        bootstrap = _last_json(bootstrapped.stdout)
+        token = bootstrap.pop("token", None)
+        if not isinstance(token, str) or not token.startswith("cairn1."):
+            raise AcceptanceError(f"{instance.logical_name} bootstrap emitted no token")
+        instance.token_file.write_text(f"{token}\n", encoding="utf-8")
+        instance.token_file.chmod(0o600)
+        self.recorder.require(
+            f"first-boot:{instance.logical_name}",
+            {"migration_status": "ok", "bootstrap_status": "ok"},
+            {
+                "migration_status": migration.get("status"),
+                "migration_starting_version": migration.get("starting_version"),
+                "migration_final_version": migration.get("final_version"),
+                "bootstrap_status": bootstrap.get("status"),
+                "realm_id": bootstrap.get("realm_id"),
+            },
+            migration.get("status") == "ok"
+            and bootstrap.get("status") == "ok"
+            and bootstrap.get("realm_id") == "local",
+        )
+
+    def _start(self, instance: Instance, *, upgrade: bool = False) -> None:
+        self._compose(instance, "up", "-d", upgrade=upgrade, timeout=360)
+        _wait_healthy(self._container(instance, "cairn", upgrade=upgrade), 360)
+
+    def _container(
+        self, instance: Instance, service: str, *, upgrade: bool = False
+    ) -> str:
+        result = self._compose(
+            instance, "ps", "--all", "-q", service, upgrade=upgrade, check=False
+        )
+        container = result.stdout.strip()
+        if result.returncode != 0 or not container:
+            raise AcceptanceError(
+                f"{instance.logical_name}/{service} has no Compose container"
+            )
+        return container
+
+    def _exercise_base_instance(self, instance: Instance) -> None:
+        for endpoint, status in (
+            ("live", "live"),
+            ("startup", "started"),
+            ("ready", "ready"),
+        ):
+            code, document = _http_json(f"{instance.base_url}/health/{endpoint}")
+            self.recorder.require(
+                f"health-{endpoint}:{instance.logical_name}",
+                {"http_status": 200, "status": status},
+                {"http_status": code, "body": document},
+                code == 200 and document.get("status") == status,
+            )
+        token = _token(instance.token_file)
+        code, identity = _http_json(f"{instance.base_url}/v1/instance", token=token)
+        self.recorder.require(
+            f"authenticated-rest-instance:{instance.logical_name}",
+            {"http_status": 200, "instance_id": instance.instance_id},
+            {"http_status": code, "body": identity},
+            code == 200 and identity.get("instance_id") == instance.instance_id,
+        )
+        self._mcp_round_trip(instance, token)
+        mutation_id = self._ingest(instance, token)
+        self.recorder.require(
+            f"authenticated-rest-ingest:{instance.logical_name}",
+            {"http_status": 200, "mutation_id": "non-empty"},
+            {"http_status": 200, "mutation_id": mutation_id},
+            bool(mutation_id),
+        )
+        self._restart_and_require_mutation(instance, token, mutation_id)
+        self._duplicate_lock(instance)
+        self._bounded_stop(instance)
+
+    def _mcp_round_trip(self, instance: Instance, token: str) -> None:
+        frames = (
+            (
+                "initialize",
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": MCP_PROTOCOL,
+                        "capabilities": {},
+                        "clientInfo": {"name": "compose-acceptance", "version": "0"},
+                    },
+                },
+            ),
+            ("tools-list", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            (
+                "instance",
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "instance", "arguments": {}},
+                },
+            ),
+        )
+        for label, frame in frames:
+            code, answer = _http_json(
+                f"{instance.base_url}/v1/mcp", token=token, payload=frame
+            )
+            result = answer.get("result")
+            result_map = result if isinstance(result, dict) else {}
+            passed = code == 200 and bool(result_map) and "error" not in answer
+            if label == "initialize" and passed:
+                passed = result_map.get("protocolVersion") == MCP_PROTOCOL
+                observed: dict[str, Any] = {
+                    "http_status": code,
+                    "protocol_version": result_map.get("protocolVersion"),
+                }
+            elif label == "tools-list" and passed:
+                tools = result_map.get("tools")
+                expected_tools = json.loads(
+                    (REPOSITORY / "contracts" / "cairn-mcp-tools-v1.json").read_text(
+                        encoding="utf-8"
+                    )
+                )["tools"]
+                passed = isinstance(tools, list) and tools == expected_tools
+                observed = {
+                    "http_status": code,
+                    "tool_count": len(tools) if isinstance(tools, list) else None,
+                }
+            else:
+                content = (
+                    result.get("structuredContent")
+                    if isinstance(result, dict)
+                    else None
+                )
+                passed = passed and isinstance(content, dict)
+                observed = {
+                    "http_status": code,
+                    "instance_id": content.get("instance_id")
+                    if isinstance(content, dict)
+                    else None,
+                }
+                passed = passed and observed["instance_id"] == instance.instance_id
+            self.recorder.require(
+                f"authenticated-mcp-{label}:{instance.logical_name}",
+                {"http_status": 200, "result": "valid"},
+                observed,
+                passed,
+            )
+
+    def _ingest(self, instance: Instance, token: str) -> str:
+        marker = f"compose acceptance {instance.logical_name} {self.revision[:12]}"
+        payload = {
+            "scope": {"realm": "local", "segments": []},
+            "classification": "internal",
+            "source_type": "human",
+            "facts": [{"body": marker}],
+        }
+        code, answer = _http_json(
+            f"{instance.base_url}/v1/ingest",
+            token=token,
+            payload=payload,
+            extra_headers={"Idempotency-Key": str(uuid.uuid4())},
+        )
+        receipt = answer.get("mutation_receipt")
+        mutation_id = receipt.get("mutation_id") if isinstance(receipt, dict) else None
+        if code != 200 or not isinstance(mutation_id, str):
+            raise AcceptanceError(f"{instance.logical_name} ingest failed: HTTP {code}")
+        return mutation_id
+
+    def _audit_carries(self, instance: Instance, token: str, mutation_id: str) -> bool:
+        code, answer = _http_json(
+            f"{instance.base_url}/v1/read-audit-events",
+            token=token,
+            payload={
+                "realm_id": "local",
+                "scope_prefix": [],
+                "after_sequence": 0,
+                "limit": 500,
+            },
+        )
+        events = answer.get("events")
+        return (
+            code == 200
+            and isinstance(events, list)
+            and any(
+                isinstance(event, dict)
+                and event.get("mutation_id") == mutation_id
+                and event.get("action_code") == "ingest"
+                for event in events
+            )
+        )
+
+    def _restart_and_require_mutation(
+        self, instance: Instance, token: str, mutation_id: str
+    ) -> None:
+        before = self._container(instance, "cairn")
+        self._compose(instance, "restart", "cairn", timeout=120)
+        after = self._container(instance, "cairn")
+        _wait_healthy(after, 360)
+        carried = self._audit_carries(instance, token, mutation_id)
+        self.recorder.require(
+            f"persistence-across-restart:{instance.logical_name}",
+            {"container_id": "unchanged", "mutation_present": True},
+            {
+                "container_id_before": before,
+                "container_id_after": after,
+                "mutation_id": mutation_id,
+                "mutation_present": carried,
+            },
+            before == after and carried,
+        )
+
+    def _duplicate_lock(self, instance: Instance) -> None:
+        result = self._compose(
+            instance,
+            "run",
+            "--rm",
+            "--no-deps",
+            "cairn",
+            "serve",
+            "--config",
+            "/etc/cairn/config.yaml",
+            check=False,
+            timeout=30,
+        )
+        output = f"{result.stdout}\n{result.stderr}"
+        self.recorder.require(
+            f"duplicate-process-lock-exclusion:{instance.logical_name}",
+            {"exit_code": 3, "code": "already_locked"},
+            {
+                "exit_code": result.returncode,
+                "code": "already_locked" if "already_locked" in output else "absent",
+            },
+            result.returncode == 3 and "already_locked" in output,
+        )
+
+    def _bounded_stop(self, instance: Instance) -> None:
+        started = time.monotonic_ns()
+        result = self._compose(instance, "stop", "cairn", check=False, timeout=70)
+        elapsed_ms = round((time.monotonic_ns() - started) / 1_000_000, 3)
+        self.recorder.require(
+            f"bounded-termination:{instance.logical_name}",
+            {"exit_code": 0, "maximum_ms": 60_000},
+            {"exit_code": result.returncode, "elapsed_ms": elapsed_ms},
+            result.returncode == 0 and elapsed_ms < 60_000,
+        )
+        self._start(instance)
+
+    def _backup_restore(self, instance: Instance) -> None:
+        token = _token(instance.token_file)
+        marker = f"compose restore fixture {self.revision[:12]}"
+        payload = {
+            "scope": {"realm": "local", "segments": []},
+            "classification": "internal",
+            "source_type": "human",
+            "facts": [{"body": marker}],
+            "evidence_payload": f"attic evidence {marker}",
+        }
+        code, answer = _http_json(
+            f"{instance.base_url}/v1/ingest",
+            token=token,
+            payload=payload,
+            extra_headers={"Idempotency-Key": str(uuid.uuid4())},
+        )
+        receipt = answer.get("mutation_receipt")
+        mutation_id = receipt.get("mutation_id") if isinstance(receipt, dict) else None
+        if code != 200 or not isinstance(mutation_id, str):
+            raise AcceptanceError("backup fixture ingest failed")
+        container = self._container(instance, "cairn")
+        backup = _run(
+            [
+                "docker",
+                "exec",
+                container,
+                "cairn",
+                "backup",
+                "--config",
+                "/etc/cairn/config.yaml",
+                "--output",
+                "/var/lib/cairn/acceptance-backups",
+            ]
+        )
+        backup_payload = _last_json(backup.stdout)
+        barrier = backup_payload.get("barrier_ms")
+        self.recorder.require(
+            f"backup-live:{instance.logical_name}",
+            {"status": "ok", "barrier_ms": "positive"},
+            {
+                "status": backup_payload.get("status"),
+                "barrier_ms": barrier,
+                "mutation_id": mutation_id,
+            },
+            backup_payload.get("status") == "ok"
+            and isinstance(barrier, int | float)
+            and barrier > 0,
+        )
+        bundle_in_container = backup_payload.get("bundle")
+        if not isinstance(bundle_in_container, str):
+            raise AcceptanceError("backup emitted no bundle path")
+        bundle_host = self.work_path / "backup-bundle"
+        _run(["docker", "cp", f"{container}:{bundle_in_container}", str(bundle_host)])
+        self.recorder.require(
+            f"backup-bundle-copied:{instance.logical_name}",
+            {"manifest": "present"},
+            {
+                "bundle": str(bundle_host),
+                "manifest_present": (bundle_host / "manifest.json").is_file(),
+            },
+            (bundle_host / "manifest.json").is_file(),
+        )
+        members = _verify_bundle(bundle_host)
+        self.recorder.require(
+            f"backup-member-digests:{instance.logical_name}",
+            {"all_members": "digest-and-size-match"},
+            {"members": members},
+            bool(members),
+        )
+
+        self._compose(instance, "down", timeout=120)
+        _run(["docker", "volume", "rm", instance.data_volume])
+        _run(
+            [
+                "docker",
+                "volume",
+                "create",
+                "--label",
+                f"com.docker.compose.project={instance.project}",
+                "--label",
+                "com.docker.compose.volume=cairn-data",
+                instance.data_volume,
+            ]
+        )
+        _make_bundle_readable(bundle_host)
+        helper = f"{instance.project}-restore-helper"
+        transfer = restore_transfer_plan(instance.project)
+        transfer_volume = str(transfer["volume"])
+        transfer_container = str(transfer["container"])
+        _run(["docker", "rm", "--force", helper], check=False)
+        _run(["docker", "rm", "--force", transfer_container], check=False)
+        _run(["docker", "volume", "rm", transfer_volume], check=False)
+        _run(
+            [
+                "docker",
+                "volume",
+                "create",
+                "--label",
+                f"invalid.example.cairn.compose-acceptance={instance.project}",
+                transfer_volume,
+            ]
+        )
+        try:
+            _run(
+                [
+                    "docker",
+                    "run",
+                    "--detach",
+                    "--name",
+                    transfer_container,
+                    "--user",
+                    "0:0",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges:true",
+                    "--mount",
+                    f"type=volume,src={transfer_volume},dst=/restore-input",
+                    "--entrypoint",
+                    "python",
+                    self.base_image,
+                    "-c",
+                    "import time; time.sleep(300)",
+                ]
+            )
+            _run(
+                [
+                    "docker",
+                    "cp",
+                    str(bundle_host),
+                    f"{transfer_container}:{transfer['copy_target']}",
+                ]
+            )
+            _run(["docker", "rm", "--force", transfer_container])
+            created = _run(
+                [
+                    "docker",
+                    "create",
+                    "--name",
+                    helper,
+                    "--read-only",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges:true",
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,size=256m",
+                    "--mount",
+                    f"type=volume,src={instance.data_volume},dst=/var/lib/cairn",
+                    "--mount",
+                    f"type=volume,src={transfer_volume},dst=/restore-input,readonly",
+                    "--mount",
+                    f"type=bind,src={instance.config.resolve()},dst=/etc/cairn/config.yaml,readonly",
+                    "--mount",
+                    f"type=bind,src={instance.credentials.resolve()},dst=/var/run/secrets/cairn,readonly",
+                    self.base_image,
+                    "restore",
+                    "--config",
+                    "/etc/cairn/config.yaml",
+                    "--bundle",
+                    str(transfer["helper_bundle"]),
+                ]
+            ).stdout.strip()
+            restored = _run(
+                ["docker", "start", "--attach", helper], check=False, timeout=120
+            )
+            restore_payload = (
+                _last_json(restored.stdout) if restored.returncode == 0 else {}
+            )
+        finally:
+            _run(["docker", "rm", "--force", transfer_container], check=False)
+            _run(["docker", "rm", "--force", helper], check=False)
+            _run(["docker", "volume", "rm", transfer_volume], check=False)
+        self.recorder.require(
+            f"restore-bundle-copied:{instance.logical_name}",
+            {"helper_container": "created", "docker_cp": "transfer-volume"},
+            {
+                "helper_container_id": created,
+                "docker_cp": "transfer-volume",
+                "copy_target": transfer["copy_target"],
+            },
+            bool(created),
+        )
+        if restored.returncode != 0:
+            raise AcceptanceError(f"restore helper exited {restored.returncode}")
+        self._start(instance)
+        carried = self._audit_carries(instance, token, mutation_id)
+        boundary = restore_payload.get("audit_boundary")
+        self.recorder.require(
+            f"restore-round-trip:{instance.logical_name}",
+            {"status": "ok", "mutation_present": True, "audit_boundary": "non-empty"},
+            {
+                "status": restore_payload.get("status"),
+                "mutation_id": mutation_id,
+                "mutation_present": carried,
+                "audit_boundary": boundary,
+            },
+            restore_payload.get("status") == "ok"
+            and carried
+            and isinstance(boundary, list)
+            and bool(boundary),
+        )
+
+    def _upgrade(self, instance: Instance) -> None:
+        before = self._container(instance, "cairn")
+        self._compose(instance, "stop", "cairn", timeout=70)
+        pre_migration_state = _inspect_state(before)
+        require_upgrade_service_stopped(pre_migration_state)
+        migrated = self._compose(
+            instance,
+            "run",
+            "--rm",
+            "--no-deps",
+            "cairn",
+            "migrate",
+            "--config",
+            "/etc/cairn/config.yaml",
+            upgrade=True,
+        )
+        migration = _last_json(migrated.stdout)
+        self._start(instance, upgrade=True)
+        after = self._container(instance, "cairn", upgrade=True)
+        running_image = _run(
+            ["docker", "inspect", "--format", "{{.Image}}", after]
+        ).stdout.strip()
+        self.recorder.require(
+            f"image-replacement-upgrade:{instance.logical_name}",
+            {
+                "image_ids_distinct": True,
+                "migration_status": "ok",
+                "container_recreated": True,
+            },
+            {
+                "base_image_id": self.base_image_id,
+                "upgrade_image_id": self.upgrade_image_id,
+                "pre_migration_state": pre_migration_state,
+                "migration": migration,
+                "container_id_before": before,
+                "container_id_after": after,
+                "running_image_id": running_image,
+            },
+            self.base_image_id != self.upgrade_image_id
+            and migration.get("status") == "ok"
+            and before != after
+            and running_image == self.upgrade_image_id,
+        )
+
+    def _separation(self, source: Instance, target: Instance) -> None:
+        networks = [source.network, target.network]
+        volumes = [source.data_volume, target.data_volume]
+        self.recorder.require(
+            "two-project-networks-distinct",
+            {"count": 2, "distinct": True},
+            {"networks": networks, "distinct": len(set(networks)) == 2},
+            len(set(networks)) == 2
+            and all(_docker_object_exists("network", name) for name in networks),
+        )
+        self.recorder.require(
+            "two-project-volumes-distinct",
+            {"count": 2, "distinct": True},
+            {"volumes": volumes, "distinct": len(set(volumes)) == 2},
+            len(set(volumes)) == 2
+            and all(_docker_object_exists("volume", name) for name in volumes),
+        )
+        target_container = self._container(target, "cairn")
+        address = _container_address(target_container, target.network)
+        probe_window = str(uuid.uuid4())
+        probe = (
+            "import urllib.request; "
+            f'urllib.request.urlopen("http://{address}:8000/health/ready", timeout=3)'
+        )
+        positive = _run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                target.network,
+                "--entrypoint",
+                "python",
+                self.base_image,
+                "-c",
+                probe,
+            ],
+            check=False,
+            timeout=15,
+        )
+        common = {
+            "probe_window": probe_window,
+            "target_address": address,
+            "target_port": 8000,
+        }
+        self.recorder.require(
+            "cross-project-positive-control",
+            {"http_status": 200},
+            {
+                **common,
+                "source_network": target.network,
+                "http_status": 200 if positive.returncode == 0 else None,
+                "exit_code": positive.returncode,
+            },
+            positive.returncode == 0,
+        )
+        negative = _run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                source.network,
+                "--entrypoint",
+                "python",
+                self.base_image,
+                "-c",
+                probe,
+            ],
+            check=False,
+            timeout=15,
+        )
+        self.recorder.require(
+            "cross-project-refusal",
+            {"exit_code": "non-zero"},
+            {
+                **common,
+                "source_network": source.network,
+                "exit_code": negative.returncode,
+            },
+            negative.returncode != 0,
+        )
+
+    def _exercise_retrieval(self, instance: Instance) -> None:
+        init = self._container(instance, "falkordb-init")
+        init_state = _inspect_state(init)
+        self.recorder.require(
+            "retrieval-falkordb-init",
+            {"status": "exited", "exit_code": 0},
+            init_state,
+            init_state.get("status") == "exited" and init_state.get("exit_code") == 0,
+        )
+        falkordb = self._container(instance, "falkordb")
+        falkordb_health = _inspect_health(falkordb)
+        self.recorder.require(
+            "retrieval-falkordb-health",
+            {"health": "healthy"},
+            {"health": falkordb_health},
+            falkordb_health == "healthy",
+        )
+        code, ready = _http_json(f"{instance.base_url}/health/ready")
+        self.recorder.require(
+            "retrieval-cairn-ready",
+            {"http_status": 200, "status": "ready"},
+            {"http_status": code, "body": ready},
+            code == 200 and ready.get("status") == "ready",
+        )
+        token = _token(instance.token_file)
+        code, identity = _http_json(f"{instance.base_url}/v1/instance", token=token)
+        self.recorder.require(
+            "retrieval-authenticated-rest",
+            {"http_status": 200, "instance_id": instance.instance_id},
+            {"http_status": code, "body": identity},
+            code == 200 and identity.get("instance_id") == instance.instance_id,
+        )
+        code, answer = _http_json(
+            f"{instance.base_url}/v1/mcp",
+            token=token,
+            payload={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "instance", "arguments": {}},
+            },
+        )
+        result = answer.get("result")
+        content = result.get("structuredContent") if isinstance(result, dict) else None
+        self.recorder.require(
+            "retrieval-authenticated-mcp",
+            {"http_status": 200, "instance_id": instance.instance_id},
+            {
+                "http_status": code,
+                "instance_id": content.get("instance_id")
+                if isinstance(content, dict)
+                else None,
+            },
+            code == 200
+            and isinstance(content, dict)
+            and content.get("instance_id") == instance.instance_id,
+        )
+
+    def _report(self, status: str) -> dict[str, Any]:
+        return {
+            "status": status,
+            "stage": "compose-production",
+            "source_revision": self.revision,
+            "recorded_at": datetime.now(UTC).isoformat(),
+            "identities": {
+                "host": socket.gethostname(),
+                "host_os": _host_os(),
+                "docker_engine": _run(
+                    ["docker", "version", "--format", "{{.Server.Version}}"]
+                ).stdout.strip(),
+                "docker_compose": "v"
+                + _run(["docker", "compose", "version", "--short"])
+                .stdout.strip()
+                .lstrip("v"),
+                "cairn_image": self.base_image,
+                "cairn_image_id": self.base_image_id,
+                "cairn_upgrade_image": self.upgrade_image,
+                "cairn_upgrade_image_id": self.upgrade_image_id,
+                "falkordb_image": self.falkordb_image,
+                "projects": [
+                    {
+                        "logical_name": item.logical_name,
+                        "project": item.project,
+                        "instance_id": item.instance_id,
+                        "host_port": item.port,
+                        "network": item.network,
+                        "data_volume": item.data_volume,
+                        "retrieval": item.retrieval,
+                    }
+                    for item in self.instances
+                ],
+            },
+            "checks": self.recorder.checks,
+            "boundaries": list(REQUIRED_BOUNDARIES),
+        }
+
+    def _write_failed_report(self) -> None:
+        report = self._report("failed")
+        self.report_path.parent.mkdir(parents=True, exist_ok=True)
+        self.report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+
+def instance_config(instance_id: str, retrieval: bool) -> str:
+    graphiti = "  enabled: false\n"
+    if retrieval:
+        graphiti = "  enabled: true\n  host: falkordb\n  port: 6379\n"
+    return (
+        "schema_version: cairn.config/v1\n"
+        f"instance_id: {instance_id}\n"
+        "mode: production\n"
+        "http:\n"
+        "  host: 0.0.0.0\n"
+        "  port: 8000\n"
+        "paths:\n"
+        "  data: /var/lib/cairn\n"
+        "  credentials: /var/run/secrets/cairn\n"
+        "attic:\n"
+        "  enabled: true\n"
+        "graphiti:\n"
+        f"{graphiti}"
+        "delivery:\n"
+        "  interval_seconds: 5\n"
+    )
+
+
+def instance_environment(
+    project: str,
+    port: int,
+    config_path: Path,
+    credentials_path: Path,
+    falkordb_config_path: Path | None,
+) -> str:
+    document = (
+        f"COMPOSE_PROJECT_NAME={project}\n"
+        f"CAIRN_HOST_PORT={port}\n"
+        f"CAIRN_CONFIG_FILE={config_path}\n"
+        f"CAIRN_CREDENTIALS_DIR={credentials_path}\n"
+    )
+    if falkordb_config_path is not None:
+        document += f"FALKORDB_CONFIG_FILE={falkordb_config_path}\n"
+    return document
+
+
+def restore_transfer_plan(project: str) -> dict[str, Any]:
+    return {
+        "volume": f"{project}_restore-input",
+        "container": f"{project}-restore-transfer",
+        "copy_target": "/restore-input/restore-bundle",
+        "helper_bundle": "/restore-input/restore-bundle",
+        "helper_mount_read_only": True,
+    }
+
+
+def require_upgrade_service_stopped(state: dict[str, Any]) -> None:
+    if state.get("status") != "exited" or state.get("exit_code") != 0:
+        raise AcceptanceError(
+            f"upgrade migration requires a cleanly stopped service, observed {state!r}"
+        )
+
+
+def _mapping(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise EvidenceError(f"{label} must be an object")
+    return value
+
+
+def _check_map(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    checks = report.get("checks")
+    if not isinstance(checks, list):
+        raise EvidenceError("checks must be an array")
+
+    by_name: dict[str, dict[str, Any]] = {}
+    for index, value in enumerate(checks):
+        check = _mapping(value, f"checks[{index}]")
+        name = check.get("name")
+        if not isinstance(name, str) or not name:
+            raise EvidenceError(f"checks[{index}].name must be a non-empty string")
+        if name in by_name:
+            raise EvidenceError(f"duplicate check name: {name}")
+        by_name[name] = check
+    return by_name
+
+
+def validate_report(report: dict[str, Any]) -> None:
+    """Refuse evidence that cannot support the full P-69 claim."""
+
+    if report.get("status") != "observed-pass":
+        raise EvidenceError("status must be observed-pass")
+    if report.get("stage") != "compose-production":
+        raise EvidenceError("stage must be compose-production")
+    revision = report.get("source_revision")
+    if not isinstance(revision, str) or len(revision) != 40:
+        raise EvidenceError("source_revision must be a full Git revision")
+
+    identities = _mapping(report.get("identities"), "identities")
+    missing_identities = [
+        name for name in REQUIRED_IDENTITIES if not identities.get(name)
+    ]
+    if missing_identities:
+        raise EvidenceError(f"missing identities: {', '.join(missing_identities)}")
+    if identities["cairn_image_id"] == identities["cairn_upgrade_image_id"]:
+        raise EvidenceError("upgrade image ID must differ from the base image ID")
+
+    checks = _check_map(report)
+    missing_checks = sorted(set(REQUIRED_CHECKS) - checks.keys())
+    if missing_checks:
+        raise EvidenceError(f"missing required checks: {', '.join(missing_checks)}")
+    failed = [
+        name for name, check in checks.items() if check.get("outcome") != "passed"
+    ]
+    if failed:
+        raise EvidenceError(f"non-passing checks: {', '.join(failed)}")
+    for name, check in checks.items():
+        if not isinstance(check.get("expected"), dict) or not check["expected"]:
+            raise EvidenceError(f"{name} expected value must be a non-empty object")
+        if not isinstance(check.get("observed"), dict) or not check["observed"]:
+            raise EvidenceError(f"{name} observed value must be a non-empty object")
+
+    positive = _mapping(
+        checks["cross-project-positive-control"]["observed"],
+        "cross-project-positive-control.observed",
+    )
+    refusal = _mapping(
+        checks["cross-project-refusal"]["observed"],
+        "cross-project-refusal.observed",
+    )
+    for field in ("probe_window", "target_address", "target_port"):
+        if positive.get(field) != refusal.get(field):
+            raise EvidenceError(
+                f"cross-project refusal does not match its positive control: {field}"
+            )
+    if positive.get("http_status") != 200:
+        raise EvidenceError("cross-project positive control did not return HTTP 200")
+    exit_code = refusal.get("exit_code")
+    if not isinstance(exit_code, int) or exit_code == 0:
+        raise EvidenceError("cross-project refusal unexpectedly connected")
+
+    boundaries = report.get("boundaries")
+    if not isinstance(boundaries, list):
+        raise EvidenceError("boundaries must be an array")
+    missing_boundaries = sorted(set(REQUIRED_BOUNDARIES) - set(boundaries))
+    if missing_boundaries:
+        raise EvidenceError(
+            f"missing required boundaries: {'; '.join(missing_boundaries)}"
+        )
+
+
+def _read_report(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return _mapping(value, "report")
+
+
+def write_report(path: Path, report: dict[str, Any]) -> None:
+    validate_report(report)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def _run(
+    arguments: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    print(f"$ {shlex.join(arguments)}", flush=True)
+    try:
+        result = subprocess.run(
+            arguments,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise AcceptanceError(f"command timed out: {shlex.join(arguments)}") from error
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise AcceptanceError(
+            f"command exited {result.returncode}: {shlex.join(arguments)}\n{detail}"
+        )
+    return result
+
+
+def _require_program(name: str) -> None:
+    if shutil.which(name) is None:
+        raise AcceptanceError(f"required program is missing: {name}")
+
+
+def _source_revision() -> str:
+    supplied = os.environ.get("COMPOSE_ACCEPTANCE_REVISION")
+    if supplied:
+        revision = supplied
+    else:
+        revision = _run(["git", "rev-parse", "HEAD"], cwd=REPOSITORY).stdout.strip()
+    if len(revision) != 40 or any(
+        character not in "0123456789abcdef" for character in revision
+    ):
+        raise AcceptanceError(
+            "COMPOSE_ACCEPTANCE_REVISION is not a full lowercase Git revision"
+        )
+    return revision
+
+
+def _lock_value(path: Path, name: str) -> str:
+    prefix = f"{name}="
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith(prefix):
+            value = line.removeprefix(prefix)
+            if value:
+                return value
+    raise AcceptanceError(f"{path} carries no {name}")
+
+
+def _replace_lock_value(document: str, name: str, value: str) -> str:
+    prefix = f"{name}="
+    lines = document.splitlines()
+    replacements = 0
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[index] = f"{prefix}{value}"
+            replacements += 1
+    if replacements != 1:
+        raise AcceptanceError(
+            f"expected one {name} in images lock, found {replacements}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _last_json(output: str) -> dict[str, Any]:
+    for line in reversed(output.splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise AcceptanceError("command output carried no JSON object")
+
+
+def _image_id(reference: str) -> str:
+    return _run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", reference]
+    ).stdout.strip()
+
+
+def _host_os(path: Path = Path("/etc/os-release")) -> str:
+    """The target host's operating system, which I-95 pins and I-14's
+    per-target claim rule expects the record to name. Read from the host
+    rather than from `platform`, because the distribution and version are
+    what the claim is about."""
+    try:
+        release = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return _os_release_value(release, "PRETTY_NAME")
+
+
+def _os_release_value(release: str, name: str) -> str:
+    for line in release.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == name:
+            return value.strip().strip('"')
+    return ""
+
+
+def _token(path: Path) -> str:
+    token = path.read_text(encoding="utf-8").strip()
+    if not token.startswith("cairn1."):
+        raise AcceptanceError(f"{path} carries no Cairn token")
+    return token
+
+
+def _http_json(
+    url: str,
+    *,
+    token: str | None = None,
+    payload: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method="POST" if data else "GET")
+    request.add_header("Accept", "application/json")
+    if data:
+        request.add_header("Content-Type", "application/json")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    for name, value in (extra_headers or {}).items():
+        request.add_header(name, value)
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = response.read()
+            status = response.status
+    except urllib.error.HTTPError as error:
+        body = error.read()
+        status = error.code
+    except OSError as error:
+        raise AcceptanceError(
+            f"HTTP request did not complete: {url}: {error}"
+        ) from error
+    try:
+        value = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise AcceptanceError(f"HTTP {status} from {url} was not JSON") from error
+    if not isinstance(value, dict):
+        raise AcceptanceError(f"HTTP {status} from {url} was not a JSON object")
+    return status, value
+
+
+def _wait_healthy(container: str, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    last = "unknown"
+    while time.monotonic() < deadline:
+        last = _inspect_health(container)
+        if last == "healthy":
+            return
+        state = _inspect_state(container)
+        if state.get("status") == "exited":
+            logs = _run(["docker", "logs", container], check=False).stderr.strip()
+            raise AcceptanceError(
+                f"container {container} exited before healthy: {logs}"
+            )
+        time.sleep(1)
+    raise AcceptanceError(f"container {container} remained {last} for {timeout}s")
+
+
+def _inspect_health(container: str) -> str:
+    return _run(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+            container,
+        ]
+    ).stdout.strip()
+
+
+def _inspect_state(container: str) -> dict[str, Any]:
+    result = _run(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{json .State}}",
+            container,
+        ]
+    )
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict):
+        raise AcceptanceError(f"container {container} state was not an object")
+    return {
+        "status": value.get("Status"),
+        "exit_code": value.get("ExitCode"),
+    }
+
+
+def _verify_bundle(bundle: Path) -> list[dict[str, Any]]:
+    manifest_value = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    if not isinstance(manifest_value, dict) or not isinstance(
+        manifest_value.get("members"), list
+    ):
+        raise AcceptanceError("backup manifest carries no members")
+    observed: list[dict[str, Any]] = []
+    for value in manifest_value["members"]:
+        if not isinstance(value, dict):
+            raise AcceptanceError("backup manifest member is not an object")
+        name = value.get("name")
+        expected_bytes = value.get("bytes")
+        expected_digest = value.get("sha256")
+        if not isinstance(name, str):
+            raise AcceptanceError("backup manifest member has no name")
+        path = bundle / name
+        byte_count = path.stat().st_size
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if byte_count != expected_bytes or digest != expected_digest:
+            raise AcceptanceError(f"backup member digest mismatch: {name}")
+        observed.append({"name": name, "bytes": byte_count, "sha256": digest})
+    return observed
+
+
+def _make_bundle_readable(bundle: Path) -> None:
+    for directory, directories, files in os.walk(bundle):
+        Path(directory).chmod(0o755)
+        for name in directories:
+            (Path(directory) / name).chmod(0o755)
+        for name in files:
+            (Path(directory) / name).chmod(0o644)
+
+
+def _docker_object_exists(kind: str, name: str) -> bool:
+    return _run(["docker", kind, "inspect", name], check=False).returncode == 0
+
+
+def _container_address(container: str, network: str) -> str:
+    value = _run(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            f"{{{{(index .NetworkSettings.Networks {json.dumps(network)}).IPAddress}}}}",
+            container,
+        ]
+    ).stdout.strip()
+    if not value:
+        raise AcceptanceError(f"{container} has no address on {network}")
+    return value
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--validate-report",
+        type=Path,
+        metavar="PATH",
+        help="validate an existing report instead of running the live suite",
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path(
+            os.environ.get(
+                "COMPOSE_ACCEPTANCE_REPORT",
+                "build/compose-acceptance/report.json",
+            )
+        ),
+        help="path for the live JSON report",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        default=Path(
+            os.environ.get(
+                "COMPOSE_ACCEPTANCE_WORK_DIR",
+                "build/compose-acceptance/work",
+            )
+        ),
+        help="disposable operator files and copied backup bundle",
+    )
+    parser.add_argument(
+        "--project-prefix",
+        default=os.environ.get("COMPOSE_ACCEPTANCE_PROJECT_PREFIX", "cairn-t10"),
+        help="prefix for disposable Compose resources",
+    )
+    parser.add_argument(
+        "--base-port",
+        type=int,
+        default=int(os.environ.get("COMPOSE_ACCEPTANCE_BASE_PORT", "18180")),
+        help="first of three loopback ports",
+    )
+    parser.add_argument(
+        "--keep-resources",
+        action="store_true",
+        help="leave the three Compose projects running for inspection",
+    )
+    return parser
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    if args.validate_report is not None:
+        validate_report(_read_report(args.validate_report))
+        return 0
+    runner = Runner(
+        report_path=args.report.resolve(),
+        work_path=args.work_dir.resolve(),
+        project_prefix=args.project_prefix,
+        base_port=args.base_port,
+        keep_resources=args.keep_resources,
+    )
+    try:
+        runner.execute()
+    except (AcceptanceError, EvidenceError) as error:
+        print(f"compose acceptance failed: {error}", file=sys.stderr)
+        return 1
+    print(f"compose acceptance passed; report written to {runner.report_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

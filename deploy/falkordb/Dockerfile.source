@@ -1,0 +1,37 @@
+ARG UBUNTU_BASE=ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
+FROM ${UBUNTU_BASE} AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates cmake dpkg-dev libssl-dev m4 automake gperf peg libtool autoconf python3 python3-venv python3-dev unzip rsync pkg-config && rm -rf /var/lib/apt/lists/*
+ARG BUILD_JOBS=10
+ARG REDIS_VERSION=8.6.3
+COPY redis.tar.gz /build/redis.tar.gz
+RUN --network=none tar -xzf /build/redis.tar.gz -C /build && cd "/build/redis-${REDIS_VERSION}" && export BUILD_TLS=yes BUILD_WITH_MODULES=no && make -j"${BUILD_JOBS}" all && make PREFIX=/opt/redis install
+COPY FalkorDB /build/FalkorDB
+COPY cpu_features /build/cpu_features
+RUN printf '%s\n' 'set(CXX_AVX OFF CACHE BOOL "Cairn amd64 baseline" FORCE)' 'set(CXX_AVX512F OFF CACHE BOOL "Cairn amd64 baseline" FORCE)' 'set(CXX_AVX512DQ OFF CACHE BOOL "Cairn amd64 baseline" FORCE)' 'set(VECSIM_BUILD_TESTS OFF CACHE BOOL "No build-time test downloads" FORCE)' 'set(FETCHCONTENT_SOURCE_DIR_CPU_FEATURES "/build/cpu_features" CACHE PATH "Pinned source" FORCE)' > /build/cairn-toolchain.cmake && printf '#!/bin/sh\nprintf "%s\\n"\n' "${BUILD_JOBS}" > /usr/local/bin/nproc && chmod 0755 /usr/local/bin/nproc
+WORKDIR /build/FalkorDB
+RUN --network=none CMAKE_TOOLCHAIN_FILE=/build/cairn-toolchain.cmake make GCC=1 && \
+    test -f bin/linux-x64-release/falkordb.so && \
+    mkdir -p /build/licenses/falkordb /build/licenses/redis /build/licenses/cpu_features && \
+    find . -type f \( -iname 'license' -o -iname 'license.*' -o -iname 'copying' -o -iname 'copying.*' \) -exec cp --parents '{}' /build/licenses/falkordb/ \; && \
+    cp "/build/redis-${REDIS_VERSION}/COPYING" /build/licenses/redis/COPYING && \
+    cp /build/cpu_features/LICENSE /build/licenses/cpu_features/LICENSE
+
+ARG UBUNTU_BASE
+FROM ${UBUNTU_BASE}
+LABEL org.opencontainers.image.title="Cairn FalkorDB runtime" org.opencontainers.image.revision="5ac6db8059013c9d74842c02b6a9f1a4858a6a1b" org.opencontainers.image.version="redis-8.6.3_falkordb-4.20.4"
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates libssl3 libgomp1 libstdc++6 && rm -rf /var/lib/apt/lists/* && groupadd --gid 10001 falkordb && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin falkordb && mkdir -p /var/lib/falkordb/data && chown -R 10001:10001 /var/lib/falkordb
+COPY --from=builder /opt/redis/bin/redis-server /usr/local/bin/redis-server
+COPY --from=builder /opt/redis/bin/redis-cli /usr/local/bin/redis-cli
+COPY --from=builder /build/FalkorDB/bin/linux-x64-release/falkordb.so /var/lib/falkordb/bin/falkordb.so
+COPY --from=builder /build/FalkorDB/build/docker/run.sh /var/lib/falkordb/bin/run.sh
+COPY --from=builder /build/FalkorDB/build/docker/gen-certs.sh /var/lib/falkordb/bin/gen-certs.sh
+COPY --from=builder /build/licenses /usr/share/licenses/cairn-falkordb
+RUN chmod 0755 /var/lib/falkordb/bin/run.sh /var/lib/falkordb/bin/gen-certs.sh && ldd /usr/local/bin/redis-server > /tmp/redis-server.ldd && ldd /usr/local/bin/redis-cli > /tmp/redis-cli.ldd && ldd /var/lib/falkordb/bin/falkordb.so > /tmp/falkordb.ldd && ! grep -F "not found" /tmp/redis-server.ldd /tmp/redis-cli.ldd /tmp/falkordb.ldd
+ENV BROWSER=0 TLS=0 FALKORDB_HOME=/var/lib/falkordb FALKORDB_DATA_PATH=/var/lib/falkordb/data FALKORDB_BIN_PATH=/var/lib/falkordb/bin FALKORDB_TLS_PATH=/var/lib/falkordb/tls FALKORDB_ARGS="MAX_QUEUED_QUERIES 25 TIMEOUT 1000 RESULTSET_SIZE 10000"
+USER 10001:10001
+WORKDIR /var/lib/falkordb
+EXPOSE 6379
+ENTRYPOINT ["/var/lib/falkordb/bin/run.sh"]
+CMD []

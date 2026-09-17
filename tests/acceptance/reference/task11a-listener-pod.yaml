@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: task11a-listener
+  namespace: REPLACE_TASK11A_NAMESPACE
+  labels:
+    app.kubernetes.io/name: task11a-listener
+    cairn.example.invalid/posture-owner: task11a
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    sysctls:
+      - name: net.ipv4.ip_unprivileged_port_start
+        value: "0"
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: listener
+      image: cairn:v0.7.0-rc.2
+      command:
+        - python
+        - -c
+        - |
+          import socket
+          listener = socket.socket()
+          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          listener.bind(("0.0.0.0", 443))
+          listener.listen()
+          while True:
+              connection, _ = listener.accept()
+              connection.close()
+      ports:
+        - name: https-test
+          containerPort: 443
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task11a-listener
+  namespace: REPLACE_TASK11A_NAMESPACE
+  labels:
+    cairn.example.invalid/posture-owner: task11a
+spec:
+  selector:
+    app.kubernetes.io/name: task11a-listener
+  ports:
+    - name: https
+      port: 443
+      targetPort: https-test

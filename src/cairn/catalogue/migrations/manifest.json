@@ -1,0 +1,80 @@
+[
+  {
+    "version": 1,
+    "name": "catalogue_foundation",
+    "resource": "0001_catalogue_foundation.sql",
+    "sha256": "0392b92d0f1fc4b98e5570bbcfabb455d3969e09bc1647fccefc2dcdc1df9f7f"
+  },
+  {
+    "version": 2,
+    "name": "authority_administration",
+    "resource": "0002_authority_administration.sql",
+    "sha256": "cc977dda576b643af1026b8142800c966e102e818bda4437a3cf9049b8b761ad"
+  },
+  {
+    "version": 3,
+    "name": "custody_lifecycle",
+    "resource": "0003_custody_lifecycle.sql",
+    "sha256": "9191c1ecb152a2d9db82d9bcea655e5669672d98efc0eb72e4c0e098b2322f63"
+  },
+  {
+    "version": 4,
+    "name": "projection_sequence",
+    "resource": "0004_projection_sequence.sql",
+    "sha256": "c3391bb5f1a4746cb94f044a99b94517d6e9ab7c523c02bd6114c23adb9ad775"
+  },
+  {
+    "version": 5,
+    "name": "projection_rebuild_work",
+    "resource": "0005_projection_rebuild_work.sql",
+    "sha256": "8781b879500fa112e412701ec9a72bd729ea833917f1b5c16ab9fa0c16269ad8"
+  },
+  {
+    "version": 6,
+    "name": "idempotency_uuid_versions",
+    "resource": "0006_idempotency_uuid_versions.sql",
+    "sha256": "0d4efac3076afce6c43ca988a4f769c2e882d58928b42b1d32fe0407c3e521c4"
+  },
+  {
+    "version": 7,
+    "name": "projection_extraction_cache",
+    "resource": "0007_projection_extraction_cache.sql",
+    "sha256": "0f7e7c1764a2870780115ec54cd64d65dfe0474da92a14aeb608c2fceccb1d63"
+  },
+  {
+    "version": 8,
+    "name": "shared_memory",
+    "resource": "0008_shared_memory.sql",
+    "sha256": "420c3412f5810c0fa3f6128e2a58f1b7732cb9b9f17040205e693bf89b3e5070"
+  },
+  {
+    "version": 9,
+    "name": "memory_sessions",
+    "resource": "0009_memory_sessions.sql",
+    "sha256": "9381a552f0f9c5c7e8f750aefb3de136767c594dfed565af707bef0f2c900799"
+  },
+  {
+    "version": 10,
+    "name": "session_custody",
+    "resource": "0010_session_custody.sql",
+    "sha256": "4a2f8920d602b24628ad89412dd04671971fdd3a1c61041cc4ca3611bac5a04a"
+  },
+  {
+    "version": 11,
+    "name": "session_commit_claims",
+    "resource": "0011_session_commit_claims.sql",
+    "sha256": "500fd2101a2ac853ab33fff040abd8ce614c6c4f375a84ec77247ed18ce35973"
+  },
+  {
+    "version": 12,
+    "name": "memory_proposals",
+    "resource": "0012_memory_proposals.sql",
+    "sha256": "2893654d84e2cd16efbb1e2679a58d7466c23c4536ce3577141856f0b5aa4870"
+  },
+  {
+    "version": 13,
+    "name": "rebuild_indexes",
+    "resource": "0013_rebuild_indexes.sql",
+    "sha256": "c9c31e90f3cb4c84c5e39707c24271034a5043d5e7695493305f116704fa48ea"
+  }
+]

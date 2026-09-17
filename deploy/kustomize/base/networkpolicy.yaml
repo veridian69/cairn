@@ -1,0 +1,57 @@
+# I-13's closed posture, in two policies rather than one: a default-deny
+# pair that is never edited, and an explicit allowance per permitted
+# destination. Adding FalkorDB (the component) or the egress gateway (the
+# overlays) is then additive, and no change can widen the deny by
+# accident because the deny carries no rules to widen.
+#
+# Ingress stays fully denied in the base. Nothing reaches this instance
+# until an operator or an overlay says what may — I-12's rule that
+# publication is explicit, applied to the network as well as the Service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cairn-default-deny
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: cairn
+  # No ingress or egress rules: both directions denied by their own
+  # emptiness.
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# The one allowance the base carries. Without it the instance cannot
+# resolve its own catalogue-free world — and, once the component adds
+# FalkorDB, cannot resolve its hostname either.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cairn-allow-dns-egress
+  labels:
+    app.kubernetes.io/name: cairn
+    app.kubernetes.io/instance: cairn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cairn
+      app.kubernetes.io/instance: cairn
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

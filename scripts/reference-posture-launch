@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Durable operator envelope for the Task 11a reference posture harness.
+set -euo pipefail
+set +x
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+umask 077
+
+fail() {
+  printf 'reference posture launch failed: %s\n' "$*" >&2
+  exit 1
+}
+
+: "${REFERENCE_POSTURE_REPORT:?REFERENCE_POSTURE_REPORT is required}"
+: "${REFERENCE_POSTURE_OPENAI_API_KEY_FILE:?Secret source path is required}"
+: "${REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE:?Secret source path is required}"
+
+[[ "$REFERENCE_POSTURE_REPORT" == *.json && "$REFERENCE_POSTURE_REPORT" != *.failed.json ]] ||
+  fail 'report path must be a success .json path'
+harness="$PWD/scripts/reference-posture-acceptance"
+[[ -x "$harness" ]] || fail 'posture harness is absent or not executable'
+command -v jq >/dev/null || fail 'jq is required'
+
+for credential_path in \
+  "$REFERENCE_POSTURE_OPENAI_API_KEY_FILE" \
+  "$REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE"
+do
+  [[ -f "$credential_path" && ! -L "$credential_path" && -s "$credential_path" ]] ||
+    fail 'credential source is absent, empty or a symlink'
+  [[ $(stat -c '%a %u' "$credential_path") == "600 $(id -u)" ]] ||
+    fail 'credential source must be mode 0600 and owned by the launcher user'
+done
+
+log_path=${REFERENCE_POSTURE_LOG:-${REFERENCE_POSTURE_REPORT%.json}.live.log}
+progress_path=${REFERENCE_POSTURE_PROGRESS:-${REFERENCE_POSTURE_REPORT%.json}.progress.jsonl}
+[[ ! -e "$log_path" && ! -L "$log_path" ]] || fail 'immutable live log already exists'
+mkdir -p "$(dirname "$log_path")"
+(set -o noclobber; : >"$log_path")
+
+# The inner shell expands its own positional parameters after detachment.
+# shellcheck disable=SC2016
+nohup /bin/bash -c '
+  set +e
+  "$1" run
+  status=$?
+  rm -f -- "$2" "$3"
+  exit "$status"
+' task11a-posture-launch "$harness" \
+  "$REFERENCE_POSTURE_OPENAI_API_KEY_FILE" \
+  "$REFERENCE_POSTURE_FALKORDB_PASSWORD_FILE" \
+  </dev/null >>"$log_path" 2>&1 &
+launcher_pid=$!
+disown "$launcher_pid" 2>/dev/null || true
+
+jq -nc --argjson pid "$launcher_pid" --arg log "$log_path" \
+  --arg progress "$progress_path" --arg report "$REFERENCE_POSTURE_REPORT" \
+  '{pid:$pid,log:$log,progress:$progress,report:$report}'

@@ -1,0 +1,47 @@
+# Every infrastructure pin Cairn's deployment artefacts and acceptance
+# tiers depend on, in one place (P-61). KEY=value, read by the render
+# gate, the kind acceptance harness and the Compose project, so a version
+# can never be changed in one consumer and forgotten in another.
+#
+# The disposable kind tier and reference profile share explicit, reviewed
+# dependency pins so version skew cannot hide a behavioural difference.
+
+# The Cairn image the base renders. NOT yet digest-pinned, and
+# deliberately so: nothing is published to a registry, the package
+# version is 0.7.0rc2, and pinning a locally built digest
+# would rewrite every committed render on every rebuild — the render gate
+# would then fail for changes that have nothing to do with deployment.
+# The tag names the v0.7 candidate source build. Release publication owns the
+# signed digest; this local build tag is not a registry release claim.
+CAIRN_IMAGE=cairn:v0.7.0-rc.2
+
+# P-63: the per-instance FalkorDB workload, included by choice (I-91).
+FALKORDB_IMAGE=ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578
+
+# P-64: the cluster egress gateway realising I-93.
+EGRESS_PROXY_IMAGE=ubuntu/squid:7.2-26.04_edge@sha256:44eee73a21554c4732d6a5daee675f3a33395f36017d7bf7cc8ccb455b1f9665
+
+# The disposable kind acceptance tier (P-68), and the renderer (P-61):
+# one kubectl pin serves both, so what renders the artefacts is what
+# applies them.
+KIND_VERSION=v0.33.0
+# The released linux/amd64 binary's published checksum.
+KIND_LINUX_AMD64_SHA256=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+KIND_NODE_IMAGE=kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+KUBECTL_VERSION=v1.35.8
+KUBECTL_LINUX_AMD64_SHA256=874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf
+CALICO_MANIFEST_URL=https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/calico.yaml
+CALICO_MANIFEST_SHA256=a8c828a06a87c629a282ebbc424895b77f3a030251993e41ea400a743675bb02
+# Schema-only fixture for server-side validation of the reference render. The
+# disposable cluster continues to run Calico; it does not run Cilium agents or
+# claim Cilium enforcement.
+CILIUM_CNP_CRD_URL=https://raw.githubusercontent.com/cilium/cilium/v1.19.6/pkg/k8s/apis/cilium.io/client/crds/v2/ciliumnetworkpolicies.yaml
+CILIUM_CNP_CRD_SHA256=1b1738a904de1152c43078e6a873440aea100f30f10ce5ed4e8622524c13fa43
+
+# Reference target profile. Host identity, namespaces and baseline evidence
+# are supplied explicitly to the acceptance harness; these are dependency pins.
+TARGET_KUBERNETES_VERSION=v1.35.0
+TARGET_CILIUM_VERSION=v1.19.6
+TARGET_CILIUM_AGENT_IMAGE=quay.io/cilium/cilium:v1.19.6@sha256:0df5b2750b64c49843aba1d649e9eaf61467cb0645ad3171db6f6962c095ac92
+TARGET_CILIUM_OPERATOR_IMAGE=quay.io/cilium/operator-generic:v1.19.6@sha256:0db4ca4e06969d8904ee036617795d0e9c3228cf7b8d902ba74fc2bb98d2d665
+TARGET_CILIUM_ENVOY_IMAGE=quay.io/cilium/cilium-envoy:v1.36.9-1782267392-edeb3f2af56c37c407efa1f63f0b32f595399bbc@sha256:767101fb8a5e38f055778cb43b7aa8eed80450b37f8121effac3d9de9e06dc99

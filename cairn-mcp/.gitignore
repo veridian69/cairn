@@ -1,0 +1,5 @@
+/cairn-mcp
+/.worktrees/
+/coverage.out
+/coverage.html
+*.test

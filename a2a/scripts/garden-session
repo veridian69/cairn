@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Supervise one attention adapter for an explicitly selected live host.
+
+Linux pidfds pin the process identity; this helper never kills the host, changes
+the selected agent session, detaches itself, or restarts an uncertain delivery.
+"""
+
+import argparse
+import json
+import os
+import select
+import signal
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PREFLIGHT_TIMEOUT = 35
+
+
+def regular_path(raw, executable=False):
+    path = Path(raw)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("paths must be absolute without parent traversal")
+    for part in (path, *path.parents):
+        if part.is_symlink():
+            raise ValueError("symlink paths are not supported")
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError("profile and binary must be regular files")
+    if executable and not os.access(path, os.X_OK):
+        raise ValueError("a2a binary is not executable")
+    return path
+
+
+def alive(descriptor):
+    return not select.select([descriptor], [], [], 0)[0]
+
+
+def stop_listener(child):
+    result = child.poll()
+    # The group remains ours even if its leader has exited. Proxies may still
+    # be running, so cleanup must not depend on the leader's return code.
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    if child.poll() is None:
+        try:
+            result = child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait(timeout=5)
+            print(
+                "Garden listener required forced shutdown; reconcile delivery",
+                file=sys.stderr,
+            )
+            result = result or 1
+    else:
+        result = child.returncode
+    try:
+        os.killpg(child.pid, 0)
+    except ProcessLookupError:
+        return result
+    time.sleep(0.1)
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return result
+    return result or 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--binary", required=True)
+    parser.add_argument("--host-pid", required=True, type=int)
+    args = parser.parse_args()
+    if not hasattr(os, "pidfd_open"):
+        raise ValueError("garden-session requires Linux pidfd support")
+    profile = regular_path(args.profile)
+    binary = regular_path(args.binary, executable=True)
+    if profile.stat().st_size > 32768:
+        raise ValueError("profile is oversized")
+    data = json.loads(profile.read_text())
+    if not isinstance(data, dict) or data.get("adapter") not in ("codex", "opencode"):
+        raise ValueError(
+            "garden-session requires codex or opencode; Claude owns its MCP channel lifecycle"
+        )
+    if args.host_pid <= 1 or args.host_pid == os.getpid():
+        raise ValueError("an explicit existing host PID is required")
+    if Path(f"/proc/{args.host_pid}").stat().st_uid != os.getuid():
+        raise ValueError("the selected host must belong to the current user")
+    descriptor = os.pidfd_open(args.host_pid)
+    child = None
+    stopped = False
+
+    def request_stop(_signal, _frame):
+        nonlocal stopped
+        stopped = True
+
+    previous = {}
+    try:
+        for number in (signal.SIGTERM, signal.SIGINT):
+            previous[number] = signal.signal(number, request_stop)
+        if not alive(descriptor):
+            raise ValueError("the selected host has already exited")
+        check = subprocess.Popen(
+            [str(binary), "doctor", "--profile", str(profile), "--host"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        try:
+            deadline = time.monotonic() + PREFLIGHT_TIMEOUT
+            while (
+                check.poll() is None
+                and not stopped
+                and alive(descriptor)
+                and time.monotonic() < deadline
+            ):
+                select.select([descriptor], [], [], 0.1)
+            timed_out = check.poll() is None and time.monotonic() >= deadline
+        finally:
+            check_result = stop_listener(check)
+        if timed_out or check_result:
+            raise ValueError(
+                "Garden preflight failed; run a2a doctor --profile FILE --host for details"
+            )
+        if stopped or not alive(descriptor):
+            raise ValueError("the selected host stopped during preflight")
+        child = subprocess.Popen(
+            [str(binary), "attend", "--profile", str(profile)],
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        while child.poll() is None and not stopped and alive(descriptor):
+            select.select([descriptor], [], [], 0.1)
+        result = stop_listener(child)
+        return result if result >= 0 else 128 - result
+    finally:
+        if child is not None and child.poll() is None:
+            stop_listener(child)
+        os.close(descriptor)
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # No profile, host response, environment or credentials in diagnostics.
+        print(
+            "garden-session failed; check explicit paths, host PID and a2a doctor",
+            file=sys.stderr,
+        )
+        sys.exit(1)

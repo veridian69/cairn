@@ -1,0 +1,123 @@
+[build-system]
+requires = ["hatchling==1.32.0", "hatch-vcs==0.5.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "drystane-cairn"
+# A release candidate has the same identity in source and history-free exports.
+version = "0.7.0rc2"
+description = "A scoped, evidence-aware memory authority"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+license = "Apache-2.0"
+authors = [{ name = "Example Operator", email = "operator@example.invalid" }]
+dependencies = [
+  # anyio promoted from the dev group per P-34: P-29 imports anyio.Lock and
+  # anyio.to_thread from runtime code, and a runtime import must not rest on
+  # Starlette's transitive pin. Same locked version, not a new dependency.
+  "anyio==4.15.1",
+  "detect-secrets==1.5.0",
+  "fastapi==0.141.1",
+  # The P-39 retrieval index: pinned exact, with the FalkorDB driver extra.
+  "graphiti-core[falkordb]==0.30.2",
+  # The Graphiti adapter constructs one shared provider pool explicitly;
+  # direct runtime imports must not rest on graphiti-core's transitive pins.
+  "httpx==0.28.1",
+  "httpx2==2.13.0",
+  "openai==3.14.0",
+  # Pin the client whose async pool compatibility is exercised with Redis8.1
+  # by the disposable v0.5 graph acceptance (no paid provider required).
+  "falkordb==1.7.1",
+  # Redis8.1 is supported by FalkorDB1.7.1's filtered sync probe kwargs.
+  # Keep the explicit version and hiredis parser for reproducibility.
+  # The hiredis extra (redis declares it as hiredis>=3.2.0) is a performance
+  # pin, not a functional one: falkordb hardcodes protocol=2, so without the
+  # C parser redis-py falls back to the pure-Python _AsyncRESP2Parser, which
+  # a P-88 py-spy profile put at ~32% of the projection loop's CPU on the
+  # graph read path. redis/asyncio/connection.py selects _AsyncHiredisParser
+  # automatically when the module imports, and exempts it from the RESP3->
+  # RESP2 downgrade, so this changes no call semantics and no Cairn code.
+  # Verify parser selection and a real disposable projection drain.
+  "redis[hiredis]==8.1.0",
+  # Like the hiredis extra above, a performance pin on the projection
+  # loop's critical path: the adapter's private event loop (and uvicorn's,
+  # via its ``auto`` loop detection) becomes uvloop's C implementation.
+  # The P-88/P-90 profiles show that loop a single pegged thread; cutting
+  # per-callback overhead is paid directly there. Nothing deterministic
+  # can see it beyond the loop-type unit test — the check is a live
+  # projection drain.
+  "uvloop==0.22.1",
+  # MCP 1.30 retains the accepted 2025-11-25 protocol and low-level API.
+  # MCP 2.2 eagerly imports OAuth endpoint modules and fails P-49's runtime
+  # import boundary. Keep 1.x until that security contract is satisfied;
+  # see docs/m1/cairn-v0.5-dependency-decisions.md. Cairn uses a stateless
+  # manager, so 1.30's new stateful idle/session limits are inactive.
+  # The AST allow-list and runtime OAuth endpoint exclusion remain tested
+  # in tests/transports/mcp/test_import_boundary.py.
+  "mcp==1.30.0",
+  "prometheus-client==0.26.0",
+  "pydantic==2.13.5",
+  "PyYAML==6.0.3",
+  "uvicorn==0.53.0",
+]
+
+[project.scripts]
+cairn = "cairn.runtime.cli:run"
+cairn-memory = "cairn.client.cli:run"
+cairn-conversation-mcp = "cairn.client.conversation_mcp:run"
+cairn-chat = "cairn.client.chat:run"
+cairn-install = "cairn_install.cli:run"
+
+[dependency-groups]
+dev = [
+  "asgi-lifespan==2.1.0",
+  "coverage==7.16.1",
+  "hypothesis==6.168.0",
+  "mypy==2.3.1",
+  "pip-audit==2.10.1",
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "pytest-xdist==3.8.0",
+  "ruff==0.16.7",
+  "types-PyYAML==6.0.12.20260906",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cairn", "src/cairn_install"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"integrations/codex/cairn-memory/SKILL.md" = "cairn/host_workflows/codex/cairn-memory/SKILL.md"
+"integrations/claude/cairn-memory/SKILL.md" = "cairn/host_workflows/claude/cairn-memory/SKILL.md"
+
+[tool.uv]
+required-version = "==0.12.14"
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --cov=cairn --cov-branch --cov-report=term-missing"
+testpaths = ["tests"]
+filterwarnings = [
+  "error::ResourceWarning",
+  "error::pytest.PytestUnraisableExceptionWarning",
+]
+markers = [
+  "host_isolation: requires actual host namespace/Bubblewrap execution (manual GitHub diagnostics)",
+  "anyio: asynchronous test run by AnyIO",
+  "scenario(id): §6.6 conformance scenario identity (tests/conformance/)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["cairn"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+packages = ["cairn"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "ASYNC"]

@@ -1,0 +1,14 @@
+# Provider traffic crosses the declared per-cluster CONNECT gateway. This is
+# non-secret operational configuration, not a Cairn configuration override.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cairn
+spec:
+  template:
+    spec:
+      containers:
+        - name: cairn
+          env:
+            - name: HTTPS_PROXY
+              value: http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128

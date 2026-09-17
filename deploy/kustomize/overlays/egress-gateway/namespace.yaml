@@ -1,0 +1,10 @@
+# I-93 names the namespace, and the name is load-bearing: every
+# instance's gateway allowance selects it by
+# `kubernetes.io/metadata.name`, which the API server sets from this
+# name and no operator can forge on another namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cairn-egress
+  labels:
+    app.kubernetes.io/name: cairn-egress-gateway

@@ -1,0 +1,53 @@
+# The kind overlay: the acceptance configuration, and the worked example
+# of an instance with retrieval switched on.
+#
+# It is the one overlay that includes the FalkorDB component, so it is
+# the one render that carries an index, a proxy variable and the
+# allowances both need. That is deliberate on two counts: the acceptance
+# matrix (P-68 stage 2) needs the full shape to prove isolation, and the
+# production overlays keeping the index absent is what makes I-91's
+# "included by choice" mean something.
+#
+# kind is never a production target (I-14 as amended). Nothing here may
+# be copied into a production overlay without the reason being restated
+# there — and the one relaxation below is precisely the kind of thing
+# that must not travel.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - networkpolicy-gateway-egress.yaml
+
+components:
+  - ../../components/falkordb
+
+patches:
+  # The instance's configuration document, restated whole with the index
+  # enabled. Kustomize cannot patch inside a YAML string and P-62 puts
+  # the document in the base as one, so the second copy is unavoidable —
+  # it is kept honest by the render test that refuses any difference from
+  # the base's document outside the `graphiti` block.
+  - path: configmap.yaml
+  - path: patch-cairn-proxy.yaml
+  - path: patch-falkordb-uid.yaml
+  # I-10's stated allowance, and the only place in the repository it is
+  # taken: kind's local-path provisioner does not implement
+  # ReadWriteOncePod, so the claim relaxes to ReadWriteOnce and the
+  # acceptance run proves duplicate-process exclusion through the
+  # data-directory lease instead — a weaker enforcement layer for the
+  # same property, on a tier that is not a production target.
+  - target:
+      kind: StatefulSet
+      name: cairn
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/accessModes/0
+        value: ReadWriteOnce
+  - target:
+      kind: StatefulSet
+      name: falkordb
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/accessModes/0
+        value: ReadWriteOnce

@@ -1,0 +1,119 @@
+name: Check
+
+on:
+  schedule:
+    # The scheduled workflow always runs the default branch. This catches
+    # newly disclosed, fixable base-image CVEs even when the source is quiet.
+    - cron: "17 3 * * *"
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  lightweight:
+    name: Lightweight policy and wheel checks
+    if: ${{ github.event.repository.private == false && (github.event_name == 'pull_request' || github.event_name == 'push') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.14"
+          enable-cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+      - run: uv sync --locked
+      - name: Offline CI policy and selection contracts
+        run: |
+          uv run --locked python -B .github/ci/test_bwrap_policy.py
+          uv run --locked python -B .github/ci/test_private_namespace_canary.py
+          uv run --locked python -B .github/ci/test_ci_split.py
+      # uv build has no --locked option; build backends are pinned in pyproject.
+      - run: uv build --wheel
+      - name: State automatic coverage boundary
+        if: always()
+        run: |
+          echo '### Automatic checks: full repository check skipped' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This PR/main gate checks offline CI policy contracts and builds the wheel. It does not run make check or certify the repository test suite.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Run the Check workflow manually on the required branch for the hosted make check; local verification remains separate.' >> "$GITHUB_STEP_SUMMARY"
+
+  full_check:
+    name: Full repository check (Python ${{ matrix.python-version }}, on demand)
+    if: ${{ github.event.repository.private == false && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    # The hosted runner reached 97% before the former 15-minute job limit.
+    # This changes only the CI envelope, not test or benchmark deadlines.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.14"
+          enable-cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - name: Offline CI policy and selection contracts
+        run: |
+          uv run --locked python -B .github/ci/test_bwrap_policy.py
+          uv run --locked python -B .github/ci/test_private_namespace_canary.py
+          uv run --locked python -B .github/ci/test_ci_split.py
+      # uv build has no --locked option; build backends are pinned in pyproject.
+      - run: uv build --wheel
+      # make check verifies pinned renders and client-only Compose config too.
+      - run: ./scripts/fetch-kubectl
+      - name: Run repository check with existing coverage reporting
+        env:
+          PYTEST_ADDOPTS: "-m 'not host_isolation'"
+        run: make check
+      - name: State coverage boundary
+        if: always()
+        run: |
+          echo '### On-demand repository check: host isolation excluded' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The make check step is configured with only marked real Bubblewrap/namespace tests excluded; all other tests and existing branch-coverage reporting remain enabled when that step runs.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This run does not certify the complete test suite, host isolation or full host acceptance. Run local make check for the complete suite; manual host diagnostics remain separate.' >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: Image gate
+    if: ${{ github.event.repository.private == false && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - run: make image IMAGE=cairn:ci
+      - run: make smoke-image IMAGE=cairn:ci
+      - name: Report all HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn:ci
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          severity: HIGH,CRITICAL
+      - name: Reject fixable HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
