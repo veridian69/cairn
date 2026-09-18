@@ -138,7 +138,7 @@ for document in documents:
                 fsGroup=65532, fsGroupChangePolicy="OnRootMismatch"
             )
             for container in pod.get("initContainers", []) + pod["containers"]:
-                assert container["image"] == "cairn:v0.7.0-rc.6"
+                assert container["image"] == "cairn:v0.7.0-rc.7"
                 container["image"] = image
 
 # NetworkPolicy changes must consist only of replacing existing instance values.

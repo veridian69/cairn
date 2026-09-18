@@ -43,7 +43,7 @@ spec:
         # idempotent; `bootstrap` is not, and deliberately does not
         # appear here — see the base README for the documented two-step.
         - name: migrate
-          image: cairn:v0.7.0-rc.6
+          image: cairn:v0.7.0-rc.7
           args:
             - migrate
             - --config
@@ -64,7 +64,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: cairn
-          image: cairn:v0.7.0-rc.6
+          image: cairn:v0.7.0-rc.7
           args:
             - serve
             - --config

@@ -112,6 +112,9 @@ def test_installation_docs_make_external_inputs_and_shared_gateway_boundaries_ex
     assert "diagnostic outside those listed categories" in staging
     assert "build.sh` exits zero" in staging
     assert "falkordb_runtime.py` exits zero" in staging
+    assert "package-configuration deferral" in staging
+    assert "container service-start/runlevel handling" in staging
+    assert "unused manually supplied variables" in staging
     assert "Stop Garden and preserve its data" in guide
     assert "managed Garden is appended as `; Garden`" in guide
     assert "kubectl delete --dry-run=server" in gateway
