@@ -2,17 +2,19 @@
 # Fetch the pinned kubectl into build/tools, verified against
 # deploy/images.lock (P-61).
 #
-# Separate from `make render` on purpose. P-61 has the render target fail
-# with an instruction when the binary is absent rather than fetch it,
-# because `make render` runs inside `make check`: a gate that silently
-# reaches the network is a gate that can pass for reasons unrelated to
-# the change under test. Fetching is therefore an explicit act — an
-# operator runs this once, and CI runs it as its own step.
+# `make render` and `make check` call this helper automatically. It can also
+# be run directly before using kubectl outside Make. The binary remains
+# untracked; every download is checked against the committed SHA-256 pin.
 #
 # The download and verification are the Drystane foundation's
 # scripts/kind-acceptance block, unchanged: same binary, same pin, same
 # proven mechanics.
 set -euo pipefail
+
+if ! command -v curl >/dev/null 2>&1; then
+  printf 'curl is required to download pinned kubectl; install curl and retry\n' >&2
+  exit 1
+fi
 
 lock_value() {
   local key=$1

@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "source_revision": "b68c1044d09c3604124fa8196d294b2cbcee11bd",
+  "source_revision": "0ef68e9f25574625f2e211abd47b0e69892c1603",
   "release_configuration": {
-    "files.json": "6d6b6a88c31668e5bbe999c1d8859f4f856c18f47390ca77f1c14119042f9861",
+    "files.json": "e35e47cb039027e01ae8a3abc1b9c36f1bde259ecae3147e54b5e0f820d25481",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "3b63ea91b5ba334e1a27d98cd8dbcc661e3e791e86c2f6e7eedd672f76d49dcc",
@@ -78,7 +78,7 @@
       "mode": 420
     },
     "Makefile": {
-      "sha256": "1bb10c5c676999942ab62385d8533ec70b5278eaa027bf3e7b1cc4cc984e5ead",
+      "sha256": "8b11b5326eb984b5943afb98410789c5059c7eaec9b02f73412b79b1d12d8de9",
       "mode": 420
     },
     "NOTICE.md": {
@@ -1606,7 +1606,7 @@
       "mode": 420
     },
     "docs/install.md": {
-      "sha256": "5496ac7f0fd3b218381bf8b2c666bc1350ce6d4b7ae5b1020cc6fa7e7947d77e",
+      "sha256": "7f90a5e9f56b21fa3ed85305f38dbe2a7d9667613997b6e4933434c387e9e0f7",
       "mode": 420
     },
     "docs/memory-connection-profiles.md": {
@@ -1782,7 +1782,7 @@
       "mode": 420
     },
     "scripts/fetch-kubectl": {
-      "sha256": "f5ab1df2141336806f034007b7684688de5a88a5f9869842b01dcb55503c8207",
+      "sha256": "e99b843b829cb84b48a0688faaf72c84d3b0368c133e3dba5ac4feaeb188feb9",
       "mode": 493
     },
     "scripts/fetch-uv": {

@@ -527,8 +527,9 @@ explained in the [full round-trip procedure](operations/evidence-verification.md
 This path is for changing or validating Cairn, not a prerequisite for using it.
 It requires the native tools above, Python 3.12–3.14 (the repository defaults to
 3.14), uv 0.12.14, Go 1.26.8+, make,
-a C compiler for Go race tests, Docker with the Compose plugin, and the pinned
-kubectl fetched below. Bubblewrap at `/usr/bin/bwrap` (verified with 0.9.0),
+a C compiler for Go race tests, Docker with the Compose plugin, and curl for the
+pinned kubectl that `make check` fetches and verifies on demand. Bubblewrap at
+`/usr/bin/bwrap` (verified with 0.9.0),
 `/usr/bin/python3`, merged-`/usr` and permitted unprivileged user/PID/mount
 namespaces are required for host-isolation tests. Do not disable host security
 policy to conceal a failed namespace check. Ask the host administrator for a
@@ -550,8 +551,6 @@ docker compose version
 /usr/bin/bwrap --version
 /usr/bin/bwrap --unshare-user --unshare-pid --ro-bind / / /usr/bin/true
 uv sync --locked
-./scripts/fetch-kubectl
-build/tools/kubectl version --client
 make check
 ```
 

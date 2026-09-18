@@ -1,4 +1,4 @@
-.PHONY: sync check check-cairn-mcp test test-backup test-restore contract render compose-config \
+.PHONY: sync fetch-kubectl check check-cairn-mcp test test-backup test-restore contract render compose-config \
 	image smoke-image kind-acceptance compose-acceptance reference-acceptance \
 	reference-posture-acceptance reference-posture-launch
 
@@ -46,6 +46,11 @@ export TMPDIR
 
 sync:
 	uv sync --locked
+
+# Keep the client binary out of the repository and fetch it only when a target
+# needs it. The helper verifies the lock-file checksum before installing it.
+fetch-kubectl:
+	./scripts/fetch-kubectl
 
 # tests/conformance is named explicitly so the xdist controller pre-loads
 # its conftest: under -n auto workers do the collecting, and without the
@@ -108,16 +113,9 @@ contract:
 # target before the command runs.
 #
 # The renderer is the pinned kubectl and nothing else, so what renders the
-# artefacts is the same binary that applies them. It is verified rather
-# than fetched: this target runs inside `make check`, and a gate that
-# reaches the network is a gate that can pass or fail for reasons that
-# have nothing to do with the change under test. The instruction on
-# failure is the whole remedy.
-render:
-	@if [ ! -x $(KUBECTL) ]; then \
-		printf 'pinned kubectl is missing: run ./scripts/fetch-kubectl\n' >&2; \
-		exit 1; \
-	fi
+# artefacts is the same binary that applies them. `fetch-kubectl` obtains it
+# on demand and verifies its checksum before this client-side render starts.
+render: fetch-kubectl
 	@locked=$$(awk -F= '$$1 == "KUBECTL_VERSION" {print $$2}' $(IMAGES_LOCK)); \
 	client=$$($(KUBECTL) version --client --output=json | \
 		sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' | head -n 1); \
