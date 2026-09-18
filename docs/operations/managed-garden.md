@@ -28,14 +28,26 @@ may use a different port, for example `https://garden.example.net/mcp` on 443
 through an existing TLS-forwarding ingress to the local listener on 8443.
 
 For a private test or lab CA, the repository helper generates and validates the
-CA, server key and certificate chain, then prints matching Garden JSON:
+CA, server key and certificate chain, then saves a complete `garden.json` beside
+them and prints the same configuration:
 
 ```sh
 scripts/generate-garden-tls garden.example.net /home/cairn/garden-tls
 ```
 
-Run `scripts/generate-garden-tls` with no arguments to see its usage and a
-complete example. Managed sites should use their site PKI.
+The generated file includes absolute certificate paths, port 8443, an
+`engineering` Garden scope, Val/Codex and Spike/Claude participants, internal
+classification and an expiry one year ahead. Review those choices before use;
+if you change the directly exposed port, update both `port` and `endpoint`.
+Pass the file itself to the installer:
+
+```sh
+./cairn-install --mode docker --garden-config /home/cairn/garden-tls/garden.json
+```
+
+Existing certificates, keys and `garden.json` are never overwritten. Run
+`scripts/generate-garden-tls` with no arguments to see its usage and a complete
+example. Managed sites should use their site PKI.
 
 Example `/home/cairn/garden.json` (replace paths, DNS, scope and expiry):
 

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from cairn_install.garden import load_options
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "generate-garden-tls"
 JSON_MARKER = "Example garden.json:\n"
@@ -49,6 +51,7 @@ def test_generates_verified_ca_server_certificate_and_config(tmp_path: Path) -> 
         "garden-key.pem",
         "internal-ca-key.pem",
         "internal-ca.pem",
+        "garden.json",
     }
     assert stat.S_IMODE((output / "garden-key.pem").stat().st_mode) == 0o600
     assert stat.S_IMODE((output / "internal-ca-key.pem").stat().st_mode) == 0o600
@@ -84,6 +87,18 @@ def test_generates_verified_ca_server_certificate_and_config(tmp_path: Path) -> 
     generated = json.loads(result.stdout.split("Garden configuration:\n", 1)[1])
     assert generated["endpoint"] == "https://garden.example.test:8443/mcp"
     assert generated["tls_key_file"] == str(output / "garden-key.pem")
+    config = output / "garden.json"
+    assert json.loads(config.read_text()) == generated
+    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+    options = load_options(config, "docker")
+    assert options["scope"] == {
+        "realm": "local",
+        "segments": [{"kind": "garden", "identifier": "engineering"}],
+    }
+    assert options["participants"] == {"spike": "claude", "val": "codex"}
+    assert options["classification"] == "internal"
+    assert options["port"] == 8443
+    assert options["expires_at"]
 
 
 @pytest.mark.parametrize(
@@ -145,3 +160,23 @@ def test_failed_generation_leaves_no_outputs_and_can_be_retried(tmp_path: Path) 
         check=False,
     )
     assert retried.returncode == 0, retried.stderr
+
+
+def test_existing_configuration_is_not_overwritten(tmp_path: Path) -> None:
+    output = tmp_path / "tls"
+    output.mkdir()
+    config = output / "garden.json"
+    config.write_text('{"operator": "configuration"}\n')
+    before = config.read_bytes()
+
+    result = subprocess.run(
+        [str(SCRIPT), "garden.example.test", str(output)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Refusing to overwrite" in result.stderr
+    assert config.read_bytes() == before
+    assert list(output.iterdir()) == [config]

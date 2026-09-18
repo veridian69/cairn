@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "13228c733debdd57ecfc80707d6f392273e807b1",
+  "source_revision": "f88ff42d41c9141f30a20ebbc2b83236a1b1fb9a",
   "release_configuration": {
     "files.json": "c8ced9c6d2435db1dc795a2c8205683bfe54b246e518efe84baf18d24697ce55",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
@@ -1662,7 +1662,7 @@
       "mode": 420
     },
     "docs/operations/managed-garden.md": {
-      "sha256": "1c7cf7cde87885231b73ee4b550f72fa5a5c14bc676d45fc98932c91905c6e34",
+      "sha256": "d120c96dddcba7dfa007fbb805777dd82a27cfb275ef89a18d17d026d49d4cd4",
       "mode": 420
     },
     "docs/operations/manual-disposable-installation.md": {
@@ -1806,7 +1806,7 @@
       "mode": 493
     },
     "scripts/generate-garden-tls": {
-      "sha256": "115e329654801ba8823d38baa747d3727976e06f9c48914a4daab8ad16167519",
+      "sha256": "63e678acd346cfdf346a0ed94d5248151748a724fbb3570271a34fcf3d48a9cf",
       "mode": 493
     },
     "scripts/graphiti-smoke": {
@@ -3226,7 +3226,7 @@
       "mode": 420
     },
     "tests/deploy/test_generate_garden_tls.py": {
-      "sha256": "53ec70ed7825d614c93199dc03316e7313cbebb3233d7e921d015b87d456d3e5",
+      "sha256": "e6db27f4932def4995856778ebf4bd291b5f670b38026b89ef5920620c9cfa5c",
       "mode": 420
     },
     "tests/deploy/test_kind_acceptance.py": {

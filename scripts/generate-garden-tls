@@ -8,7 +8,7 @@ Usage: generate-garden-tls DNS_NAME OUTPUT_DIRECTORY
 
 Generate a private certificate authority and a Garden server certificate.
 The DNS name must be the hostname in Garden's public HTTPS endpoint. Existing
-key or certificate files are never overwritten.
+key, certificate or configuration files are never overwritten.
 
 Example:
   scripts/generate-garden-tls reference.example.net /home/cairn/garden-tls
@@ -19,6 +19,7 @@ Created files:
   garden-key.pem        Garden server private key, mode 0600
   garden-cert.pem       Garden server certificate
   garden-chain.pem      Server certificate followed by the CA certificate
+  garden.json           Complete Garden configuration; review scope and expiry
 
 Example garden.json:
 {
@@ -100,6 +101,7 @@ files=(
   garden-key.pem
   garden-cert.pem
   garden-chain.pem
+  garden.json
 )
 for file in "${files[@]}"; do
   if [[ -e $output_dir/$file || -L $output_dir/$file ]]; then
@@ -166,20 +168,15 @@ openssl x509 \
   -checkhost "$dns_name" \
   -noout >/dev/null
 
-for file in "${files[@]}"; do
-  mv -- "$staging_dir/$file" "$output_dir/$file"
-done
-
-printf 'Garden TLS material created and verified in %s\n\n' "$output_dir"
-printf 'Garden configuration:\n'
-python3 - "$dns_name" "$output_dir" <<'PY'
+python3 - "$dns_name" "$output_dir" "$staging_dir/garden.json" <<'PY'
 from datetime import UTC, datetime, timedelta
 import json
+from pathlib import Path
 import sys
 
-dns_name, output_dir = sys.argv[1:]
+dns_name, output_dir, config_file = sys.argv[1:]
 expires_at = (datetime.now(UTC) + timedelta(days=365)).replace(microsecond=0)
-print(
+Path(config_file).write_text(
     json.dumps(
         {
             "endpoint": f"https://{dns_name}:8443/mcp",
@@ -196,6 +193,15 @@ print(
             "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
         },
         indent=2,
-    )
+    ) + "\n"
 )
 PY
+
+for file in "${files[@]}"; do
+  mv -- "$staging_dir/$file" "$output_dir/$file"
+done
+
+printf 'Garden TLS material created and verified in %s\n\n' "$output_dir"
+printf 'Saved complete configuration to %s/garden.json; review scope, participants, port and expiry before installation.\n' "$output_dir"
+printf 'Garden configuration:\n'
+cat "$output_dir/garden.json"
