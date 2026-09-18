@@ -12,8 +12,8 @@ _INSTANCE_LABEL = "app.kubernetes.io/instance"
 _INSTANCE_PLACEHOLDER = "REPLACE_WITH_PER_INSTANCE_UUID"
 _RETAIN_PVCS = {"whenDeleted": "Retain", "whenScaled": "Retain"}
 _SOURCE_DIGESTS = {
-    False: "fe93ed8427291bbb5256e7a73b9fe1b3974eac95a7e06b4f99b7b1b53bb92d7f",
-    True: "bcdc14c502effd6410aef207a3bef74cd8fdf344394bfa06bf9591bfadc7d037",
+    False: "c60d7f8a3dc88a11668e2dc53f95c1d8177d14c7a6cb2cc9d3fafcd9c95c4a3a",
+    True: "2d3d9e98c535a49db1d8301daddc06db0f0f46e173c6b34f965ce9ed4de15900",
 }
 _INVENTORIES = {
     False: {
@@ -321,12 +321,14 @@ def asset_envelope(
                 "kubernetes.io/arch": "amd64",
             }
             if document["metadata"]["name"] == "cairn":
+                pod.setdefault("securityContext", {}).update(
+                    fsGroup=65532,
+                    fsGroupChangePolicy="OnRootMismatch",
+                )
                 if garden_enabled:
-                    pod.setdefault("securityContext", {}).update(
+                    pod["securityContext"].update(
                         runAsUser=65532,
                         runAsGroup=65532,
-                        fsGroup=65532,
-                        fsGroupChangePolicy="OnRootMismatch",
                     )
                 for container in pod["containers"] + pod.get("initContainers", []):
                     container["imagePullPolicy"] = image_policy

@@ -126,6 +126,33 @@ def test_render_site_sets_instance_values_and_keeps_claims_after_statefulset_del
     assert not any(document["kind"] == "Secret" for document in documents)
 
 
+def test_attic_only_asset_envelope_makes_cairn_volume_writable() -> None:
+    """The guided Attic-only pod must be able to initialise a fresh CSI volume."""
+    output = asset_envelope(
+        raw=_source("kubernetes.yaml"),
+        namespace=KUBERNETES_NAMESPACE,
+        instance_name=INSTANCE_NAME,
+        instance_id=INSTANCE_ID,
+        image="registry.example/cairn@sha256:" + "a" * 64,
+        storage_class="fast-rwop",
+        semantic=False,
+        owner_labels=OWNER_LABELS,
+        image_policy="Always",
+    )
+
+    cairn = _named(output["documents"], "StatefulSet", "cairn")
+    assert cairn["spec"]["template"]["spec"]["securityContext"] == {
+        "runAsNonRoot": True,
+        "fsGroup": 65532,
+        "fsGroupChangePolicy": "OnRootMismatch",
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    assert (
+        output["holder_document"]["spec"]["securityContext"]
+        == cairn["spec"]["template"]["spec"]["securityContext"]
+    )
+
+
 def test_render_site_keeps_the_shared_gateway_peer_and_semantic_inventory() -> None:
     """Rewriting the gateway peer would silently widen or break semantic egress."""
     source = _documents(_source("kubernetes-retrieval.yaml"))

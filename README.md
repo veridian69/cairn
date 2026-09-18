@@ -35,12 +35,14 @@ remembering something does not make it true. Agents must explicitly save
 useful context—Cairn does not automatically capture all your conversations.
 
 Self-hosted · [Apache-2.0](LICENSE.md) · REST and MCP ·
-[Release candidate v0.7.0-rc.4](docs/releases/v0.7.0-rc.4.md)
+[Release candidate v0.7.0-rc.5](docs/releases/v0.7.0-rc.5.md)
 
 macOS foreground and native background memory and Attic acceptance passed on
 macOS 26 Intel and Apple Silicon. The native service uses a per-user,
 login-scoped LaunchAgent. Actual logout/login and macOS 12 remain untested.
 Linux native service support uses systemd and supports optional semantic search.
+Garden is supported only with Linux native, Docker or Kubernetes installs.
+**Garden is not supported on macOS.**
 
 ## Watch Claude and Codex share a memory
 
@@ -65,14 +67,23 @@ time is shortened; each turn starts fresh and retrieves its context from Cairn.
 ## Install Cairn
 
 Start with the guided installer from the root of a trusted checkout on Linux
-`x86_64`. It explains each stage, verifies the result, and can resume, roll
-back or remove what it installed:
+`x86_64`. Use the repository URL supplied by your distributor; do not assume
+that this public overlay is the distribution source. It explains each stage,
+verifies the result, and can resume, roll back or remove what it installed:
 
 ```sh
-git clone https://github.com/veridian69/cairn.git
+repository_url='REPLACE_WITH_TRUSTED_REPOSITORY_URL'
+test "$repository_url" != REPLACE_WITH_TRUSTED_REPOSITORY_URL || {
+  printf 'Set repository_url to the distributor-supplied trusted URL\n' >&2
+  exit 2
+}
+git clone "$repository_url" cairn
 cd cairn
 ./cairn-install
 ```
+
+Do not put a password or token in the URL. Use your Git client's credential
+manager if the distributor requires authentication.
 
 It asks for a mode (`disposable`, `native`, `docker` or `kubernetes`), a name
 and a port, and for native, Docker or Kubernetes whether you want **Attic only**
@@ -244,7 +255,7 @@ plane that prompted its design.
 
 ## Project information
 
-- [v0.7 candidate release notes](docs/releases/v0.7.0-rc.4.md)
+- [v0.7 candidate release notes](docs/releases/v0.7.0-rc.5.md)
 - [macOS native installation](docs/operations/macos-native.md) — login-scoped
   LaunchAgent for catalogue memory and Attic, validated on macOS 26 Intel and Apple Silicon.
 - [Earlier RC2 release notes](docs/releases/v0.1.0-rc.2.md)

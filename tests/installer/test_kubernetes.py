@@ -84,14 +84,13 @@ class Cluster(Context):
                 "status": {"conditions": [{"type": "Ready", "status": "True"}]},
             }
         ]
-        self.node_reads = 0
-        self.node_images_after_reads: int | None = None
         self.uid_counts: dict[str, int] = {}
         self.uv_version = "uv 0.12.14"
         self.driver = "csi.example"
         self.allowed = True
         self.denied_permissions: set[tuple[str, str, str]] = set()
         self.fail_probe = False
+        self.fail_rollout = False
         self.probe_failure_message: str | None = None
         self.falkordb_probe_mutation: str | None = None
         if semantic:
@@ -233,24 +232,8 @@ class Cluster(Context):
         if args[:2] == ["get", "namespace"]:
             return json.dumps(self.namespace)
         if args[:2] == ["get", "nodes"]:
-            self.node_reads += 1
-            if (
-                self.node_images_after_reads is not None
-                and self.node_reads >= self.node_images_after_reads
-            ):
-                self.nodes[0]["status"]["images"] = [
-                    {"names": [IMAGE], "sizeBytes": 123}
-                ]
             return json.dumps({"items": self.nodes})
         if args[:2] == ["get", "node"]:
-            self.node_reads += 1
-            if (
-                self.node_images_after_reads is not None
-                and self.node_reads >= self.node_images_after_reads
-            ):
-                self.nodes[0]["status"]["images"] = [
-                    {"names": [IMAGE], "sizeBytes": 123}
-                ]
             return json.dumps(self.nodes[0])
         if args[:2] == ["get", "storageclass"]:
             return json.dumps({"provisioner": self.driver})
@@ -325,6 +308,8 @@ class Cluster(Context):
                 else:
                     parent[parts[-1]] = copy.deepcopy(operation["value"])
             return ""
+        if args[0] == "rollout" and self.fail_rollout:
+            raise InstallError("Command failed with exit 1")
         if args[0] in {"wait", "rollout", "scale", "patch"}:
             return ""
         raise AssertionError(f"unexpected kubectl command: {args}")
@@ -353,6 +338,102 @@ def mutations(ctx: Cluster) -> list[list[str]]:
             for verb in ("create", "delete", "scale", "restart", "apply", "replace")
         )
     ]
+
+
+def test_rollout_failure_reports_the_exact_failing_container_state(
+    tmp_path: Path,
+) -> None:
+    ctx = Cluster(tmp_path)
+    adapter = backend(ctx)
+    ctx.fail_rollout = True
+    ctx.objects["pod/cairn-0"] = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": "cairn-0"},
+        "status": {
+            "phase": "Pending",
+            "initContainerStatuses": [
+                {
+                    "name": "migrate",
+                    "state": {
+                        "waiting": {
+                            "reason": "CrashLoopBackOff",
+                            "message": "back-off restarting failed container",
+                        }
+                    },
+                    "lastState": {
+                        "terminated": {
+                            "reason": "Error",
+                            "exitCode": 3,
+                            "message": "untrusted provider-secret-value",
+                        }
+                    },
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(InstallError) as failure:
+        adapter._rollout("cairn")  # noqa: SLF001
+
+    message = str(failure.value)
+    assert "pod/cairn-0" in message
+    assert "init container migrate" in message
+    assert "CrashLoopBackOff" in message
+    assert "last terminated Error (exit 3)" in message
+    assert "untrusted" not in message
+    assert "provider-secret-value" not in message
+
+
+def test_rollout_failure_never_replays_untrusted_status_strings(tmp_path: Path) -> None:
+    ctx = Cluster(tmp_path)
+    adapter = backend(ctx)
+    ctx.fail_rollout = True
+    canary = "provider-secret-value\n\x1b[2J"
+    ctx.objects["pod/cairn-0"] = {
+        "status": {
+            "phase": canary,
+            "containerStatuses": [
+                {
+                    "name": canary,
+                    "state": {
+                        "waiting": {"reason": canary, "message": canary},
+                        "terminated": {
+                            "reason": canary,
+                            "message": canary,
+                            "exitCode": 10**100,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(InstallError) as failure:
+        adapter._rollout("cairn")  # noqa: SLF001
+
+    message = str(failure.value)
+    assert "container unknown waiting; terminated" in message
+    assert "provider-secret-value" not in message
+    assert "\x1b" not in message
+    assert str(10**100) not in message
+
+    assert adapter._pod_failure_detail({"status": {"phase": canary}}) == (  # noqa: SLF001
+        "status unavailable"
+    )
+    assert (
+        adapter._pod_failure_detail(  # noqa: SLF001
+            {
+                "status": {
+                    "phase": [],
+                    "containerStatuses": [
+                        {"name": [], "state": {"waiting": {"reason": []}}}
+                    ],
+                }
+            }
+        )
+        == "container unknown waiting"
+    )
 
 
 def test_preflight_proves_exact_image_rwop_and_cleans_probe(tmp_path: Path) -> None:
@@ -687,79 +768,34 @@ def test_terminated_object_can_be_deleted_on_retry(tmp_path: Path) -> None:
     assert not ctx.objects
 
 
-def test_preloaded_probe_checks_cache_and_uses_ifnotpresent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_preloaded_cairn_uses_its_exact_pod_probe_while_garden_pulls_normally(
+    garden_cluster: Cluster,
 ) -> None:
-    ctx = Cluster(tmp_path)
+    """Node image inventory is advisory; only Cairn opts into the exception."""
+    ctx = garden_cluster
     ctx.state["kubernetes"].update(preloaded_image=True, image_policy="IfNotPresent")
     adapter = backend(ctx)
-    monkeypatch.setattr("cairn_install.kubernetes.IMAGE_CACHE_READY_SECONDS", 0)
-    with pytest.raises(InstallError, match="cache"):
-        adapter.preflight()
-    ctx.nodes[0]["status"]["images"] = [{"names": [IMAGE], "sizeBytes": 123}]
+
     adapter.preflight()
-    pods = [
+
+    probe = next(
         json.loads(kw["stdin_data"])
         for args, kw in ctx.calls
         if args[-3:] == ["create", "-f", "-"]
         and json.loads(kw["stdin_data"])["kind"] == "Pod"
-    ]
-    assert pods[0]["spec"]["containers"][0]["imagePullPolicy"] == "IfNotPresent"
+    )
+    assert {
+        container["name"]: container["imagePullPolicy"]
+        for container in probe["spec"]["containers"]
+    } == {"probe": "IfNotPresent", "garden-probe": "Always"}
+
     adapter.prepare()
-    site = list(yaml.safe_load_all(adapter.site))
-    workload = next(doc for doc in site if doc["kind"] == "StatefulSet")
-    assert (
-        workload["spec"]["template"]["spec"]["containers"][0]["imagePullPolicy"]
-        == "IfNotPresent"
-    )
-
-
-def test_preloaded_probe_waits_for_kubelet_image_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ctx = Cluster(tmp_path)
-    ctx.state["kubernetes"].update(preloaded_image=True, image_policy="IfNotPresent")
-    ctx.nodes[0]["status"]["images"] = [{"names": None, "sizeBytes": 0}]
-    ctx.node_images_after_reads = 2
-    monkeypatch.setattr("cairn_install.kubernetes.time.sleep", lambda _: None)
-
-    backend(ctx).preflight()
-
-    assert ctx.node_reads == 2
-
-
-def test_preloaded_probe_limits_node_read_to_remaining_wait(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from cairn_install import kubernetes
-
-    ctx = Cluster(tmp_path)
-    ctx.state["kubernetes"].update(
-        preloaded_image=True, image_policy="IfNotPresent", context="lab;prod"
-    )
-    adapter = backend(ctx)
-    clock = DeletionClock()
-    monkeypatch.setattr(kubernetes, "time", clock, raising=False)
-    original = ctx.command
-    node_timeouts: list[float] = []
-
-    def slow_node_read(argv: Sequence[str], **kwargs: Any) -> str:
-        if "get" in argv and "node" in argv:
-            node_timeouts.append(kwargs["timeout"])
-            assert kwargs["timeout"] <= 120 - clock.elapsed
-            clock.elapsed += kwargs["timeout"]
-        return original(argv, **kwargs)
-
-    monkeypatch.setattr(ctx, "command", slow_node_read)
-
-    with pytest.raises(
-        InstallError, match="after waiting for kubelet refresh"
-    ) as caught:
-        adapter.preflight()
-
-    assert clock.elapsed == 120
-    assert node_timeouts == [118]
-    assert "kubectl --context 'lab;prod'" in str(caught.value)
+    adapter.garden_prepare()
+    workload = ctx.objects["statefulset/cairn"]["spec"]["template"]["spec"]
+    assert {
+        container["name"]: container["imagePullPolicy"]
+        for container in workload["containers"]
+    } == {"cairn": "IfNotPresent", "garden": "Always"}
 
 
 def test_falkordb_receipt_rejects_replaced_or_ineligible_nodes(tmp_path: Path) -> None:
@@ -1472,7 +1508,11 @@ def garden_cluster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Cluster:
         kwargs["principals"] = {"33333333-3333-4333-8333-333333333333": "val"}
         return kwargs
 
+    def require_listener_available(port: int, *, wildcard: bool) -> None:
+        del port, wildcard
+
     module.gateway_config = gateway_config  # type: ignore[attr-defined]
+    module.require_listener_available = require_listener_available  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "cairn_install.garden", module)
     return ctx
 

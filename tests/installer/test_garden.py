@@ -850,3 +850,15 @@ def test_tls_verification_reports_openssl_reason(
             InstallError, match="CA cert does not include key usage extension"
         ):
             garden.verify(ctx)
+
+
+@pytest.mark.parametrize("wildcard", [False, True])
+def test_listener_preflight_rejects_an_occupied_garden_port(
+    wildcard: bool,
+) -> None:
+    with socket.socket() as listener:
+        listener.bind(("0.0.0.0" if wildcard else "127.0.0.1", 0))
+        port = listener.getsockname()[1]
+
+        with pytest.raises(InstallError, match="Garden listener port"):
+            garden.require_listener_available(port, wildcard=wildcard)

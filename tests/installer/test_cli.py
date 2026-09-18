@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import signal
@@ -15,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from cairn_install import cli
-from cairn_install.core import InstallError, open_context
+from cairn_install.core import InstallError, open_context, open_read_context
 
 
 def source_tree(tmp_path: Path) -> Path:
@@ -25,6 +26,62 @@ def source_tree(tmp_path: Path) -> Path:
     (source / "pyproject.toml").write_text("[project]\nname='cairn'\n")
     (source / "uv.lock").write_text("version = 1\n")
     return source
+
+
+def test_configuration_is_flushed_before_later_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Redirected automation logs must keep the plan ahead of stderr errors."""
+
+    class BufferedOutput(io.StringIO):
+        flushed = False
+
+        def flush(self) -> None:
+            self.flushed = True
+            super().flush()
+
+    output = BufferedOutput()
+    monkeypatch.setattr(sys, "stdout", output)
+
+    cli._show_configuration(  # noqa: SLF001
+        operation="install",
+        name="demo",
+        mode="docker",
+        port=8123,
+        semantic=True,
+        source=tmp_path,
+        state_root=tmp_path / "state",
+    )
+
+    assert output.flushed
+
+
+def test_main_flushes_all_stdout_before_rendering_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BufferedOutput(io.StringIO):
+        flushed = False
+
+        def flush(self) -> None:
+            self.flushed = True
+            super().flush()
+
+    output = BufferedOutput()
+
+    class ErrorOutput(io.StringIO):
+        def write(self, value: str) -> int:
+            assert output.flushed
+            return super().write(value)
+
+    monkeypatch.setattr(sys, "stdout", output)
+    monkeypatch.setattr(sys, "stderr", ErrorOutput())
+    monkeypatch.setattr(
+        cli,
+        "_run",
+        lambda args, source: (_ for _ in ()).throw(InstallError("failed")),
+    )
+
+    assert cli.main([]) == 2
 
 
 def falkordb_runtime(tmp_path: Path) -> Path:
@@ -215,6 +272,62 @@ def test_interactive_wizard_uses_clear_feature_names_and_shows_plan_first(
     assert (
         cli.main(["--state-root", str(tmp_path / "state")], default_source=source) == 0
     )
+
+
+def test_interactive_wizard_collects_semantic_kubernetes_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = source_tree(tmp_path)
+    receipt = tmp_path / "falkordb-receipt.json"
+    expected = {
+        "schema_version": 1,
+        "image": "cairn.local/falkordb-runtime@sha256:" + "b" * 64,
+        "archive_sha256": "c" * 64,
+        "nodes": [{"name": "node1", "uid": "uid-node1"}],
+    }
+    monkeypatch.setattr(cli, "_load_falkordb_receipt", lambda path: expected)
+    answers = iter(
+        [
+            "kubernetes",
+            "demo",
+            "",
+            "2",
+            "test-context",
+            "cairn-rwop",
+            "registry.example/cairn@sha256:" + "a" * 64,
+            str(receipt),
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+    args = cli._parser().parse_args([])  # noqa: SLF001
+    result = cli._new_configuration(args, source)  # noqa: SLF001
+
+    assert result[1] == "kubernetes"
+    assert result[3] is True
+    assert result[6]["falkordb_receipt"] == expected  # type: ignore[index]
+    assert "kubernetes" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["native", "docker"])
+def test_interactive_wizard_collects_semantic_runtime_descriptor(
+    mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = source_tree(tmp_path)
+    descriptor = tmp_path / "runtime.json"
+    expected = {"image": "local-semantic-runtime"}
+    monkeypatch.setattr(cli, "_load_falkordb_runtime", lambda path: expected)
+    answers = iter([mode, "demo", "", "2", str(descriptor)])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+    result = cli._new_configuration(  # noqa: SLF001
+        cli._parser().parse_args([]),
+        source,  # noqa: SLF001
+    )
+
+    assert result[1] == mode
+    assert result[3] is True
+    assert result[7] == expected
 
 
 def test_disposable_is_always_attic_only(
@@ -501,7 +614,145 @@ def test_resume_refuses_an_explicit_kubernetes_option_that_differs_from_state(
 
     assert cli.main(resume) == 2
     assert "Recorded Kubernetes options differ" in capsys.readouterr().err
-    assert calls == ["kubernetes"]
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [("--mode", "docker"), ("--port", "23456"), ("--semantic", None)],
+)
+def test_resume_refuses_an_explicit_core_option_that_differs_from_state(
+    flag: str,
+    value: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = source_tree(tmp_path)
+    state_root = tmp_path / "state"
+    calls: list[str] = []
+    install_workflow(monkeypatch, run_install=lambda ctx: calls.append(ctx.mode))
+    assert (
+        cli.main(
+            [
+                "--non-interactive",
+                "--mode",
+                "native",
+                "--name",
+                "demo",
+                "--port",
+                "19000",
+                "--state-root",
+                str(state_root),
+            ],
+            default_source=source,
+        )
+        == 0
+    )
+    resume = ["resume", "--name", "demo", "--state-root", str(state_root), flag]
+    if value is not None:
+        resume.append(value)
+
+    assert cli.main(resume) == 2
+    assert "Recorded installation options differ" in capsys.readouterr().err
+    assert calls == ["native"]
+
+
+def test_status_does_not_rewrite_recorded_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = source_tree(tmp_path)
+    state_root = tmp_path / "state"
+    install_workflow(monkeypatch)
+    assert (
+        cli.main(
+            [
+                "--non-interactive",
+                "--mode",
+                "native",
+                "--name",
+                "demo",
+                "--state-root",
+                str(state_root),
+            ],
+            default_source=source,
+        )
+        == 0
+    )
+    state = state_root / "demo" / "state.json"
+    before = state.stat()
+
+    assert cli.main(["status", "--name", "demo", "--state-root", str(state_root)]) == 0
+
+    after = state.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+
+
+def test_status_reads_partial_blitz_after_instance_lock_was_removed(
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / "state"
+    with open_context(
+        state_root,
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "native",
+            "port": 8000,
+            "semantic": False,
+        },
+    ) as ctx:
+        ctx.state.update(status="blitzing", blitz_phase="resources_removed")
+        ctx.save()
+        journal = state_root / ".demo.blitz.json"
+        journal.write_text(json.dumps(ctx.state))
+        os.chmod(journal, 0o600)
+
+    (state_root / "demo" / "installer.lock").unlink()
+    with open_read_context(state_root, "demo") as recovered:
+        assert recovered.state["status"] == "blitzing"
+        assert recovered.state["instance_id"] == ctx.state["instance_id"]
+
+
+def test_status_rejects_a_fifo_instance_lock_without_blocking(tmp_path: Path) -> None:
+    state_root = tmp_path / "state"
+    with open_context(
+        state_root,
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "native",
+            "port": 8000,
+            "semantic": False,
+        },
+    ):
+        pass
+    lock = state_root / "demo" / "installer.lock"
+    lock.unlink()
+    os.mkfifo(lock, 0o600)
+
+    with pytest.raises(InstallError, match="Installer lock must be"):
+        open_read_context(state_root, "demo")
+
+
+def test_status_respects_the_final_deletion_root_lease(tmp_path: Path) -> None:
+    from cairn_install.core import state_root_guard
+
+    state_root = tmp_path / "state"
+    with open_context(
+        state_root,
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "native",
+            "port": 8000,
+            "semantic": False,
+        },
+    ):
+        pass
+
+    with state_root_guard(state_root, exclusive=True):
+        with pytest.raises(InstallError, match="cleanup is busy"):
+            open_read_context(state_root, "demo")
 
 
 def test_resume_allows_omitted_kubernetes_options(

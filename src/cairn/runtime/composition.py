@@ -266,6 +266,11 @@ def _default_index(
     # no secret environment variable, and only this process's own memory
     # holds the value.
     os.environ["OPENAI_API_KEY"] = credentials.openai_api_key
+    # graphiti-core enables third-party PostHog telemetry by default and creates
+    # a home-directory identifier as part of that path. Cairn is private and
+    # self-hosted, so production composition closes that path before the first
+    # adapter is constructed, even when an ambient environment asks to enable it.
+    os.environ["GRAPHITI_TELEMETRY_ENABLED"] = "false"
     _export_semaphore_limit(config.graphiti.semaphore_limit)
     store = ExtractionCacheStore(
         config.paths.data, writer_gate=writer_gate, logger=safe_logger

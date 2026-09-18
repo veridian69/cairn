@@ -127,21 +127,36 @@ Create the provider-key file outside installer state with mode `0600`; it
 contains the key on one line.
 
 ```sh
+kube_image='REPLACE_WITH_TRUSTED_CAIRN_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST'
+case "$kube_image" in
+  *REPLACE_WITH_*|registry.example/*)
+    printf 'Replace kube_image with the distributor-supplied immutable image before running\n' >&2
+    exit 2
+    ;;
+esac
+kube_digest="${kube_image##*@sha256:}"
+test "${#kube_digest}" -eq 64
+case "$kube_digest" in *[!0123456789abcdefABCDEF]*) exit 2 ;; esac
 cairn-install --non-interactive --mode kubernetes --name cairn-v05 \
   --port 8126 \
   --kube-context reference --kube-namespace cairn-v05 \
   --kube-storage-class cairn-local \
-  --kube-image registry.example/cairn@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --kube-image "$kube_image" \
   --kube-falkordb-receipt /home/operator/build/falkordb-local/kubernetes-receipt.json \
   --semantic --provider-key-file /home/operator/.config/cairn/openai-api-key \
   --state-root /home/operator/.local/state/cairn-install \
   --source /home/operator/projects/cairn
 ```
 
-The installer copies the provider key into protected installation state, where
-it is recorded by path only. Remove the temporary input after that copy. Never
-place a provider key in flags or rendered YAML; it is also excluded from command
-logs and the rendered manifest.
+The installer copies the provider key into protected installation state and
+records the external input by path only. The file supplied with
+`--provider-key-file` remains an operator-owned input: the installer does not
+modify or delete it, and `blitz` leaves it untouched. Retain it as a durable
+credential if that is your policy; if you deliberately created a one-time
+staging file, remove it yourself only after confirming the protected copy and
+that no later resume depends on the input path. Never place a provider key in
+flags or rendered YAML; it is also excluded from command logs and the rendered
+manifest.
 
 The receipt is mandatory for a new semantic Kubernetes installation. The
 installer retains its contents, checks the recorded node names and UIDs, and
@@ -190,15 +205,14 @@ The receipt records staging evidence but is not passed to `cairn-install` for
 the Cairn image. The resulting image has the form
 `cairn.local/cairn-runtime@sha256:…`. Use
 `--kube-image "$cairn_image" --kube-preloaded-image` in
-the installation command. The installer waits up to 120 seconds for kubelet to
-report a just-staged digest in the node image cache, then proves that exact
-digest can execute before it creates the instance. If that wait expires, inspect
-the node report with `kubectl --context CONTEXT get node NODE -o json | jq
-'.status.images'`. Once every digest reported as missing appears, rerun
+the installation command. The installer proves the exact Cairn digest can
+execute with a disposable `IfNotPresent` Pod before it creates the instance.
+It does not use `Node.status.images`, because kubelet may cap or disable that
+inventory. Garden remains a normally pullable published image. If the exact
+probe cannot start, restage the Cairn archive and rerun
 `./cairn-install resume --name NAME`; it reuses the recorded installation
-inputs. Retain the
-archive for a later restage. The manual GitOps procedure remains registry-only;
-it does not cover this guided, single-node exception.
+inputs. Retain the archive for a later restage. The manual GitOps procedure
+remains registry-only; it does not cover this guided, single-node exception.
 
 ## Output and diagnostics
 
@@ -282,6 +296,12 @@ Checks the platform, runtime or Docker versions, port, source inputs and any
 recorded resource ownership. Existing unowned services, projects and files are
 refused rather than adopted or overwritten.
 
+### garden_files — Prepare Garden files and participant credentials
+
+When managed Garden is selected, validates the Garden configuration and writes
+the owner-only TLS, server and participant files needed by the selected mode.
+Installations without managed Garden skip this stage.
+
 ### prepare — Prepare runtime and configuration
 
 Creates the owned runtime or image, protected configuration and optional
@@ -324,6 +344,23 @@ Attic write, then checks the exact bytes read back. Semantic mode also proves a
 bounded candidate retrieval. Submission receipts and idempotency keys are
 saved so resume does not ingest a committed check twice.
 
+### garden_prepare — Prepare Garden runtime and configuration
+
+When Garden is selected, prepares the owned Garden runtime and configuration
+after Cairn has passed its own verification. It does not replace or adopt a
+pre-existing Garden service.
+
+### garden_start — Start Garden
+
+Starts the Garden service or process recorded for this installation and keeps
+its endpoint within the configured TLS and ownership boundary.
+
+### garden_verify — Verify Garden endpoint and participant bindings
+
+Checks the authenticated Garden endpoint and verifies every configured
+participant binding and adapter bundle. A Cairn verification does not imply
+Garden verification.
+
 ### restart — Restart and verify the same saved data
 
 Restarts the owned service and performs read-only checks against the same
@@ -335,6 +372,24 @@ one-shot [manual disposable procedure](manual-disposable-installation.md), it re
 credentials, state and evidence in the named private directory for inspection
 and later recovery.
 
+### stop — Stop the disposable Cairn process and retain its data
+
+After a successful disposable run, stops the owned Cairn process while
+retaining its catalogue, credentials, state and evidence for inspection or a
+later resume.
+
+### rollback — Stop Cairn and preserve its data
+
+Stops or disables only the proved-owned Cairn resources for an explicit
+rollback operation. It retains the catalogue, credentials, configuration,
+evidence and persistent storage so `resume` can restore the same instance.
+
+### garden_rollback — Stop Garden and preserve its data
+
+For an explicit rollback of a managed Garden installation, stops the proved-owned
+Garden resources and closes its endpoint while retaining Garden data,
+credentials and configuration for resume.
+
 ## Inspect and resume
 
 List recorded installations:
@@ -343,7 +398,9 @@ List recorded installations:
 ./cairn-install ls
 ```
 
-The table shows name, mode, recorded status, port and features. It does not
+The table shows name, mode, recorded status, port and features. Features are
+`Attic only` or `Attic plus semantic search`; managed Garden is appended as
+`; Garden` when the installation owns a Garden configuration. It does not
 start services or probe live health. An unfinished blitz remains listed even if
 only its recovery journal survives. Unreadable or malformed instance records
 appear as unavailable while other instances remain visible. A missing state
@@ -458,6 +515,13 @@ Blitz leaves shared inputs and caches alone: the source checkout, installed
 toolchains and pulled images are not owned by one named installation. If
 `--provider-key-file` supplied an external key file, that original file is also
 untouched; only the installer-owned protected copy is deleted.
+
+Semantic Cairn disables Graphiti's optional third-party telemetry before it
+constructs the adapter, regardless of an inherited environment setting. Older
+Graphiti runs may already have left a telemetry identifier under
+`~/.cache/graphiti`; that user-level cache is not owned by an installation and
+`blitz` deliberately does not remove it. An operator who no longer needs that
+legacy artefact may inspect and remove it separately.
 
 Kubernetes blitz first proves every surviving namespaced object by its recorded
 UID and ownership labels, then deletes only those installer-owned namespaced

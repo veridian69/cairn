@@ -219,6 +219,12 @@ class Backend:
         self._check_local_falkordb()
         if not self._project_container_ids():
             _check_loopback_port(self.ctx.port)
+            if "garden" in self.ctx.state:
+                from .garden import require_listener_available
+
+                require_listener_available(
+                    int(self.ctx.state["garden"]["options"]["port"]), wildcard=True
+                )
 
     def _falkordb_image(self) -> str:
         runtime = self.ctx.state.get("falkordb_runtime")

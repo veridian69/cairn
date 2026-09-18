@@ -15,11 +15,18 @@ from cairn_install.verification import ingest, ready, validate_ingest, verify_re
 
 STAGES = (
     ("preflight", "Check prerequisites and ownership"),
+    ("garden_files", "Prepare Garden files and participant credentials"),
     ("prepare", "Prepare runtime and configuration"),
     ("bootstrap", "Verify catalogue and retain administrator credential"),
     ("start", "Start Cairn"),
     ("verify", "Verify identity and exact saved data"),
+    ("garden_prepare", "Prepare Garden runtime and configuration"),
+    ("garden_start", "Start Garden"),
+    ("garden_verify", "Verify Garden endpoint and participant bindings"),
     ("restart", "Restart and verify the same saved data"),
+    ("stop", "Stop the disposable Cairn process and retain its data"),
+    ("rollback", "Stop Cairn and preserve its data"),
+    ("garden_rollback", "Stop Garden and preserve its data"),
 )
 
 
@@ -93,7 +100,9 @@ def _close_adapter(adapter: Adapter) -> None:
 
 
 def stage(ctx: Context, key: str, action: Callable[[], object]) -> None:
-    title = dict(STAGES).get(key, key)
+    # Every persisted stage is part of the operator-facing protocol. Refuse a
+    # programmer typo instead of leaking an internal identifier into output.
+    title = dict(STAGES)[key]
     ctx.note(f"\n=== {title} ===")
     ctx.state["steps"][key] = "running"
     ctx.state["current_stage"] = key
@@ -332,19 +341,29 @@ def rollback_install(ctx: Context) -> dict[str, Any]:
     if ctx.state["status"] == "blitzing":
         raise InstallError("This instance is being deleted; run blitz again to finish")
     adapter = backend(ctx)
-    adapter.validate_ownership()
-    if "garden" in ctx.state and ctx.mode == "native":
-        from cairn_install.garden_native import GardenBackend
+    try:
+        adapter.validate_ownership()
+        if "garden" in ctx.state and ctx.mode == "native":
+            from cairn_install.garden_native import GardenBackend
 
-        stage(ctx, "garden_rollback", GardenBackend(ctx).rollback)
-    stage(ctx, "rollback", adapter.rollback)
-    ctx.state.pop("verified_recheck", None)
-    ctx.state["status"] = "rolled_back"
-    ctx.save()
-    ctx.note(
-        "Rollback stopped owned services. Data, volumes, credentials and configuration are retained; resume can reuse them."
-    )
-    return status_install(ctx)
+            stage(ctx, "garden_rollback", GardenBackend(ctx).rollback)
+        stage(ctx, "rollback", adapter.rollback)
+        _close_adapter(adapter)
+        ctx.state.pop("verified_recheck", None)
+        ctx.state.pop("last_error", None)
+        ctx.state["status"] = "rolled_back"
+        ctx.save()
+        ctx.note(
+            "Rollback stopped owned services. Data, volumes, credentials and configuration are retained; resume can reuse them."
+        )
+        return status_install(ctx)
+    except (InstallError, KeyboardInterrupt) as error:
+        ctx.state["status"] = (
+            "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
+        )
+        ctx.state["last_error"] = ctx.redact(str(error))
+        ctx.save()
+        raise
 
 
 def blitz_install(ctx: Context) -> dict[str, Any]:

@@ -7,6 +7,36 @@ from cairn_install import workflow
 from cairn_install.core import InstallError, open_context
 
 
+def test_every_managed_garden_stage_has_an_operator_facing_title() -> None:
+    titles = dict(workflow.STAGES)
+
+    assert titles["garden_files"] == "Prepare Garden files and participant credentials"
+    assert titles["garden_prepare"] == "Prepare Garden runtime and configuration"
+    assert titles["garden_start"] == "Start Garden"
+    assert titles["garden_verify"] == "Verify Garden endpoint and participant bindings"
+    assert titles["garden_rollback"] == "Stop Garden and preserve its data"
+    assert titles["stop"] == "Stop the disposable Cairn process and retain its data"
+    assert titles["rollback"] == "Stop Cairn and preserve its data"
+
+
+def test_unknown_stage_cannot_leak_its_internal_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "native",
+            "port": 19000,
+            "semantic": False,
+        },
+    ) as ctx:
+        monkeypatch.setattr(ctx, "note", lambda message: None)
+        with pytest.raises(KeyError, match="internal_typo"):
+            workflow.stage(ctx, "internal_typo", lambda: None)
+
+
 class Adapter:
     runtime_python = "python"
 
@@ -198,6 +228,39 @@ def test_failed_verification_retains_stage_and_does_not_claim_success(
         workflow.rollback_install(ctx)
         assert ctx.state["status"] == "rolled_back"
         assert calls[-1] == "rollback"
+
+
+def test_failed_rollback_records_failure_instead_of_retaining_verified_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    adapter = Adapter(calls)
+
+    def fail() -> None:
+        raise InstallError("rollback failed provider-secret-value")
+
+    adapter.rollback = fail  # type: ignore[method-assign]
+    monkeypatch.setattr(workflow, "backend", lambda ctx: adapter)
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "native",
+            "port": 19000,
+            "semantic": False,
+        },
+    ) as ctx:
+        ctx.state["status"] = "verified"
+        ctx.add_secret("provider-secret-value")
+        ctx.save()
+
+        with pytest.raises(InstallError, match="rollback failed"):
+            workflow.rollback_install(ctx)
+
+        assert ctx.state["status"] == "failed"
+        assert ctx.state["steps"]["rollback"] == "running"
+        assert ctx.state["last_error"] == "rollback failed [redacted]"
 
 
 def test_restart_only_reads_same_receipt_and_disposable_stops(

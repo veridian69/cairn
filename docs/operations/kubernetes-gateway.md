@@ -273,8 +273,13 @@ printf 'Committed gateway record: %s at %s\n' "$gateway_record_relative" \
   "$(git -C "$gateway_gitops_root" rev-parse HEAD)"
 
 kubectl config current-context
+for check in 'get namespaces' 'create namespaces' 'patch namespaces'; do
+  # Namespace is cluster-scoped. Keep these checks separate from the
+  # namespace-scoped loop below so kubectl does not emit its misleading
+  # "resource is not namespace scoped" warning.
+  test "$(kubectl auth can-i $check)" = yes
+done
 for check in \
-  'get namespaces' 'create namespaces' 'patch namespaces' \
   'get configmaps --namespace cairn-egress' \
   'list configmaps --namespace cairn-egress' \
   'create configmaps --namespace cairn-egress' \
@@ -465,7 +470,7 @@ destination selectors, and use the [bounded client verification](../clients.md#b
 to prove the approved provider path. Do not create a privileged diagnostic Pod,
 temporarily allow direct internet access, or broaden a policy as a test.
 
-## Allow-list changes and removal boundary
+## Allow-list changes
 
 The ConfigMap is mounted with `subPath`, so a later allow-list apply does not
 change the running Pod. Regenerate and review the complete manifest, record its
@@ -482,6 +487,147 @@ kubectl rollout status --namespace "$gateway_namespace" \
 Repeat the installed-state checks and the bounded retrieval verification for
 every affected Cairn instance. A restart keeps the Namespace, ConfigMap,
 Service and policies. Do not use namespace deletion as an uninstall or repair
-command. Removing this shared gateway or its policies interrupts provider
-delivery for every retrieval-enabled instance on the cluster; removal needs a
-separately reviewed cluster change and is outside this installation procedure.
+command.
+
+## Remove the shared gateway safely
+
+Removal is a separate, cluster-wide change. It interrupts provider delivery for
+every retrieval-enabled instance, so do it only when the cluster administrator
+has confirmed that no retrieval-enabled Cairn instance remains. The gateway
+record is the ownership boundary: use the exact committed `gateway.yaml` and
+`namespace.yaml` from the site GitOps checkout that was applied. Do not delete
+the namespace first and do not substitute a hand-written selector.
+
+First verify the intended cluster, the clean committed record and the absence of
+instance namespaces. The conservative check below refuses to continue while
+any Cairn instance namespace still carries the gateway access label; remove or
+disable those instances through their own reviewed procedure first.
+
+```bash
+set -eu
+set -o pipefail
+gateway_namespace=cairn-egress
+gateway_gitops_root="$HOME/cairn-site-gitops"
+gateway_gitops_root="$(realpath -e -- "$gateway_gitops_root")"
+test "$(git -C "$gateway_gitops_root" rev-parse --show-toplevel)" = \
+  "$gateway_gitops_root"
+gateway_record_dir="$gateway_gitops_root/cairn-egress"
+gateway_render="$gateway_record_dir/gateway.yaml"
+gateway_namespace_render="$gateway_record_dir/namespace.yaml"
+gateway_objects="$(mktemp)"
+gateway_inventory="$(mktemp)"
+trap 'rm -f "$gateway_objects" "$gateway_inventory"' EXIT
+test -s "$gateway_render"
+test -s "$gateway_namespace_render"
+gateway_record_relative="${gateway_record_dir#"$gateway_gitops_root"/}"
+test "$gateway_record_relative" != "$gateway_record_dir"
+for file in gateway.yaml namespace.yaml manifests.sha256 profile source-revision; do
+  git -C "$gateway_gitops_root" ls-files --error-unmatch -- \
+    "$gateway_record_relative/$file" >/dev/null
+done
+test -z "$(git -C "$gateway_gitops_root" status --porcelain -- \
+  "$gateway_record_relative")"
+
+# Derive a deletion input which cannot contain the Namespace. Refuse a changed
+# record shape instead of trusting a hand-edited filter.
+uv run --locked python - "$gateway_render" "$gateway_objects" \
+  "$(cat "$gateway_record_dir/profile")" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+source, destination, profile = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+documents = [item for item in yaml.safe_load_all(source.read_text()) if item]
+objects = {(item["kind"], item["metadata"]["name"]): item for item in documents}
+expected = {
+    ("Namespace", "cairn-egress"),
+    ("ConfigMap", "egress-gateway-config"),
+    ("Service", "cairn-egress-gateway"),
+    ("Deployment", "cairn-egress-gateway"),
+    ("NetworkPolicy", "egress-gateway-default-deny"),
+    ("NetworkPolicy", "egress-gateway-allow-cairn-ingress"),
+    ("NetworkPolicy", "egress-gateway-allow-egress"),
+}
+if profile == "cilium-reference":
+    expected.add(("CiliumNetworkPolicy", "egress-gateway-deny-cluster-https"))
+if set(objects) != expected or len(objects) != len(documents):
+    raise SystemExit("gateway record does not contain the exact expected objects")
+namespaced = []
+for item in documents:
+    if item["kind"] == "Namespace":
+        continue
+    if item["metadata"].get("namespace") != "cairn-egress":
+        raise SystemExit("a gateway object escaped the fixed namespace")
+    namespaced.append(item)
+destination.write_text(yaml.safe_dump_all(namespaced, sort_keys=False))
+PY
+
+kubectl config current-context
+gateway_label="$(kubectl get namespace "$gateway_namespace" \
+  -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}')"
+test "$gateway_label" = cairn-egress-gateway
+test -z "$(kubectl get namespaces \
+  -l cairn.example.invalid/instance -o name)"
+kubectl get namespace "$gateway_namespace" -o name
+kubectl get -f "$gateway_objects" --ignore-not-found
+kubectl get -f "$gateway_namespace_render"
+```
+
+Review that inventory with the administrator. The next command is a server-side
+dry run of exactly the recorded objects; it must name only the gateway objects
+and must not include an unexpected kind or namespace. If it does, stop and
+repair the GitOps record rather than widening the delete command.
+
+```bash
+kubectl delete --dry-run=server --wait=false --ignore-not-found \
+  -f "$gateway_objects"
+```
+
+After that review, remove the namespaced gateway objects and verify that they
+are gone. The Namespace is deliberately retained at this point so a later
+administrator can inspect the empty boundary and its audit history.
+
+```bash
+kubectl delete --wait=true --ignore-not-found -f "$gateway_objects"
+kubectl get -f "$gateway_objects" --ignore-not-found
+```
+
+Deleting the dedicated namespace is optional and requires one additional
+inventory. Run this only when the namespace was created for this gateway and
+contains no objects except the controller-created `default` ServiceAccount and
+`kube-root-ca.crt` ConfigMap; otherwise leave the namespace in place for the
+administrator.
+
+```bash
+test "$(kubectl get namespace "$gateway_namespace" \
+  -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}')" = \
+  cairn-egress-gateway
+kubectl api-resources --verbs=list --namespaced -o name | while read -r resource; do
+  kubectl get --namespace "$gateway_namespace" "$resource" \
+    --ignore-not-found -o name >> "$gateway_inventory"
+done
+sort -u -o "$gateway_inventory" "$gateway_inventory"
+uv run --locked python - "$gateway_inventory" <<'PY'
+from pathlib import Path
+import sys
+
+observed = set(Path(sys.argv[1]).read_text().splitlines())
+allowed = {"serviceaccount/default", "configmap/kube-root-ca.crt"}
+unexpected = sorted(observed - allowed)
+if unexpected:
+    raise SystemExit("namespace contains unexpected objects: " + ", ".join(unexpected))
+PY
+```
+
+Only after that check succeeds may the administrator run:
+
+```bash
+kubectl delete --wait=true --ignore-not-found \
+  -f "$gateway_namespace_render"
+```
+
+Confirm the namespace and all recorded objects are absent, then record the
+removal commit and cluster change in the site's normal audit trail. Never use
+`kubectl delete namespace cairn-egress` as a shortcut: it can remove unrelated
+objects and bypasses the ownership and empty-inventory checks above.

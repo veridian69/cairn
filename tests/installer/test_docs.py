@@ -47,7 +47,9 @@ def test_kubernetes_guided_installation_documents_operator_interface() -> None:
         "--kube-context reference",
         "--kube-namespace cairn-v05",
         "--kube-storage-class cairn-local",
-        "--kube-image registry.example/cairn@sha256:",
+        "kube_image='REPLACE_WITH_TRUSTED_CAIRN_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST'",
+        "Replace kube_image with the distributor-supplied immutable image before running",
+        '--kube-image "$kube_image"',
         "--semantic",
         "--provider-key-file /home/operator/.config/cairn/openai-api-key",
         "--state-root /home/operator/.local/state/cairn-install",
@@ -85,3 +87,47 @@ def test_kubernetes_guided_installation_documents_operator_interface() -> None:
         "rendered YAML",
     ):
         assert expected in text
+
+
+def test_installation_docs_make_external_inputs_and_shared_gateway_boundaries_explicit() -> (
+    None
+):
+    guide = " ".join(GUIDE.read_text().split())
+    gateway = " ".join(
+        (ROOT / "docs" / "operations" / "kubernetes-gateway.md").read_text().split()
+    )
+    garden = " ".join(
+        (ROOT / "docs" / "operations" / "managed-garden.md").read_text().split()
+    )
+    staging = " ".join((ROOT / "deploy" / "falkordb" / "README.md").read_text().split())
+    public_readme_path = ROOT / "public-release" / "overlay" / "README.md"
+    if not public_readme_path.exists():
+        public_readme_path = ROOT / "README.md"
+    public_readme = " ".join(public_readme_path.read_text().split())
+
+    assert "installer does not modify or delete it" in guide
+    assert "blitz` leaves it untouched" in guide
+    assert "Stop Garden and preserve its data" in guide
+    assert "managed Garden is appended as `; Garden`" in guide
+    assert "kubectl delete --dry-run=server" in gateway
+    assert "cairn.example.invalid/instance -o name" in gateway
+    assert "destination.write_text(yaml.safe_dump_all(namespaced" in gateway
+    assert (
+        'kubectl delete --wait=true --ignore-not-found -f "$gateway_objects"' in gateway
+    )
+    assert (
+        'allowed = {"serviceaccount/default", "configmap/kube-root-ca.crt"}' in gateway
+    )
+    assert (
+        'kubectl delete --wait=true --ignore-not-found -f "$gateway_render"'
+        not in gateway
+    )
+    assert "The first command must succeed without a prompt" in staging
+    assert "REPLACE_WITH_KUBE_CONTEXT" in staging
+    assert (
+        "Replace every Kubernetes value with a reviewed site value before running"
+        in garden
+    )
+    assert '--kube-context "$kube_context"' in garden
+    assert "REPLACE_WITH_TRUSTED_REPOSITORY_URL" in public_readme
+    assert "github.com/veridian69/cairn.git" not in public_readme

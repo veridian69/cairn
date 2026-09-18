@@ -110,10 +110,20 @@ certificate verification, and configure policy CIDRs for the source addresses
 the cluster actually observes.
 
 ```sh
+kube_context='YOUR_CONTEXT'
+kube_namespace='YOUR_PREPARED_NAMESPACE'
+kube_storage_class='YOUR_RWOP_STORAGE_CLASS'
+kube_image='YOUR_CAIRN_IMAGE_WITH_SHA256_DIGEST'
+case "$kube_context:$kube_namespace:$kube_storage_class:$kube_image" in
+  *YOUR_*)
+    printf 'Replace every Kubernetes value with a reviewed site value before running\n' >&2
+    exit 2
+    ;;
+esac
 ./cairn-install --non-interactive --mode kubernetes --name team-k8s \
-  --kube-context YOUR_CONTEXT --kube-namespace YOUR_PREPARED_NAMESPACE \
-  --kube-storage-class YOUR_RWOP_STORAGE_CLASS \
-  --kube-image YOUR_CAIRN_IMAGE_WITH_SHA256_DIGEST \
+  --kube-context "$kube_context" --kube-namespace "$kube_namespace" \
+  --kube-storage-class "$kube_storage_class" \
+  --kube-image "$kube_image" \
   --garden-config /home/cairn/garden.json
 ```
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Never
 
-from .core import InstallError, atomic_write, open_context
+from .core import InstallError, atomic_write, open_context, open_read_context
 from .output import paint
 
 DEFAULT_PORT = 8000
@@ -220,7 +220,7 @@ def _prompt_mode(non_interactive: bool) -> str:
         raise InstallError(
             "--mode is required in non-interactive mode", "invalid_arguments"
         )
-    print("Installation modes: disposable, native, docker")
+    print("Installation modes: disposable, native, docker, kubernetes")
     return input("Mode: ").strip()
 
 
@@ -304,6 +304,7 @@ def _show_configuration(
     print(
         "The installer will explain each stage and retain state for resume or rollback."
     )
+    sys.stdout.flush()
 
 
 def _load_falkordb_receipt(path: Path) -> dict[str, object]:
@@ -510,17 +511,27 @@ def _kubernetes_configuration(
         "image_policy": "IfNotPresent" if preloaded else "Always",
         "preloaded_image": preloaded,
     }
-    if semantic and args.kube_falkordb_receipt is None:
-        raise InstallError(
-            "--kube-falkordb-receipt is required for semantic Kubernetes installs",
-            "invalid_arguments",
+    receipt_path = args.kube_falkordb_receipt
+    if semantic and receipt_path is None:
+        if args.non_interactive:
+            raise InstallError(
+                "--kube-falkordb-receipt is required for semantic Kubernetes installs",
+                "invalid_arguments",
+            )
+        receipt_path = Path(
+            _required(
+                None,
+                "--kube-falkordb-receipt",
+                "FalkorDB node-staging receipt: ",
+                non_interactive=False,
+            )
         )
-    if args.kube_falkordb_receipt is not None:
+    if receipt_path is not None:
         if not semantic:
             raise InstallError(
                 "--kube-falkordb-receipt requires --semantic", "invalid_arguments"
             )
-        options["falkordb_receipt"] = _load_falkordb_receipt(args.kube_falkordb_receipt)
+        options["falkordb_receipt"] = _load_falkordb_receipt(receipt_path)
     return options
 
 
@@ -563,12 +574,22 @@ def _new_configuration(
         semantic = _prompt_semantic(mode, args.non_interactive)
     runtime = None
     if semantic and mode in {"native", "docker"}:
-        if args.falkordb_runtime is None:
-            raise InstallError(
-                "--falkordb-runtime is required for semantic native and docker installs",
-                "invalid_arguments",
+        runtime_path = args.falkordb_runtime
+        if runtime_path is None:
+            if args.non_interactive:
+                raise InstallError(
+                    "--falkordb-runtime is required for semantic native and docker installs",
+                    "invalid_arguments",
+                )
+            runtime_path = Path(
+                _required(
+                    None,
+                    "--falkordb-runtime",
+                    "FalkorDB runtime descriptor: ",
+                    non_interactive=False,
+                )
             )
-        runtime = _load_falkordb_runtime(args.falkordb_runtime)
+        runtime = _load_falkordb_runtime(runtime_path)
     elif args.falkordb_runtime is not None:
         raise InstallError(
             "--falkordb-runtime requires semantic native or docker mode",
@@ -678,6 +699,19 @@ def _assert_resume_kubernetes_options(
             + "); use its original options.",
             "invalid_arguments",
         )
+
+
+def _assert_resume_core_options(
+    state: dict[str, Any], args: argparse.Namespace
+) -> None:
+    requested: dict[str, object] = {}
+    if args.mode is not None:
+        requested["mode"] = args.mode
+    if args.port is not None:
+        requested["port"] = _validate_port(args.port)
+    if args.semantic:
+        requested["semantic"] = True
+    _assert_immutable(state, requested)
 
 
 def _assert_resume_falkordb_runtime(
@@ -856,7 +890,32 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 ) from error
             _render_result(result, operation=operation, verbose=args.verbose)
         return
-    if operation in {"status", "rollback"}:
+    if operation == "status":
+        name = _required(
+            args.name,
+            "--name",
+            "Installation name: ",
+            non_interactive=args.non_interactive,
+        )
+        with open_read_context(state_root, name) as ctx:
+            from . import workflow
+
+            ctx.verbose = args.verbose
+            args.transcript_path = ctx.directory / "commands.log"
+            _show_configuration(
+                operation=operation,
+                name=ctx.name,
+                mode=ctx.mode,
+                port=ctx.port,
+                semantic=ctx.semantic,
+                source=None,
+                state_root=state_root,
+            )
+            _render_result(
+                workflow.status_install(ctx), operation=operation, verbose=args.verbose
+            )
+        return
+    if operation == "rollback":
         name = _required(
             args.name,
             "--name",
@@ -877,12 +936,11 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 source=None,
                 state_root=state_root,
             )
-            function = (
-                workflow.status_install
-                if operation == "status"
-                else workflow.rollback_install
+            _render_result(
+                workflow.rollback_install(ctx),
+                operation=operation,
+                verbose=args.verbose,
             )
-            _render_result(function(ctx), operation=operation, verbose=args.verbose)
         return
 
     if operation == "resume":
@@ -907,6 +965,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 ctx.state,
                 {"source": str(source), "source_fingerprint": fingerprint},
             )
+            _assert_resume_core_options(ctx.state, args)
             _assert_resume_kubernetes_options(ctx.state, args)
             _assert_resume_falkordb_runtime(ctx.state, args)
             if args.garden_config is not None:
@@ -1016,12 +1075,16 @@ def main(
         return 0
     except InstallError as error:
         failed = True
+        sys.stdout.flush()
         print(
-            f"{paint('error', 'error', fd=2)} [{error.code}]: {error}", file=sys.stderr
+            f"{paint('error', 'error', fd=2)} [{error.code}]: {error}",
+            file=sys.stderr,
+            flush=True,
         )
         return 2
     except KeyboardInterrupt:
         failed = True
+        sys.stdout.flush()
         recovery = (
             "recovery information retained. Retry blitz with the same name."
             if operation == "blitz"
@@ -1030,6 +1093,7 @@ def main(
         print(
             f"{paint('error', 'error', fd=2)} [interrupted]: interrupted; {recovery}",
             file=sys.stderr,
+            flush=True,
         )
         return 130
     finally:

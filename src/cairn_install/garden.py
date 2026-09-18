@@ -45,6 +45,19 @@ MAX_RESPONSE = 128 * 1024
 READY_SECONDS = 120
 
 
+def require_listener_available(port: int, *, wildcard: bool) -> None:
+    """Fail before enrolment if Garden cannot claim its documented host port."""
+    host = "0.0.0.0" if wildcard else "127.0.0.1"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((host, port))
+    except OSError as error:
+        raise InstallError(
+            f"Garden listener port {port} is unavailable: {error}"
+        ) from error
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 

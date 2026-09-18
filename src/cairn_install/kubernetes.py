@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 import secrets
-import shlex
 import sys
 import time
 from copy import deepcopy
@@ -21,14 +20,33 @@ from cairn_install.core import (
     read_owned,
     secure_directory,
 )
+from cairn_install.garden import require_listener_available
 from cairn_install.kubernetes_assets import site_inventory
 from cairn_install.kubernetes_endpoint import EndpointProcess
 from cairn_install.kubernetes_garden import GARDEN_OBJECTS, GardenDeployment
 from cairn_install.kubernetes_resources import RESOURCE_APIS, ResourceJournal
 
 _KUBERNETES_NODE = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?\Z")
-IMAGE_CACHE_READY_SECONDS = 120
-IMAGE_CACHE_POLL_SECONDS = 2
+_SAFE_CONTAINER_NAMES = frozenset({"cairn", "migrate", "falkordb", "garden"})
+_SAFE_CONTAINER_REASONS = frozenset(
+    {
+        "Completed",
+        "ContainerCannotRun",
+        "ContainerCreating",
+        "CrashLoopBackOff",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "DeadlineExceeded",
+        "ErrImagePull",
+        "Error",
+        "ImagePullBackOff",
+        "InvalidImageName",
+        "OOMKilled",
+        "PodInitializing",
+        "RunContainerError",
+    }
+)
+_SAFE_POD_PHASES = frozenset({"Pending", "Running", "Succeeded", "Failed", "Unknown"})
 _GATEWAY_DIAGNOSTICS = {
     "shared egress gateway cairn-egress-gateway.cairn-egress:3128 is not resolvable; "
     "install docs/operations/kubernetes-gateway.md": "shared egress gateway "
@@ -343,80 +361,6 @@ class Backend:
     def validate_ownership(self) -> None:
         self._inventory()
 
-    def _wait_for_preloaded_images(
-        self, node: dict[str, Any], required: list[tuple[str, str]]
-    ) -> None:
-        name = node.get("metadata", {}).get("name")
-        uid = node.get("metadata", {}).get("uid")
-        if not isinstance(name, str) or not name or not isinstance(uid, str) or not uid:
-            raise InstallError("Preloaded image node identity is missing")
-        deadline = time.monotonic() + IMAGE_CACHE_READY_SECONDS
-        observed = node
-        while True:
-            images = observed.get("status", {}).get("images", [])
-            if not isinstance(images, list):
-                images = []
-            missing = [
-                label
-                for label, image in required
-                if not any(
-                    isinstance(item, dict)
-                    and isinstance(item.get("names"), list)
-                    and image in item["names"]
-                    for item in images
-                )
-            ]
-            if not missing:
-                return
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                inspection = (
-                    shlex.join(
-                        [
-                            "kubectl",
-                            "--context",
-                            self.options["context"],
-                            "get",
-                            "node",
-                            name,
-                            "-o",
-                            "json",
-                        ]
-                    )
-                    + " | "
-                    + shlex.join(["jq", ".status.images"])
-                )
-                resume = shlex.join(
-                    ["./cairn-install", "resume", "--name", self.ctx.name]
-                )
-                raise InstallError(
-                    "Exact preloaded "
-                    + "/".join(missing)
-                    + " digest is not recorded in node "
-                    + name
-                    + " image cache after waiting for kubelet refresh; inspect "
-                    + inspection
-                    + ", then rerun "
-                    + resume
-                )
-            time.sleep(min(IMAGE_CACHE_POLL_SECONDS, remaining))
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                continue
-            observed = self._json(
-                self._run(
-                    "get",
-                    "node",
-                    name,
-                    "-o",
-                    "json",
-                    cluster=True,
-                    timeout=remaining,
-                )
-            )
-            if observed.get("metadata", {}).get("uid") != uid:
-                raise InstallError("Preloaded image node UID changed while waiting")
-
     def _inventory(self, *, allow_absent: bool = False) -> None:
         self._retained_assets()
         self._identity()
@@ -477,10 +421,6 @@ class Backend:
                 raise InstallError(
                     "Preloaded image requires exactly one schedulable node"
                 )
-            required = [("Cairn", self.options["image"])]
-            if self.garden.options is not None:
-                required.append(("Garden", self.garden.options["image"]))
-            self._wait_for_preloaded_images(ready[0], required)
         storage = self._json(
             self._run(
                 "get",
@@ -533,6 +473,8 @@ class Backend:
                     + ("/" + subresource if subresource else "")
                 )
         self._probe()
+        if self.garden.options is not None:
+            require_listener_available(int(self.garden.options["port"]), wildcard=False)
         self._probe_falkordb_cache()
 
     def _probe(self) -> None:
@@ -641,7 +583,7 @@ class Backend:
                 {
                     "name": "garden-probe",
                     "image": self.garden.options["image"],
-                    "imagePullPolicy": self.options["image_policy"],
+                    "imagePullPolicy": "Always",
                     "command": ["/usr/local/bin/a2a", "host", "--help"],
                     "securityContext": {
                         "allowPrivilegeEscalation": False,
@@ -897,8 +839,81 @@ class Backend:
         self.ctx.save()
 
     def _rollout(self, name: str) -> None:
-        self._run(
-            "rollout", "status", "statefulset/" + name, "--timeout=300s", timeout=310
+        try:
+            self._run(
+                "rollout",
+                "status",
+                "statefulset/" + name,
+                "--timeout=300s",
+                timeout=310,
+            )
+        except InstallError as error:
+            pod_name = name + "-0"
+            try:
+                pod = self.resources.get("pod/" + pod_name, timeout=20)
+            except InstallError:
+                pod = None
+            detail = self._pod_failure_detail(pod) if pod else "pod status unavailable"
+            raise InstallError(
+                f"Kubernetes rollout failed for statefulset/{name}; "
+                f"pod/{pod_name}: {detail}",
+                error.code,
+            ) from error
+
+    def _pod_failure_detail(self, pod: dict[str, Any]) -> str:
+        status = pod.get("status")
+        if not isinstance(status, dict):
+            return "status unavailable"
+        details: list[str] = []
+        for field, label in (
+            ("initContainerStatuses", "init container"),
+            ("containerStatuses", "container"),
+        ):
+            values = status.get(field, [])
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                name = value.get("name")
+                safe_name = (
+                    name
+                    if isinstance(name, str) and name in _SAFE_CONTAINER_NAMES
+                    else "unknown"
+                )
+                states: list[str] = []
+                for state_field, prefix in (("state", ""), ("lastState", "last ")):
+                    state = value.get(state_field)
+                    if not isinstance(state, dict):
+                        continue
+                    for kind in ("waiting", "terminated"):
+                        record = state.get(kind)
+                        if not isinstance(record, dict):
+                            continue
+                        reason = record.get("reason")
+                        summary = prefix + kind
+                        if (
+                            isinstance(reason, str)
+                            and reason in _SAFE_CONTAINER_REASONS
+                        ):
+                            summary += " " + reason
+                        exit_code = record.get("exitCode")
+                        if (
+                            kind == "terminated"
+                            and type(exit_code) is int
+                            and 0 <= exit_code <= 255
+                        ):
+                            summary += f" (exit {exit_code})"
+                        states.append(summary)
+                if states:
+                    details.append(f"{label} {safe_name} " + "; ".join(states))
+        if details:
+            return "; ".join(details)[:1600]
+        phase = status.get("phase")
+        return (
+            "phase " + phase
+            if isinstance(phase, str) and phase in _SAFE_POD_PHASES
+            else "status unavailable"
         )
 
     def _scale(self, name: str, replicas: int) -> None:

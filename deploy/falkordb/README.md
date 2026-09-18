@@ -59,27 +59,57 @@ a new descriptor; resume retains the originally selected runtime.
 
 ## Prepare Kubernetes nodes
 
-The node-preparation command is a separate host-administrator operation.
-It requires existing SSH access, verified host keys and non-interactive sudo
-for containerd administration. It does not create privileged Kubernetes pods
-or grant itself permissions. The initial transport supports containerd on
-Linux amd64 nodes. Supply explicit node-name to SSH-host mappings; Kubernetes
-node addresses are not automatically trusted as SSH destinations.
+The node-preparation command is a separate host-administrator operation. Treat
+its prerequisites as two separately staged gates:
 
-The helper always uses SSH, including when the checkout and the only Kubernetes
-node are on the same host. Before starting, verify every `--node NODE=SSH_ALIAS`
-mapping non-interactively with `ssh SSH_ALIAS true`, accept and verify its host
-key through the site's normal process, and confirm that the SSH identity can run
-the documented containerd commands through non-interactive `sudo`.
+1. Build and retain the local runtime archive and descriptor from the preceding
+   section. This stage uses Docker and outbound source-download access on the
+   checkout host; it does not test node access.
+2. Arrange node administration before invoking the staging helper: the
+   operator must have existing SSH access, a host key verified through the
+   site's normal process, and non-interactive sudo for containerd
+   administration. This stage does not create privileged Kubernetes pods or
+   grant itself permissions.
+
+The initial transport supports containerd on Linux amd64 nodes. Supply explicit
+node-name to SSH-host mappings; Kubernetes node addresses are not automatically
+trusted as SSH destinations. The helper always uses SSH, including when the
+checkout and the only Kubernetes node are on the same host. In that one-node
+case, configure and verify an SSH alias for the node itself before starting:
+
+```sh
+ssh reference true
+ssh reference sudo -n ctr -n k8s.io version
+```
+
+The first command must succeed without a prompt and the host key must already
+be verified. Do not replace the mapping with a local file copy or omit it. If
+site policy forbids SSH self-access, this staging path is unavailable; use the
+site's authenticated registry and the manual Kubernetes procedure instead.
+Before every run, verify each `--node NODE=SSH_ALIAS` mapping non-interactively
+with `ssh SSH_ALIAS true` and confirm that the SSH identity can run the
+documented containerd commands through non-interactive `sudo`.
 
 The following example prepares the single node `reference` using the operator's
 existing SSH configuration alias of the same name:
 
 ```sh
+set -eu
+set -o pipefail
 runtime_dir="$PWD/build/falkordb-local"
+test -d "$runtime_dir"
+test -s "$runtime_dir/runtime.json"
+test -s "$runtime_dir/image.tar"
+kube_context='REPLACE_WITH_KUBE_CONTEXT'
+case "$kube_context" in
+  ''|REPLACE_WITH_KUBE_CONTEXT)
+    printf 'Set kube_context to the reviewed target context before staging\n' >&2
+    exit 2
+    ;;
+esac
 image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$runtime_dir/runtime.json")
 python3 scripts/kubernetes_image_stage.py \
-  --context YOUR_CONTEXT \
+  --context "$kube_context" \
   --archive "$runtime_dir/image.tar" \
   --image "$image" \
   --node reference=reference \

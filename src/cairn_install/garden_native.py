@@ -46,6 +46,8 @@ class GardenBackend(Backend):
         return f"cairn-install-{self.ctx.name}-garden.service"
 
     def preflight(self) -> None:
+        from .garden import require_listener_available
+
         self.validate_ownership()
         unit = _unit_directory() / self._service_name()
         if unit.exists() or unit.is_symlink():
@@ -55,6 +57,10 @@ class GardenBackend(Backend):
             self._check_binary()
         else:
             self.parent.command(["go", "version"], cwd=self.parent.source / "a2a")
+        if not self.is_running():
+            require_listener_available(
+                int(self.parent.state["garden"]["options"]["port"]), wildcard=True
+            )
 
     def _unit_contents(self) -> str:
         cairn = f"cairn-install-{self.ctx.name}.service"

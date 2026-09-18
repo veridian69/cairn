@@ -155,6 +155,24 @@ def _valid_kubernetes(value: object) -> bool:
     return policy == ("IfNotPresent" if preloaded else "Always")
 
 
+def _valid_garden(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    options = value.get("options")
+    if not isinstance(options, dict):
+        return False
+    endpoint = options.get("endpoint")
+    port = options.get("port")
+    return (
+        isinstance(endpoint, str)
+        and endpoint.startswith("https://")
+        and endpoint.endswith("/mcp")
+        and not any(ord(char) < 32 or char.isspace() for char in endpoint)
+        and type(port) is int
+        and 1024 <= port <= 65535
+    )
+
+
 def _row(value: dict[str, Any], name: str) -> dict[str, object]:
     mode = value.get("mode")
     status_value = value.get("status")
@@ -174,15 +192,19 @@ def _row(value: dict[str, Any], name: str) -> dict[str, object]:
         or not 1 <= port <= 65535
         or type(semantic) is not bool
         or (mode == "kubernetes" and not _valid_kubernetes(value.get("kubernetes")))
+        or ("garden" in value and not _valid_garden(value.get("garden")))
     ):
         raise _Unavailable
     instance_id = _uuid(value.get("instance_id"))
+    features = "Attic plus semantic search" if semantic else "Attic only"
+    if "garden" in value:
+        features += "; Garden"
     return {
         "name": name,
         "mode": mode,
         "status": status_value,
         "port": port,
-        "features": "Attic plus semantic search" if semantic else "Attic only",
+        "features": features,
         "instance_id": instance_id,
     }
 

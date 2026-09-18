@@ -268,7 +268,14 @@ def atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
 
 
 class Context:
-    def __init__(self, directory: Path, state: dict[str, Any], lock: int) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        state: dict[str, Any],
+        lock: int,
+        *,
+        prepare_root: bool = True,
+    ) -> None:
         self.directory = directory
         self.state = state
         self.root = directory / "instance"
@@ -277,7 +284,8 @@ class Context:
         self._secrets: set[str] = set()
         self.verbose = False
         self._display_cwd: Path | None = None
-        secure_directory(self.root, private=True)
+        if prepare_root:
+            secure_directory(self.root, private=True)
 
     @property
     def name(self) -> str:
@@ -680,6 +688,136 @@ def open_context(
 ) -> Context:
     with state_root_guard(state_root):
         return _open_context_locked(state_root, name, create=create)
+
+
+def open_read_context(state_root: Path, name: str) -> Context:
+    """Open immutable recorded state under a shared lock without touching disk."""
+    if not NAME.fullmatch(name):
+        raise InstallError(
+            "Name needs 1–40 lowercase letters/digits/hyphens, beginning with a letter."
+        )
+    root = state_root.absolute()
+    try:
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise InstallError(
+            f"No recorded installation named {name} in {root}"
+        ) from error
+    lock = -1
+    try:
+        root_info = os.fstat(root_fd)
+        if root_info.st_uid != os.getuid() or stat.S_IMODE(root_info.st_mode) != 0o700:
+            raise InstallError(f"Directory must be owned by you with mode 0700: {root}")
+        try:
+            fcntl.flock(root_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise InstallError(
+                "Installer state cleanup is busy; retry shortly"
+            ) from error
+        directory = root / name
+        journal = root / f".{name}.blitz.json"
+        recovery: dict[str, Any] | None = None
+        if journal.exists() or journal.is_symlink():
+            if stat.S_IMODE(journal.lstat().st_mode) != 0o600:
+                raise InstallError("Invalid blitz journal permissions")
+            value = json.loads(read_owned(journal))
+            if (
+                not isinstance(value, dict)
+                or value.get("schema") != 1
+                or value.get("owner_uid") != os.getuid()
+                or value.get("name") != name
+                or value.get("status") != "blitzing"
+                or value.get("blitz_phase") != "resources_removed"
+            ):
+                raise InstallError("Invalid blitz recovery journal")
+            recovery = value
+        if recovery is not None:
+            # Final deletion is serialised on the state-root directory. The
+            # instance lock may already have been removed by the interrupted
+            # rmtree, so do not require or recreate it for read-only status.
+            lock = os.dup(root_fd)
+            if directory.exists() or directory.is_symlink():
+                directory_fd = os.open(
+                    directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                )
+                try:
+                    info = os.fstat(directory_fd)
+                    if (
+                        info.st_uid != os.getuid()
+                        or stat.S_IMODE(info.st_mode) != 0o700
+                    ):
+                        raise InstallError(
+                            f"Directory must be owned by you with mode 0700: {directory}"
+                        )
+                finally:
+                    os.close(directory_fd)
+                path = directory / "state.json"
+                if path.exists() or path.is_symlink():
+                    if stat.S_IMODE(path.lstat().st_mode) != 0o600:
+                        raise InstallError(f"State must have mode 0600: {path}")
+                    remaining = json.loads(read_owned(path))
+                    if not isinstance(remaining, dict) or any(
+                        remaining.get(key) != recovery.get(key)
+                        for key in ("name", "run_id", "instance_id", "owner_uid")
+                    ):
+                        raise InstallError("Blitz journal and surviving state disagree")
+        elif directory.exists() or directory.is_symlink():
+            directory_fd = os.open(
+                directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
+            try:
+                info = os.fstat(directory_fd)
+                if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                    raise InstallError(
+                        f"Directory must be owned by you with mode 0700: {directory}"
+                    )
+                lock = os.open(
+                    "installer.lock",
+                    os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+            finally:
+                os.close(directory_fd)
+            lock_info = os.fstat(lock)
+            if (
+                not stat.S_ISREG(lock_info.st_mode)
+                or lock_info.st_uid != os.getuid()
+                or stat.S_IMODE(lock_info.st_mode) != 0o600
+            ):
+                raise InstallError(
+                    "Installer lock must be an owned regular file with mode 0600"
+                )
+        else:
+            raise InstallError(f"No recorded installation named {name} in {root}")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise InstallError(
+                "another installer is using this instance; wait for it to finish"
+            ) from error
+        path = directory / "state.json"
+        if recovery is not None:
+            state = recovery
+        else:
+            if stat.S_IMODE(path.lstat().st_mode) != 0o600:
+                raise InstallError(f"State must have mode 0600: {path}")
+            state = json.loads(read_owned(path))
+            if (
+                not isinstance(state, dict)
+                or state.get("schema") != 1
+                or state.get("owner_uid") != os.getuid()
+                or state.get("name") != name
+            ):
+                raise InstallError("Unsupported or foreign installer state")
+        context = Context(directory, state, lock, prepare_root=False)
+        lock = -1
+        return context
+    except (OSError, ValueError) as error:
+        raise InstallError("Cannot safely read recorded installer state") from error
+    finally:
+        if lock >= 0:
+            os.close(lock)
+        os.close(root_fd)
 
 
 def _open_context_locked(

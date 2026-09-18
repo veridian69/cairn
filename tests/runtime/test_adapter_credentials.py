@@ -52,6 +52,7 @@ class RecordingIndex:
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
         self.environment_key = os.environ.get("OPENAI_API_KEY")
+        self.telemetry_enabled = os.environ.get("GRAPHITI_TELEMETRY_ENABLED")
 
     def close(self) -> None:
         return None
@@ -71,6 +72,7 @@ def built(monkeypatch: pytest.MonkeyPatch) -> list[RecordingIndex]:
     # through monkeypatch so the export the code performs is undone
     # afterwards whether or not the ambient environment had one.
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-value-that-must-be-replaced")
+    monkeypatch.setenv("GRAPHITI_TELEMETRY_ENABLED", "true")
     return built
 
 
@@ -147,6 +149,7 @@ def test_the_files_reach_the_adapter_and_the_environment(
         "edge_batch_max_facts": 80,
     }
     assert built[0].environment_key == API_KEY_SENTINEL
+    assert built[0].telemetry_enabled == "false"
 
 
 def test_the_writer_gate_reaches_the_extraction_cache_store(

@@ -368,9 +368,7 @@ class GardenDeployment:
             transition = {
                 "uid": observed["metadata"]["uid"],
                 "before": deepcopy(current),
-                "after": sidecar_template(
-                    current, self.options, backend.options["image_policy"]
-                ),
+                "after": sidecar_template(current, self.options, "Always"),
                 "phase": "pending",
             }
             self.record["transition"] = transition
