@@ -107,6 +107,11 @@ def test_installation_docs_make_external_inputs_and_shared_gateway_boundaries_ex
 
     assert "installer does not modify or delete it" in guide
     assert "blitz` leaves it untouched" in guide
+    assert '--semantic --falkordb-runtime "$falkordb_runtime"' in guide
+    assert '--falkordb-runtime "$PWD/build/falkordb-local/runtime.json"' in guide
+    assert "diagnostic outside those listed categories" in staging
+    assert "build.sh` exits zero" in staging
+    assert "falkordb_runtime.py` exits zero" in staging
     assert "Stop Garden and preserve its data" in guide
     assert "managed Garden is appended as `; Garden`" in guide
     assert "kubectl delete --dry-run=server" in gateway

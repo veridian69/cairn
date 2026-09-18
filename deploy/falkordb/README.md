@@ -51,6 +51,16 @@ and archive hash; it makes no registry-publication claim. Scan and test that
 build before using it for a real installation. The export verifies the complete
 OCI graph, so a Docker store which loses the image index is rejected.
 
+The pinned upstream build currently emits non-fatal diagnostics from Ubuntu's
+missing optional manual-page alternatives, Redis/FalkorDB cleanup and configure
+steps, CMake policy checks, absent Doxygen, and upstream compiler warnings. Do
+not treat the words `warning` or `Error` alone as proof of success or failure.
+The build is accepted only when `build.sh` exits zero, prints the final `Built
+cairn-local/falkordb-server:rebuild` line, and `falkordb_runtime.py` exits zero
+after writing all three files above. Any non-zero exit, missing final line,
+missing output, checksum failure or diagnostic outside those listed categories
+remains a failure to investigate.
+
 For a guided Docker or Linux native semantic install, provide
 `--falkordb-runtime /absolute/path/to/build/falkordb-local/runtime.json` alongside
 the normal `--semantic` and protected provider-key options. The runtime must be

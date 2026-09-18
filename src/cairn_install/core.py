@@ -512,15 +512,33 @@ class Context:
         shown = f"{prefix} {shlex.join(command)}".strip()
         if stdout_path:
             shown += " > " + shlex.quote(str(stdout_path))
+        kubectl_args = iter(command[1:])
+        kubectl_verb = None
+        for part in kubectl_args:
+            if part in {"--context", "--namespace"}:
+                next(kubectl_args, None)
+            elif not part.startswith("-"):
+                kubectl_verb = part
+                break
         diagnostic = (
-            Path(command[0]).name == "docker"
-            and any(
-                part in {"inspect", "ps", "ls", "info", "version"}
-                for part in command[1:]
+            (
+                Path(command[0]).name == "docker"
+                and any(
+                    part in {"inspect", "ps", "ls", "info", "version"}
+                    for part in command[1:]
+                )
             )
-        ) or (
-            Path(command[0]).name == "systemctl"
-            and any(part == "show" or part.startswith("is-") for part in command[1:])
+            or (
+                Path(command[0]).name == "systemctl"
+                and any(
+                    part == "show" or part.startswith("is-") for part in command[1:]
+                )
+            )
+            or (
+                Path(command[0]).name == "kubectl"
+                and kubectl_verb
+                in {"api-resources", "auth", "config", "get", "version", "wait"}
+            )
         )
         long_command = len(shown) > 200 or "\n" in shown or "-c" in command
         hidden = (diagnostic or long_command) and not self.verbose

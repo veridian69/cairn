@@ -102,8 +102,10 @@ for stdin. Port 8000 and **Attic only** are the defaults for optional values.
 Add `--semantic` for **Attic plus semantic search** in Linux native or Docker mode:
 
 ```sh
+falkordb_runtime="$PWD/build/falkordb-local/runtime.json"
+test -s "$falkordb_runtime"
 ./cairn-install --non-interactive --mode docker --name recall \
-  --port 8125 --semantic
+  --port 8125 --semantic --falkordb-runtime "$falkordb_runtime"
 ```
 
 The source launcher uses its own checkout. A packaged `cairn-install` command
@@ -277,6 +279,7 @@ run:
 install -m 600 /dev/null "$HOME/.local/state/cairn-openai-key"
 ${EDITOR:?Set EDITOR to your local editor} "$HOME/.local/state/cairn-openai-key"
 ./cairn-install --mode docker --name recall --semantic \
+  --falkordb-runtime "$PWD/build/falkordb-local/runtime.json" \
   --provider-key-file "$HOME/.local/state/cairn-openai-key"
 ```
 

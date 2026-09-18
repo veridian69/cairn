@@ -15,7 +15,7 @@ configure REST or MCP callers.
 
 ## Image and contract boundary
 
-`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.7.0-rc.5`. This is a
+`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.7.0-rc.6`. This is a
 local build tag, not evidence of a published or registry-verified image. Build
 from a trusted checkout or supply an operator-controlled immutable image
 reference. Record the image digest with the rendered deployment manifest. Do
