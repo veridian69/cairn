@@ -66,6 +66,12 @@ or grant itself permissions. The initial transport supports containerd on
 Linux amd64 nodes. Supply explicit node-name to SSH-host mappings; Kubernetes
 node addresses are not automatically trusted as SSH destinations.
 
+The helper always uses SSH, including when the checkout and the only Kubernetes
+node are on the same host. Before starting, verify every `--node NODE=SSH_ALIAS`
+mapping non-interactively with `ssh SSH_ALIAS true`, accept and verify its host
+key through the site's normal process, and confirm that the SSH identity can run
+the documented containerd commands through non-interactive `sudo`.
+
 The following example prepares the single node `reference` using the operator's
 existing SSH configuration alias of the same name:
 

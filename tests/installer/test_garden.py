@@ -823,3 +823,30 @@ def test_tls_verification_pins_hostname_and_each_participant(
             server.shutdown()
             server.server_close()
             thread.join()
+
+
+def test_tls_verification_reports_openssl_reason(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+
+        def reject_certificate(*_: Any, **__: Any) -> dict[str, Any]:
+            raise ssl.SSLCertVerificationError(
+                1,
+                "certificate verify failed: CA cert does not include key usage extension",
+            )
+
+        monkeypatch.setattr(garden, "_rpc", reject_certificate)
+
+        with pytest.raises(
+            InstallError, match="CA cert does not include key usage extension"
+        ):
+            garden.verify(ctx)

@@ -111,7 +111,7 @@ spec:
         env:
         - name: HTTPS_PROXY
           value: http://cairn-egress-gateway.cairn-egress.svc.cluster.local:3128
-        image: cairn:v0.7.0-rc.2
+        image: cairn:v0.7.0-rc.4
         livenessProbe:
           httpGet:
             path: /health/live
@@ -155,7 +155,7 @@ spec:
         - migrate
         - --config
         - /etc/cairn/config.yaml
-        image: cairn:v0.7.0-rc.2
+        image: cairn:v0.7.0-rc.4
         name: migrate
         securityContext:
           allowPrivilegeEscalation: false

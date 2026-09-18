@@ -808,8 +808,14 @@ def verify(
                     )
                 verified[name] = status
                 break
-            except ssl.SSLError:
-                raise InstallError("Garden TLS certificate validation failed") from None
+            except ssl.SSLError as error:
+                reason = " ".join(str(error).split())[:500]
+                raise InstallError(
+                    "Garden TLS certificate validation failed for "
+                    + (endpoint.hostname or "configured endpoint")
+                    + ": "
+                    + (reason or error.__class__.__name__)
+                ) from None
             except (OSError, http.client.HTTPException):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:

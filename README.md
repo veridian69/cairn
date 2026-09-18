@@ -35,7 +35,7 @@ remembering something does not make it true. Agents must explicitly save
 useful context—Cairn does not automatically capture all your conversations.
 
 Self-hosted · [Apache-2.0](LICENSE.md) · REST and MCP ·
-[Release candidate v0.7.0-rc.2](docs/releases/v0.7.0-rc.2.md)
+[Release candidate v0.7.0-rc.4](docs/releases/v0.7.0-rc.4.md)
 
 macOS foreground and native background memory and Attic acceptance passed on
 macOS 26 Intel and Apple Silicon. The native service uses a per-user,
@@ -74,9 +74,9 @@ cd cairn
 ./cairn-install
 ```
 
-It asks for a mode (`disposable`, `native` or `docker`), a name and a port, and
-for the two persistent modes whether you want **Attic only** or **Attic plus
-semantic search**. The [quick install](docs/install.md#quick-install-with-the-guided-installer)
+It asks for a mode (`disposable`, `native`, `docker` or `kubernetes`), a name
+and a port, and for native, Docker or Kubernetes whether you want **Attic only**
+or **Attic plus semantic search**. The [quick install](docs/install.md#quick-install-with-the-guided-installer)
 lists the prerequisites, non-interactive commands and expected result.
 
 For a first try, choose **disposable**: it checks Attic-only memory without
@@ -244,7 +244,7 @@ plane that prompted its design.
 
 ## Project information
 
-- [v0.7 candidate release notes](docs/releases/v0.7.0-rc.2.md)
+- [v0.7 candidate release notes](docs/releases/v0.7.0-rc.4.md)
 - [macOS native installation](docs/operations/macos-native.md) — login-scoped
   LaunchAgent for catalogue memory and Attic, validated on macOS 26 Intel and Apple Silicon.
 - [Earlier RC2 release notes](docs/releases/v0.1.0-rc.2.md)

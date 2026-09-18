@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import secrets
+import shlex
 import sys
 import time
 from copy import deepcopy
@@ -26,6 +27,8 @@ from cairn_install.kubernetes_garden import GARDEN_OBJECTS, GardenDeployment
 from cairn_install.kubernetes_resources import RESOURCE_APIS, ResourceJournal
 
 _KUBERNETES_NODE = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?\Z")
+IMAGE_CACHE_READY_SECONDS = 120
+IMAGE_CACHE_POLL_SECONDS = 2
 _GATEWAY_DIAGNOSTICS = {
     "shared egress gateway cairn-egress-gateway.cairn-egress:3128 is not resolvable; "
     "install docs/operations/kubernetes-gateway.md": "shared egress gateway "
@@ -340,6 +343,80 @@ class Backend:
     def validate_ownership(self) -> None:
         self._inventory()
 
+    def _wait_for_preloaded_images(
+        self, node: dict[str, Any], required: list[tuple[str, str]]
+    ) -> None:
+        name = node.get("metadata", {}).get("name")
+        uid = node.get("metadata", {}).get("uid")
+        if not isinstance(name, str) or not name or not isinstance(uid, str) or not uid:
+            raise InstallError("Preloaded image node identity is missing")
+        deadline = time.monotonic() + IMAGE_CACHE_READY_SECONDS
+        observed = node
+        while True:
+            images = observed.get("status", {}).get("images", [])
+            if not isinstance(images, list):
+                images = []
+            missing = [
+                label
+                for label, image in required
+                if not any(
+                    isinstance(item, dict)
+                    and isinstance(item.get("names"), list)
+                    and image in item["names"]
+                    for item in images
+                )
+            ]
+            if not missing:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                inspection = (
+                    shlex.join(
+                        [
+                            "kubectl",
+                            "--context",
+                            self.options["context"],
+                            "get",
+                            "node",
+                            name,
+                            "-o",
+                            "json",
+                        ]
+                    )
+                    + " | "
+                    + shlex.join(["jq", ".status.images"])
+                )
+                resume = shlex.join(
+                    ["./cairn-install", "resume", "--name", self.ctx.name]
+                )
+                raise InstallError(
+                    "Exact preloaded "
+                    + "/".join(missing)
+                    + " digest is not recorded in node "
+                    + name
+                    + " image cache after waiting for kubelet refresh; inspect "
+                    + inspection
+                    + ", then rerun "
+                    + resume
+                )
+            time.sleep(min(IMAGE_CACHE_POLL_SECONDS, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            observed = self._json(
+                self._run(
+                    "get",
+                    "node",
+                    name,
+                    "-o",
+                    "json",
+                    cluster=True,
+                    timeout=remaining,
+                )
+            )
+            if observed.get("metadata", {}).get("uid") != uid:
+                raise InstallError("Preloaded image node UID changed while waiting")
+
     def _inventory(self, *, allow_absent: bool = False) -> None:
         self._retained_assets()
         self._identity()
@@ -400,19 +477,10 @@ class Backend:
                 raise InstallError(
                     "Preloaded image requires exactly one schedulable node"
                 )
-            images = ready[0].get("status", {}).get("images", [])
-            if not any(
-                self.options["image"] in item.get("names", []) for item in images
-            ):
-                raise InstallError(
-                    "Exact preloaded digest is not recorded in the node image cache"
-                )
-            if self.garden.options is not None and not any(
-                self.garden.options["image"] in item.get("names", []) for item in images
-            ):
-                raise InstallError(
-                    "Exact preloaded Garden digest is not in the node image cache"
-                )
+            required = [("Cairn", self.options["image"])]
+            if self.garden.options is not None:
+                required.append(("Garden", self.garden.options["image"]))
+            self._wait_for_preloaded_images(ready[0], required)
         storage = self._json(
             self._run(
                 "get",

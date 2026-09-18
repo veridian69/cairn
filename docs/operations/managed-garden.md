@@ -16,6 +16,13 @@ internal CA is supported: include its PEM bundle as `tls_ca_file`, then install
 that CA or use the generated CA setting on each adapter machine. Verification
 does not skip certificate or hostname checks.
 
+An internal CA certificate must declare `basicConstraints` with `CA:TRUE` and
+`keyUsage` with `keyCertSign` (normally also `cRLSign`). The Garden leaf must
+have a DNS subject alternative name for the endpoint host and `extendedKeyUsage`
+with `serverAuth`. Python/OpenSSL enforces these properties even when `openssl
+s_client` or `curl` accepts a looser chain. The installer reports the endpoint
+hostname and the underlying OpenSSL verification reason when this check fails.
+
 `port` is the local Garden listener and must be 1024–65535. The public endpoint
 may use a different port, for example `https://garden.example.net/mcp` on 443
 through an existing TLS-forwarding ingress to the local listener on 8443.

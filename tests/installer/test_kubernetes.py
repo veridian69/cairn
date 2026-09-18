@@ -84,6 +84,8 @@ class Cluster(Context):
                 "status": {"conditions": [{"type": "Ready", "status": "True"}]},
             }
         ]
+        self.node_reads = 0
+        self.node_images_after_reads: int | None = None
         self.uid_counts: dict[str, int] = {}
         self.uv_version = "uv 0.12.14"
         self.driver = "csi.example"
@@ -203,7 +205,11 @@ class Cluster(Context):
                 )
             return result.stdout.decode()
         # Explicit binding is checked for every invocation, not only happy-path calls.
-        assert args[:3] == ["kubectl", "--context", "test-context"]
+        assert args[:3] == [
+            "kubectl",
+            "--context",
+            self.state["kubernetes"]["context"],
+        ]
         if "--namespace" in args:
             assert args[args.index("--namespace") + 1] == "alpha"
             args = args[args.index("--namespace") + 2 :]
@@ -227,7 +233,25 @@ class Cluster(Context):
         if args[:2] == ["get", "namespace"]:
             return json.dumps(self.namespace)
         if args[:2] == ["get", "nodes"]:
+            self.node_reads += 1
+            if (
+                self.node_images_after_reads is not None
+                and self.node_reads >= self.node_images_after_reads
+            ):
+                self.nodes[0]["status"]["images"] = [
+                    {"names": [IMAGE], "sizeBytes": 123}
+                ]
             return json.dumps({"items": self.nodes})
+        if args[:2] == ["get", "node"]:
+            self.node_reads += 1
+            if (
+                self.node_images_after_reads is not None
+                and self.node_reads >= self.node_images_after_reads
+            ):
+                self.nodes[0]["status"]["images"] = [
+                    {"names": [IMAGE], "sizeBytes": 123}
+                ]
+            return json.dumps(self.nodes[0])
         if args[:2] == ["get", "storageclass"]:
             return json.dumps({"provisioner": self.driver})
         if args[:2] == ["get", "csidriver"]:
@@ -663,10 +687,13 @@ def test_terminated_object_can_be_deleted_on_retry(tmp_path: Path) -> None:
     assert not ctx.objects
 
 
-def test_preloaded_probe_checks_cache_and_uses_ifnotpresent(tmp_path: Path) -> None:
+def test_preloaded_probe_checks_cache_and_uses_ifnotpresent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ctx = Cluster(tmp_path)
     ctx.state["kubernetes"].update(preloaded_image=True, image_policy="IfNotPresent")
     adapter = backend(ctx)
+    monkeypatch.setattr("cairn_install.kubernetes.IMAGE_CACHE_READY_SECONDS", 0)
     with pytest.raises(InstallError, match="cache"):
         adapter.preflight()
     ctx.nodes[0]["status"]["images"] = [{"names": [IMAGE], "sizeBytes": 123}]
@@ -685,6 +712,54 @@ def test_preloaded_probe_checks_cache_and_uses_ifnotpresent(tmp_path: Path) -> N
         workload["spec"]["template"]["spec"]["containers"][0]["imagePullPolicy"]
         == "IfNotPresent"
     )
+
+
+def test_preloaded_probe_waits_for_kubelet_image_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = Cluster(tmp_path)
+    ctx.state["kubernetes"].update(preloaded_image=True, image_policy="IfNotPresent")
+    ctx.nodes[0]["status"]["images"] = [{"names": None, "sizeBytes": 0}]
+    ctx.node_images_after_reads = 2
+    monkeypatch.setattr("cairn_install.kubernetes.time.sleep", lambda _: None)
+
+    backend(ctx).preflight()
+
+    assert ctx.node_reads == 2
+
+
+def test_preloaded_probe_limits_node_read_to_remaining_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn_install import kubernetes
+
+    ctx = Cluster(tmp_path)
+    ctx.state["kubernetes"].update(
+        preloaded_image=True, image_policy="IfNotPresent", context="lab;prod"
+    )
+    adapter = backend(ctx)
+    clock = DeletionClock()
+    monkeypatch.setattr(kubernetes, "time", clock, raising=False)
+    original = ctx.command
+    node_timeouts: list[float] = []
+
+    def slow_node_read(argv: Sequence[str], **kwargs: Any) -> str:
+        if "get" in argv and "node" in argv:
+            node_timeouts.append(kwargs["timeout"])
+            assert kwargs["timeout"] <= 120 - clock.elapsed
+            clock.elapsed += kwargs["timeout"]
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(ctx, "command", slow_node_read)
+
+    with pytest.raises(
+        InstallError, match="after waiting for kubelet refresh"
+    ) as caught:
+        adapter.preflight()
+
+    assert clock.elapsed == 120
+    assert node_timeouts == [118]
+    assert "kubectl --context 'lab;prod'" in str(caught.value)
 
 
 def test_falkordb_receipt_rejects_replaced_or_ineligible_nodes(tmp_path: Path) -> None:

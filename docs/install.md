@@ -348,9 +348,11 @@ validation; do not assume the Kubernetes result proves OpenShift support.
   shared egress gateway may require separate administrator authority; the
   installer never mutates cluster prerequisites.
 - For semantic retrieval: the pinned FalkorDB image, provider credentials supplied
-  as Secret files, and the shared egress gateway with its approved provider
-  allow-list. Provider calls can incur charges. The index-free path requires none
-  of those semantic dependencies.
+  as Secret files, the shared egress gateway with its approved provider allow-list,
+  and an existing owner-controlled site GitOps checkout for the gateway record.
+  The gateway procedure requires its six generated record files to be committed
+  with a clean worktree before deployment. Provider calls can incur charges. The
+  index-free path requires none of those semantic dependencies.
 
 Resolve missing local tools using [the prerequisite instructions](#get-missing-prerequisites).
 From the repository root, install the locked manifest tooling and put the pinned

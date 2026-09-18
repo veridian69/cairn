@@ -12,8 +12,8 @@ _INSTANCE_LABEL = "app.kubernetes.io/instance"
 _INSTANCE_PLACEHOLDER = "REPLACE_WITH_PER_INSTANCE_UUID"
 _RETAIN_PVCS = {"whenDeleted": "Retain", "whenScaled": "Retain"}
 _SOURCE_DIGESTS = {
-    False: "a06d1a2acbc9a648318ad6b34691be4887f0e7bb1692ad4c0f1cd351f2ec806b",
-    True: "f9222e856fa3d16ba013a242affd4fbd02c81b6e3acf891d58a442334cf186fd",
+    False: "fe93ed8427291bbb5256e7a73b9fe1b3974eac95a7e06b4f99b7b1b53bb92d7f",
+    True: "bcdc14c502effd6410aef207a3bef74cd8fdf344394bfa06bf9591bfadc7d037",
 }
 _INVENTORIES = {
     False: {

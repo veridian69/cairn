@@ -47,8 +47,11 @@ The installer does not change that account-wide policy. macOS native mode is
 login-scoped: it starts at user login and stops at logout.
 
 Kubernetes mode requires `uv 0.12.14` for the locked YAML helper runtime, an
-explicit kube context, a dedicated namespace that an administrator has created
-and labelled for this instance, Ready Linux/amd64 capacity, a CSI StorageClass
+explicit kube context, and a dedicated namespace that an administrator has
+created and labelled `cairn.example.invalid/instance: <installation-name>`.
+See [namespace and render preparation](deployment.md#namespace-and-render-preparation)
+for the exact create, label and verification commands. It also requires Ready
+Linux/amd64 capacity, a CSI StorageClass
 that supports `ReadWriteOncePod`, an immutable Cairn image digest, and working
 CNI and DNS. It needs namespace-scoped mutation permissions for the documented
 resources and cluster-scoped read access to Namespace, Nodes, StorageClass and
@@ -159,14 +162,17 @@ For that single-node exception, stage the locally built Cairn image with the
 same reviewed helper used for the FalkorDB runtime. This is a
 cluster-administrator operation: it requires explicit SSH host mapping and
 non-interactive sudo on the node. It does not create Kubernetes resources or
-give the installer host access. Run it from the trusted checkout after building
-the local `cairn:v0.7.0-rc.2` image. Docker must use its containerd image store,
+give the installer host access. Run it from the trusted checkout. The first
+commands below read the candidate tag from `deploy/images.lock` and build it;
+do not copy a release number into this procedure. Docker must use its containerd image store,
 so `docker image save` preserves the OCI index; the staging helper verifies that
 property and refuses the archive before it transfers anything to a node.
 
 ```sh
 set -eu
-source_image='cairn:v0.7.0-rc.2'
+source_image="$(awk -F= '$1 == "CAIRN_IMAGE" {print $2}' deploy/images.lock)"
+test -n "$source_image"
+make image IMAGE="$source_image"
 digest="$(docker image inspect "$source_image" --format '{{.Id}}')"
 case "$digest" in sha256:[0-9a-f][0-9a-f]*) ;; *) exit 1 ;; esac
 local_tag="cairn.local/cairn-runtime:build-${digest#sha256:}"
@@ -184,10 +190,15 @@ The receipt records staging evidence but is not passed to `cairn-install` for
 the Cairn image. The resulting image has the form
 `cairn.local/cairn-runtime@sha256:…`. Use
 `--kube-image "$cairn_image" --kube-preloaded-image` in
-the installation command. The installer proves that exact digest can execute
-before it creates the instance. Retain the archive for a later restage. The
-manual GitOps procedure remains registry-only; it does not cover this guided,
-single-node exception.
+the installation command. The installer waits up to 120 seconds for kubelet to
+report a just-staged digest in the node image cache, then proves that exact
+digest can execute before it creates the instance. If that wait expires, inspect
+the node report with `kubectl --context CONTEXT get node NODE -o json | jq
+'.status.images'`. Once every digest reported as missing appears, rerun
+`./cairn-install resume --name NAME`; it reuses the recorded installation
+inputs. Retain the
+archive for a later restage. The manual GitOps procedure remains registry-only;
+it does not cover this guided, single-node exception.
 
 ## Output and diagnostics
 
