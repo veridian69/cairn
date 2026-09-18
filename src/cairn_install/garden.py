@@ -619,16 +619,34 @@ def profiles(ctx: Context) -> None:
                     }
                 }
             write_json_config(ctx, directory / (adapter + ".mcp.example.json"), mcp)
+        if adapter == "claude":
+            setup = (
+                "Copy claude.profile.example.json to profile.json; it needs no edits. "
+                "In claude.mcp.example.json, replace the REPLACE paths with the installed "
+                "a2a binary and this bundle's profile.json. "
+            )
+        elif adapter == "codex":
+            setup = (
+                "Copy codex.profile.example.json to profile.json and replace its REPLACE "
+                "task and control-socket values. In codex.mcp.example.toml, replace the "
+                "REPLACE paths with the installed a2a binary and this bundle's profile.json. "
+            )
+        else:
+            setup = (
+                "Copy opencode.profile.example.json to profile.json and replace its REPLACE "
+                "host-session values. In opencode.mcp.example.json, replace the REPLACE paths "
+                "with the installed a2a binary and this bundle's profile.json. Explicitly configure "
+                "the local server endpoint and protected password file. "
+            )
         ctx.write_file(
             directory / "README.md",
             f"# Garden participant {name}\n\n"
             "Copy only this participant's directory to its agent machine, using a secure channel.\n"
             "Keep agent.token mode 0600 and this directory mode 0700. Do not distribute installer "
             "administrator credentials, issuance captures or other participants' directories.\n\n"
-            f"Install a2a, copy {filename} to profile.json, and replace all REPLACE placeholders "
-            "with your existing local task/session and control socket. For OpenCode, explicitly "
-            "configure its local server endpoint and protected password file. No host session is created.\n\n"
-            "Run `a2a doctor --profile /absolute/path/profile.json`, then "
+            "Install a2a. " + setup + "No host session is created.\n\n"
+            "Run `a2a doctor --profile /absolute/path/profile.json` to verify the Garden "
+            "binding, then "
             "`a2a connect --profile /absolute/path/profile.json` for the MCP stdio bridge. "
             "Configure the agent's MCP command to this a2a connect invocation; no bearer belongs in argv.\n\n"
             "For Claude use a2a connect as its MCP server. For Codex/OpenCode run "

@@ -223,6 +223,11 @@ class Backend:
     def _falkordb_image(self) -> str:
         runtime = self.ctx.state.get("falkordb_runtime")
         if runtime is None:
+            recorded = self._docker.get("semantic", {}).get("falkordb_image")
+            if isinstance(recorded, str) and re.fullmatch(
+                r"[^@\s]+@sha256:[0-9a-f]{64}", recorded
+            ):
+                return recorded
             return FALKORDB_IMAGE
         image = runtime.get("image") if isinstance(runtime, dict) else None
         if not isinstance(image, str) or not re.fullmatch(

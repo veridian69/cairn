@@ -12,6 +12,12 @@ stages use Ubuntu 24.04 pinned at digest
 Cairn does not publish this database image to GHCR or attach database images or
 source bundles to new releases.
 
+The `FALKORDB_IMAGE` value in `deploy/images.lock` and the committed Kubernetes
+renders is an all-zero, deliberately unusable placeholder. It is not a fallback
+image. For manual Compose or Kubernetes deployment, replace it with the reviewed
+local runtime descriptor's `image` value; guided native, Docker and Kubernetes
+installs require that local runtime explicitly.
+
 The recipe fetches the pinned sources during each local build, compiles the
 upstream FalkorDB module and omits the browser. It takes `run.sh` and
 `gen-certs.sh` from that verified FalkorDB checkout and copies the FalkorDB and

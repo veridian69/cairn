@@ -74,6 +74,7 @@ class Cluster(Context):
             {
                 "metadata": {
                     "name": "node1",
+                    "uid": "uid-node1",
                     "labels": {
                         "kubernetes.io/os": "linux",
                         "kubernetes.io/arch": "amd64",
@@ -89,8 +90,15 @@ class Cluster(Context):
         self.allowed = True
         self.denied_permissions: set[tuple[str, str, str]] = set()
         self.fail_probe = False
+        self.probe_failure_message: str | None = None
         self.falkordb_probe_mutation: str | None = None
         if semantic:
+            self.state["kubernetes"]["falkordb_receipt"] = {
+                "schema_version": 1,
+                "image": "cairn.local/falkordb-runtime@sha256:" + "b" * 64,
+                "archive_sha256": "c" * 64,
+                "nodes": [{"name": "node1", "uid": "uid-node1"}],
+            }
             provider = self.root / "credentials" / "openai-api-key"
             self.write_file(provider, "provider-secret-value\n", secret=True)
             self.state["provider_key_file"] = str(provider)
@@ -136,6 +144,25 @@ class Cluster(Context):
                     doc["status"]["containerStatuses"][0]["imageID"] = (
                         "docker-pullable://wrong.example/image@sha256:" + "d" * 64
                     )
+            if (self.fail_probe or self.probe_failure_message) and doc["metadata"][
+                "name"
+            ].startswith("cairn-probe-"):
+                doc["status"] = {
+                    "phase": "Failed",
+                    "containerStatuses": [
+                        {
+                            "name": "probe",
+                            "state": {
+                                "terminated": {
+                                    "exitCode": 1,
+                                    "reason": "Error",
+                                    "message": self.probe_failure_message
+                                    or "probe failed",
+                                }
+                            },
+                        }
+                    ],
+                }
         self.objects[key] = doc
         if doc["kind"] == "StatefulSet":
             for claim in doc["spec"]["volumeClaimTemplates"]:
@@ -399,6 +426,38 @@ def test_failed_probe_always_deletes_exact_probe_objects(tmp_path: Path) -> None
         len([args for args, _ in ctx.calls if "--raw" in args and "delete" in args])
         == 2
     )
+
+
+def test_failed_semantic_probe_reports_safe_gateway_remediation_without_waiting(
+    tmp_path: Path,
+) -> None:
+    ctx = Cluster(tmp_path, semantic=True)
+    ctx.probe_failure_message = (
+        "shared egress gateway cairn-egress-gateway.cairn-egress:3128 is not "
+        "resolvable; install docs/operations/kubernetes-gateway.md"
+    )
+
+    with pytest.raises(InstallError, match="shared egress gateway"):
+        backend(ctx).preflight()
+
+    assert not any("wait" in args for args, _ in ctx.calls)
+    assert not ctx.objects
+
+
+def test_failed_probe_never_replays_untrusted_termination_message(
+    tmp_path: Path,
+) -> None:
+    ctx = Cluster(tmp_path, semantic=True)
+    ctx.probe_failure_message = (
+        "shared egress gateway cairn-egress-gateway.cairn-egress:3128 is not "
+        "resolvable; install docs/operations/kubernetes-gateway.md provider-secret"
+    )
+
+    with pytest.raises(InstallError) as caught:
+        backend(ctx).preflight()
+
+    assert "provider-secret" not in str(caught.value)
+    assert "Exact-image probe failed" in str(caught.value)
 
 
 def test_prepare_protects_credentials_and_records_creation_before_mutation(

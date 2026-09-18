@@ -57,6 +57,8 @@ def test_kubernetes_guided_installation_documents_operator_interface() -> None:
         "registry-credential policy",
         "IfNotPresent",
         "exactly one schedulable node",
+        "scripts/kubernetes_image_stage.py",
+        "cairn.local/cairn-runtime@sha256",
         "Context and namespace are immutable on resume",
         "kubectl --context reference --namespace cairn-v05 port-forward service/cairn 8126:8000",
         "status` prints a temporary, explicit port-forward command",

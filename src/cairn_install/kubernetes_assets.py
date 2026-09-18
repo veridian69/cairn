@@ -13,7 +13,7 @@ _INSTANCE_PLACEHOLDER = "REPLACE_WITH_PER_INSTANCE_UUID"
 _RETAIN_PVCS = {"whenDeleted": "Retain", "whenScaled": "Retain"}
 _SOURCE_DIGESTS = {
     False: "a06d1a2acbc9a648318ad6b34691be4887f0e7bb1692ad4c0f1cd351f2ec806b",
-    True: "80144d3e11e225f9b52f26b02c2348a86cfe94f8156c8f6dbc74d7fdfdfbf70c",
+    True: "f9222e856fa3d16ba013a242affd4fbd02c81b6e3acf891d58a442334cf186fd",
 }
 _INVENTORIES = {
     False: {

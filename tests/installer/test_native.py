@@ -75,6 +75,16 @@ def test_local_runtime_native_resume_refuses_changed_image_without_preflight(
         index.validate_ownership()
 
 
+def test_legacy_native_resume_retains_its_recorded_falkordb_image(
+    tmp_path: Path,
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    legacy = "ghcr.io/example/legacy-falkordb@sha256:" + "a" * 64
+    ctx.state["resources"]["native_index_image"] = legacy
+
+    assert native._NativeIndex(cast(Context, ctx))._locked_image() == legacy  # noqa: SLF001
+
+
 @pytest.mark.parametrize("operation", ["validate_ownership", "_ensure_container"])
 def test_local_runtime_native_refuses_owned_container_with_different_image(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str

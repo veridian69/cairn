@@ -7,6 +7,7 @@ import json
 import re
 import secrets
 import sys
+import time
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,20 @@ from cairn_install.kubernetes_garden import GARDEN_OBJECTS, GardenDeployment
 from cairn_install.kubernetes_resources import RESOURCE_APIS, ResourceJournal
 
 _KUBERNETES_NODE = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?\Z")
+_GATEWAY_DIAGNOSTICS = {
+    "shared egress gateway cairn-egress-gateway.cairn-egress:3128 is not resolvable; "
+    "install docs/operations/kubernetes-gateway.md": "shared egress gateway "
+    "cairn-egress-gateway.cairn-egress:3128 is not resolvable; install "
+    "docs/operations/kubernetes-gateway.md",
+    "shared egress gateway cairn-egress-gateway.cairn-egress:3128 is not reachable; "
+    "install docs/operations/kubernetes-gateway.md": "shared egress gateway "
+    "cairn-egress-gateway.cairn-egress:3128 is not reachable; install "
+    "docs/operations/kubernetes-gateway.md",
+    "shared egress gateway cairn-egress-gateway.cairn-egress:3128 did not accept provider "
+    "CONNECT; install docs/operations/kubernetes-gateway.md": "shared egress gateway "
+    "cairn-egress-gateway.cairn-egress:3128 did not accept provider CONNECT; install "
+    "docs/operations/kubernetes-gateway.md",
+}
 
 
 def _falkordb_probe_name(node: str) -> str:
@@ -472,17 +487,41 @@ class Backend:
                 "resources": {"requests": {"storage": "1Mi"}},
             },
         }
-        script = (
-            "import pathlib,socket,subprocess; import cairn; "
-            'subprocess.run(["cairn","--help"],check=True,timeout=20); '
-            'pathlib.Path("/probe/check").write_text("rwop"); '
-            'socket.getaddrinfo("kubernetes.default.svc.cluster.local",443); '
+        script = "\n".join(
+            (
+                "import pathlib",
+                "import socket",
+                "import subprocess",
+                "import cairn",
+                'subprocess.run(["cairn", "--help"], check=True, timeout=20)',
+                'pathlib.Path("/probe/check").write_text("rwop")',
+                'socket.getaddrinfo("kubernetes.default.svc.cluster.local", 443)',
+            )
         )
         if self.ctx.semantic:
-            script += (
-                's=socket.create_connection(("cairn-egress-gateway.cairn-egress.svc.cluster.local",3128),10); '
-                's.sendall(b"CONNECT api.openai.com:443 HTTP/1.1\\r\\nHost: api.openai.com:443\\r\\n\\r\\n"); '
-                'reply=s.recv(4096); s.close(); assert reply.split()[1]==b"200", "gateway CONNECT failed"; '
+            script += "\n" + "\n".join(
+                (
+                    "def gateway_failure(detail):",
+                    '    pathlib.Path("/dev/termination-log").write_text(',
+                    '        "shared egress gateway cairn-egress-gateway.cairn-egress:3128 " + detail + "; "',
+                    '        "install docs/operations/kubernetes-gateway.md"',
+                    "    )",
+                    "    raise SystemExit(1)",
+                    "try:",
+                    '    gateway = "cairn-egress-gateway.cairn-egress.svc.cluster.local"',
+                    "    socket.getaddrinfo(gateway, 3128)",
+                    "except socket.gaierror:",
+                    '    gateway_failure("is not resolvable")',
+                    "try:",
+                    "    s = socket.create_connection((gateway, 3128), 10)",
+                    '    s.sendall(b"CONNECT api.openai.com:443 HTTP/1.1\\r\\nHost: api.openai.com:443\\r\\n\\r\\n")',
+                    "    reply = s.recv(4096)",
+                    "    s.close()",
+                    "except OSError:",
+                    '    gateway_failure("is not reachable")',
+                    'if len(reply.split()) < 2 or reply.split()[1] != b"200":',
+                    '    gateway_failure("did not accept provider CONNECT")',
+                )
             )
         pod: dict[str, Any] = {
             "apiVersion": "v1",
@@ -551,16 +590,9 @@ class Backend:
         try:
             self.resources.create(claim)
             self.resources.create(pod)
-            self._run(
-                "wait",
-                "--for=jsonpath={.status.phase}=Succeeded",
-                keys[0],
-                "--timeout=180s",
-                timeout=190,
+            observed = self._wait_for_probe(
+                keys[0], timeout=180, description="Exact-image probe"
             )
-            observed = self.resources.get(keys[0])
-            if not observed:
-                raise InstallError("Exact-image probe disappeared")
             self.resources.owned(keys[0], observed)
             statuses = observed.get("status", {}).get("containerStatuses", [])
             expected_images = {
@@ -586,6 +618,31 @@ class Backend:
             # Do not delete the PVC if the Pod could not be safely removed.
             for key in keys:
                 self.resources.delete(key)
+
+    def _wait_for_probe(
+        self, key: str, *, timeout: int, description: str
+    ) -> dict[str, Any]:
+        """Return a terminal probe result without hiding a Failed phase for timeout."""
+        deadline = time.monotonic() + timeout
+        while True:
+            observed = self.resources.get(key)
+            if not observed:
+                raise InstallError(description + " disappeared")
+            phase = observed.get("status", {}).get("phase")
+            if phase == "Succeeded":
+                return observed
+            if phase == "Failed":
+                message = ""
+                for status in observed.get("status", {}).get("containerStatuses", []):
+                    terminated = status.get("state", {}).get("terminated", {})
+                    candidate = terminated.get("message")
+                    if isinstance(candidate, str) and candidate in _GATEWAY_DIAGNOSTICS:
+                        message = ": " + _GATEWAY_DIAGNOSTICS[candidate]
+                        break
+                raise InstallError(description + " failed" + message)
+            if time.monotonic() >= deadline:
+                raise InstallError(description + f" did not finish within {timeout}s")
+            time.sleep(1)
 
     def _probe_falkordb_cache(self) -> None:
         if not isinstance(self.falkordb_receipt, dict):
@@ -656,16 +713,9 @@ class Backend:
             self.resources.delete(key)
             try:
                 self.resources.create(pod)
-                self._run(
-                    "wait",
-                    "--for=jsonpath={.status.phase}=Succeeded",
-                    key,
-                    "--timeout=90s",
-                    timeout=100,
+                observed = self._wait_for_probe(
+                    key, timeout=90, description="FalkorDB exact-image cache probe"
                 )
-                observed = self.resources.get(key)
-                if not observed:
-                    raise InstallError("FalkorDB exact-image cache probe disappeared")
                 self.resources.owned(key, observed)
                 observed_spec = observed.get("spec", {})
                 containers = observed_spec.get("containers", [])

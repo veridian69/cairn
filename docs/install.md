@@ -248,8 +248,9 @@ PY
 Expect an executable path for every tool, curl 8.4.0 or newer, jq 1.6 or newer,
 and uv `0.12.14`. `python3 --version` reports the system Python and may show
 `3.14.x`; it is used here only for the standard-library socket check.
-`uv python find 3.14` must report the separate Python 3.14 interpreter used by
-Cairn. Do not replace the system interpreter. Expect writable-directory checks
+`uv python find 3.14` must report a Python 3.14 interpreter discoverable by
+uv. Do not replace the system interpreter. On a distribution whose system
+Python is already 3.14, that system path is expected and acceptable. Expect writable-directory checks
 and successful loopback binding to produce no output. A bind error means
 port 8000 is already in use. Both documented native procedures use port 8000;
 resolve the conflict before continuing, or use the Docker Compose procedure,
@@ -331,8 +332,10 @@ validation; do not assume the Kubernetes result proves OpenShift support.
   are needed locally only if you build the Cairn image yourself.
 - A reviewed Cairn image available to the workers by immutable digest, including
   any registry pull credentials under the cluster's normal policy. The checkout's
-  `cairn:v0.7.0-rc.1` tag is a local build tag, not a published registry image. See the
-  [image boundary](operations/deployment.md).
+  `CAIRN_IMAGE` tag in `deploy/images.lock` is a local build tag, not a published
+  registry image. The guided installer also supports its documented, single-node
+  preloaded-image exception; the manual procedure below remains registry-only.
+  See the [image boundary](operations/deployment.md).
 - A dedicated namespace and an approved CSI StorageClass supporting
   `ReadWriteOncePod`, reliable POSIX locks and `fsync`. NFS and other shared or
   network filesystems are unsuitable for the SQLite WAL catalogue.
@@ -388,8 +391,10 @@ in this order. All site-specific values must be chosen before applying anything:
 2. Generate the [complete site overlay](operations/kubernetes-site.md) with the
    dedicated namespace, stable instance UUID, registry-published image digest and
    approved storage class, then complete namespace preparation and the
-   preflight probes. The image must be published to a registry first; a local
-   containerd import alone is not this installation path. Use the
+   preflight probes. This manual path requires a registry image; for the guided
+   single-node preloaded-image exception, use the
+   [guided installation reference](operations/guided-installation.md#install-to-an-existing-kubernetes-namespace).
+   Use the
    [targeted instance-label example](operations/deployment.md#customise-instance-labels-without-changing-external-destinations)
    to replace existing labels. Verify DNS/gateway destination selectors and
    namespace selectors remain intact and retain both default-deny directions.

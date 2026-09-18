@@ -16,7 +16,10 @@
 CAIRN_IMAGE=cairn:v0.7.0-rc.2
 
 # P-63: the per-instance FalkorDB workload, included by choice (I-91).
-FALKORDB_IMAGE=ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578
+# This deliberately impossible placeholder is never a published Cairn image.
+# A manual semantic deployment must replace it with its reviewed local runtime;
+# guided installs require and retain that runtime explicitly.
+FALKORDB_IMAGE=cairn.local/falkordb-runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000
 
 # P-64: the cluster egress gateway realising I-93.
 EGRESS_PROXY_IMAGE=ubuntu/squid:7.2-26.04_edge@sha256:44eee73a21554c4732d6a5daee675f3a33395f36017d7bf7cc8ccb455b1f9665

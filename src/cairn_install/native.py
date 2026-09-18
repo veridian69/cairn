@@ -1283,6 +1283,11 @@ class _NativeIndex:
             if self.ctx.state["resources"].get("native_index_image", image) != image:
                 raise InstallError("Recorded FalkorDB runtime image changed")
             return image
+        recorded = self.ctx.state["resources"].get("native_index_image")
+        if isinstance(recorded, str) and re.fullmatch(
+            r"[^@\s]+@sha256:[0-9a-f]{64}", recorded
+        ):
+            return recorded
         path = self.ctx.source / "deploy" / "images.lock"
         try:
             lines = path.read_text(encoding="utf-8").splitlines()

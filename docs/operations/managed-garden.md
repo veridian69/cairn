@@ -141,12 +141,19 @@ do not guess them. Use `garden-config --host claude|codex|opencode --profile ...
 configuration. See [shared Garden and attention adapters](shared-garden.md) for
 the exact host launch, hook and `garden-session` lifecycle procedures.
 
-Installation verifies authenticated MCP status for the exact instance, scope,
-classification and participant bindings, then checks again after restart. Local
-and port-forward verification still validates the public certificate hostname.
-It does not prove that every remote machine's DNS, route or firewall works; run
-`a2a doctor --profile /absolute/path/profile.json` from each adapter machine.
-Add `--host` to test the local attention attachment as well.
+Installation's `garden_verify` stage verifies authenticated MCP status for the
+exact instance, scope, classification and participant bindings, then checks
+again after restart. Local and port-forward verification still validates the
+public certificate hostname. This is the server-side deployment check.
+
+`a2a doctor --profile /absolute/path/profile.json` verifies the authenticated
+Garden binding. Add `--host` only when testing the local attention attachment;
+that form requires a live local agent host. An `agent host rejected delivery`
+result can represent Garden authentication or attachment rejection, so confirm
+the profile's participant and credential before diagnosing either side. The
+server-side `garden_verify` result and an HTTPS handshake ending in
+unauthenticated `401` establish the deployment before adapter bundles are
+distributed; each adapter still needs its own DNS, route and firewall test.
 
 ## Recovery and removal
 

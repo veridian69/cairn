@@ -91,6 +91,17 @@ def test_local_runtime_resume_refuses_changed_image_without_preflight(
         backend.validate_ownership()
 
 
+def test_legacy_semantic_resume_retains_its_recorded_falkordb_image(
+    tmp_path: Path,
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    legacy = "ghcr.io/example/legacy-falkordb@sha256:" + "a" * 64
+    backend = Backend(cast(Context, ctx))
+    backend._docker["semantic"] = {"falkordb_image": legacy}  # noqa: SLF001
+
+    assert backend._falkordb_image() == legacy  # noqa: SLF001
+
+
 class FakeContext:
     def __init__(self, tmp_path: Path, *, semantic: bool = False) -> None:
         self.directory = tmp_path / "journal"
