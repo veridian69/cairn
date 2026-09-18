@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "source_revision": "4bc12e70ba1e90775b4a39e049e6ef35f6c0e9ef",
+  "source_revision": "13228c733debdd57ecfc80707d6f392273e807b1",
   "release_configuration": {
-    "files.json": "ed56147227c3cd2760956ec5bf02107efd0972779f988bf96d188a0eb9761698",
+    "files.json": "c8ced9c6d2435db1dc795a2c8205683bfe54b246e518efe84baf18d24697ce55",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "3b63ea91b5ba334e1a27d98cd8dbcc661e3e791e86c2f6e7eedd672f76d49dcc",
@@ -1662,7 +1662,7 @@
       "mode": 420
     },
     "docs/operations/managed-garden.md": {
-      "sha256": "8db80d4bba422a4c70ab35382ae7b7e1d60efcb21bf22c0f51559a8b081b6d83",
+      "sha256": "1c7cf7cde87885231b73ee4b550f72fa5a5c14bc676d45fc98932c91905c6e34",
       "mode": 420
     },
     "docs/operations/manual-disposable-installation.md": {
@@ -1803,6 +1803,10 @@
     },
     "scripts/fetch-uv": {
       "sha256": "4cff20b9405065b68e6a40066cdda536a6ee92f0ebae9b8254be245b4db615ee",
+      "mode": 493
+    },
+    "scripts/generate-garden-tls": {
+      "sha256": "115e329654801ba8823d38baa747d3727976e06f9c48914a4daab8ad16167519",
       "mode": 493
     },
     "scripts/graphiti-smoke": {
@@ -3221,6 +3225,10 @@
       "sha256": "1e4c772b65ac802cd8f27f37079b5d39788aa641f96213a299d1a689d06afcf3",
       "mode": 420
     },
+    "tests/deploy/test_generate_garden_tls.py": {
+      "sha256": "53ec70ed7825d614c93199dc03316e7313cbebb3233d7e921d015b87d456d3e5",
+      "mode": 420
+    },
     "tests/deploy/test_kind_acceptance.py": {
       "sha256": "d3ef0918368abaf28d875db7168b3cd20004364c57dd0cebf3a40d35daef5209",
       "mode": 420
@@ -3322,7 +3330,7 @@
       "mode": 420
     },
     "tests/installer/test_docs.py": {
-      "sha256": "4e076dbad904ab7e3d2e35d7535c6744aae3cea31d4f5dee68b2665c101ceeb3",
+      "sha256": "50c28f151aa7bebbe6bdf40bebd28dcad126b8c998e86685f5c91f300a2dff1f",
       "mode": 420
     },
     "tests/installer/test_garden.py": {

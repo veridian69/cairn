@@ -27,6 +27,16 @@ hostname and the underlying OpenSSL verification reason when this check fails.
 may use a different port, for example `https://garden.example.net/mcp` on 443
 through an existing TLS-forwarding ingress to the local listener on 8443.
 
+For a private test or lab CA, the repository helper generates and validates the
+CA, server key and certificate chain, then prints matching Garden JSON:
+
+```sh
+scripts/generate-garden-tls garden.example.net /home/cairn/garden-tls
+```
+
+Run `scripts/generate-garden-tls` with no arguments to see its usage and a
+complete example. Managed sites should use their site PKI.
+
 Example `/home/cairn/garden.json` (replace paths, DNS, scope and expiry):
 
 ```json
