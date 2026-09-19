@@ -3,6 +3,7 @@
 """
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,10 @@ DEEP = [REPO, COMPONENT]
 
 
 def fact_row(instance: Instance, fact_id: str) -> dict[str, object]:
-    with sqlite3.connect(instance.data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(instance.data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         connection.row_factory = sqlite3.Row
         row = connection.execute(
             "SELECT trust, classification, scope_segments, derived_from "

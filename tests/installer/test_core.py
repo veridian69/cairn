@@ -49,6 +49,44 @@ def test_quiet_commands_keep_diagnostics_in_plain_log(
         assert "diagnostic-detail" in (ctx.directory / "commands.log").read_text()
 
 
+def test_quiet_kubectl_reads_stay_in_the_transcript(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    kubectl = tmp_path / "kubectl"
+    kubectl.write_text("#!/bin/sh\nprintf 'synthetic pod inventory\\n'\n")
+    kubectl.chmod(0o755)
+    with create(tmp_path) as ctx:
+        assert "synthetic pod inventory" in ctx.command(
+            [str(kubectl), "--context", "test", "get", "pods", "-o", "json"]
+        )
+        assert capsys.readouterr().out == ""
+        log = (ctx.directory / "commands.log").read_text()
+        assert "kubectl --context test get pods -o json" in log
+        assert "synthetic pod inventory" in log
+
+
+def test_kubectl_context_named_like_read_does_not_hide_mutation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    kubectl = tmp_path / "kubectl"
+    kubectl.write_text("#!/bin/sh\nprintf 'deleted synthetic resource\\n'\n")
+    kubectl.chmod(0o755)
+    with create(tmp_path) as ctx:
+        ctx.command(
+            [
+                str(kubectl),
+                "--context",
+                "get",
+                "--namespace",
+                "wait",
+                "delete",
+                "pod/demo",
+            ]
+        )
+        output = capsys.readouterr().out
+        assert "delete pod/demo" in output
+
+
 def test_verbose_output_still_redacts_secrets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -267,3 +305,29 @@ def test_verbose_directory_changes_are_visible_and_redacted(
         assert "(cd " not in output
         assert "secret-value" not in output
         assert "[redacted]" in output
+
+
+def test_private_stdin_reaches_child_without_disclosing_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Catches stdin omission and accidental publication of secret input/output.
+    with create(tmp_path) as ctx:
+        payload = b"private-input-not-registered-for-redaction"
+        result = ctx.command(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+            ],
+            stdin_data=payload,
+            private=True,
+        )
+        assert result == payload.decode()
+        assert payload.decode() not in (ctx.directory / "commands.log").read_text()
+        assert payload.decode() not in capsys.readouterr().out
+
+
+def test_stdin_requires_private_output(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        with pytest.raises(InstallError, match="private"):
+            ctx.command([sys.executable, "-c", "pass"], stdin_data=b"secret")

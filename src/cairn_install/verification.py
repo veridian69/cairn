@@ -39,6 +39,7 @@ def request(
         headers["Authorization"] = "Bearer " + token
     if data is not None:
         headers["Content-Type"] = "application/json"
+    if key:
         headers["Idempotency-Key"] = key
     try:
         with build_opener(ProxyHandler({}), NoRedirect()).open(
@@ -48,9 +49,10 @@ def request(
             if response.status != 200 or len(raw) > MAX_OUTPUT:
                 raise InstallError(f"Unexpected or oversized response from {endpoint}")
     except HTTPError as error:
-        raise InstallError(
-            f"{endpoint} returned HTTP {error.code}; retained state is unchanged"
-        ) from None
+        with error:
+            raise InstallError(
+                f"{endpoint} returned HTTP {error.code}; retained state is unchanged"
+            ) from None
     except (URLError, TimeoutError, OSError) as error:
         raise InstallError(
             f"{endpoint} connection failed; inspect service logs and use resume"

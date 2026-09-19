@@ -9,6 +9,7 @@ pin their REST mapping, not re-derive them.
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid1
@@ -226,7 +227,10 @@ EXTERNAL_EVIDENCE = {
 
 
 def fact_rows(config: CairnConfig) -> list[tuple[str, str, int]]:
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         return connection.execute(
             "SELECT f.fact_id, f.trust, "
             "EXISTS (SELECT 1 FROM fact_invalidations i "
@@ -619,7 +623,10 @@ async def test_a_rejected_batch_leaves_no_partial_custody(tmp_path: Path) -> Non
 
     assert response.status_code == 400
     assert response.json()["failure"]["code"] == "secret_rejected"
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         for table in ("assertions", "facts", "evidence_records", "evidence_outbox"):
             count = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             assert count == 0, table
@@ -796,7 +803,10 @@ async def test_a_non_version_4_correlation_header_cannot_suppress_a_denial(
         assert adopted.version == 4
         assert str(adopted) != submitted
     # The denial is durable, which is exactly what the defect destroyed.
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         denials = connection.execute(
             "SELECT COUNT(*) FROM audit_events WHERE chain_kind = 'instance'"
         ).fetchone()[0]

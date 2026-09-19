@@ -67,8 +67,9 @@ def _post(
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             body = response.read()
     except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", "replace")
-        raise DeniedError(path, error.code, detail) from None
+        with error:
+            detail = error.read().decode("utf-8", "replace")
+            raise DeniedError(path, error.code, detail) from None
     except OSError as error:
         raise RoundTripError(f"{path} did not complete: {error}") from None
     answer: dict[str, Any] = json.loads(body)

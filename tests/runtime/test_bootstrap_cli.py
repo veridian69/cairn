@@ -5,6 +5,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1052,7 +1053,10 @@ def test_cli_invalid_label_is_explicit_and_leaves_catalogue_unchanged(
         _bootstrap(config)
     config_path = tmp_path / "config.yaml"
     _write_config(config_path, config)
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         before = tuple(connection.iterdump())
 
     result = cli.main(
@@ -1063,7 +1067,10 @@ def test_cli_invalid_label_is_explicit_and_leaves_catalogue_unchanged(
     assert result == 4
     assert captured.out == ""
     assert json.loads(captured.err) == {"status": "error", "code": "invalid_label"}
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         assert tuple(connection.iterdump()) == before
 
 
@@ -1091,7 +1098,10 @@ def test_cli_accepts_valid_label_boundaries(
     assert captured.err == ""
     payload = json.loads(captured.out)
     assert TOKEN_PATTERN.fullmatch(payload["token"]) is not None
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         assert connection.execute(
             "SELECT label FROM principals WHERE principal_id = ?",
             (payload["principal_id"],),

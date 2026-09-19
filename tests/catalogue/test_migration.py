@@ -2,6 +2,8 @@ import hashlib
 import json
 import shutil
 import sqlite3
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, closing
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,6 +32,12 @@ from cairn.runtime.lease import DataDirectoryLease, LeaseError
 
 INSTANCE_ID = UUID("11111111-1111-4111-8111-111111111111")
 NOW = datetime(2026, 8, 5, 10, 11, 12, 123456, tzinfo=UTC)
+
+
+@pytest.fixture
+def close_connection() -> Iterator[Callable[[sqlite3.Connection], sqlite3.Connection]]:
+    with ExitStack() as stack:
+        yield lambda connection: stack.enter_context(closing(connection))
 
 
 def _config(
@@ -520,8 +528,9 @@ def test_manifest_rejects_missing_sql_resource(tmp_path: Path) -> None:
 )
 def test_migration_authorizer_rejects_control_and_temporary_sql(
     statement: str,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
 ) -> None:
-    connection = sqlite3.connect(":memory:")
+    connection = close_connection(sqlite3.connect(":memory:"))
     connection.execute("BEGIN IMMEDIATE")
 
     with pytest.raises(MigrationError) as caught:
@@ -530,8 +539,10 @@ def test_migration_authorizer_rejects_control_and_temporary_sql(
     assert caught.value.code == "forbidden_migration_sql"
 
 
-def test_migration_execution_rejects_vacuum_inside_owned_transaction() -> None:
-    connection = sqlite3.connect(":memory:")
+def test_migration_execution_rejects_vacuum_inside_owned_transaction(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(sqlite3.connect(":memory:"))
     connection.execute("BEGIN IMMEDIATE")
 
     with pytest.raises(MigrationError) as caught:
@@ -552,8 +563,9 @@ def test_migration_execution_rejects_vacuum_inside_owned_transaction() -> None:
 )
 def test_migration_authorizer_rejects_runtime_dependent_functions(
     statement: str,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
 ) -> None:
-    connection = sqlite3.connect(":memory:")
+    connection = close_connection(sqlite3.connect(":memory:"))
     connection.execute("BEGIN IMMEDIATE")
 
     with pytest.raises(MigrationError) as caught:
@@ -562,8 +574,10 @@ def test_migration_authorizer_rejects_runtime_dependent_functions(
     assert caught.value.code == "forbidden_migration_sql"
 
 
-def test_migration_authorizer_allows_main_ddl_and_deterministic_dml() -> None:
-    connection = sqlite3.connect(":memory:")
+def test_migration_authorizer_allows_main_ddl_and_deterministic_dml(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(sqlite3.connect(":memory:"))
     connection.execute("BEGIN IMMEDIATE")
 
     execute_migration_statements(
@@ -578,8 +592,10 @@ def test_migration_authorizer_allows_main_ddl_and_deterministic_dml() -> None:
     assert connection.execute("PRAGMA user_version").fetchone() == (0,)
 
 
-def test_migration_execution_requires_python_owned_transaction() -> None:
-    connection = sqlite3.connect(":memory:")
+def test_migration_execution_requires_python_owned_transaction(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(sqlite3.connect(":memory:"))
 
     with pytest.raises(MigrationError) as caught:
         execute_migration_statements(
@@ -596,11 +612,14 @@ def test_migration_execution_requires_python_owned_transaction() -> None:
     )
 
 
-def test_fresh_migration_creates_exact_foundation_catalogue(tmp_path: Path) -> None:
+def test_fresh_migration_creates_exact_foundation_catalogue(
+    tmp_path: Path,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
     result = migrate_catalogue(_config(tmp_path), lambda: NOW)
 
     assert result == Created(version=13)
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
+    connection = close_connection(sqlite3.connect(tmp_path / CATALOGUE_FILENAME))
     assert connection.execute("PRAGMA application_id").fetchone() == (APPLICATION_ID,)
     assert connection.execute("PRAGMA user_version").fetchone() == (13,)
     assert connection.execute(
@@ -736,7 +755,10 @@ def test_migration_acquires_lease_before_opening_catalogue(tmp_path: Path) -> No
     assert not (tmp_path / CATALOGUE_FILENAME).exists()
 
 
-def test_current_migration_is_a_verified_no_op(tmp_path: Path) -> None:
+def test_current_migration_is_a_verified_no_op(
+    tmp_path: Path,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
     migrate_catalogue(_config(tmp_path), lambda: NOW)
 
     def clock_must_not_be_read() -> datetime:
@@ -745,7 +767,7 @@ def test_current_migration_is_a_verified_no_op(tmp_path: Path) -> None:
     result = migrate_catalogue(_config(tmp_path), clock_must_not_be_read)
 
     assert result == Current(version=13)
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
+    connection = close_connection(sqlite3.connect(tmp_path / CATALOGUE_FILENAME))
     assert connection.execute("SELECT count(*) FROM schema_migrations").fetchone() == (
         13,
     )
@@ -880,6 +902,7 @@ def test_migration_rejects_unrecognised_sqlite_file(tmp_path: Path) -> None:
 
 def test_migration_advances_existing_catalogue_to_injected_second_version(
     tmp_path: Path,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
 ) -> None:
     data_path = tmp_path / "data"
     data_path.mkdir()
@@ -896,7 +919,7 @@ def test_migration_advances_existing_catalogue_to_injected_second_version(
     )
 
     assert result == Advanced(previous_version=13, version=14)
-    connection = sqlite3.connect(data_path / CATALOGUE_FILENAME)
+    connection = close_connection(sqlite3.connect(data_path / CATALOGUE_FILENAME))
     assert connection.execute("PRAGMA user_version").fetchone() == (14,)
     assert connection.execute(
         "SELECT version, name FROM schema_migrations ORDER BY version"
@@ -918,7 +941,10 @@ def test_migration_advances_existing_catalogue_to_injected_second_version(
     ]
 
 
-def test_failed_pending_set_rolls_back_all_schema_and_history(tmp_path: Path) -> None:
+def test_failed_pending_set_rolls_back_all_schema_and_history(
+    tmp_path: Path,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
     data_path = tmp_path / "data"
     data_path.mkdir()
     migration_root = _migration_root_with_second(
@@ -938,7 +964,7 @@ def test_failed_pending_set_rolls_back_all_schema_and_history(tmp_path: Path) ->
         )
 
     assert caught.value.code == "migration_execution_failed"
-    connection = sqlite3.connect(data_path / CATALOGUE_FILENAME)
+    connection = close_connection(sqlite3.connect(data_path / CATALOGUE_FILENAME))
     assert connection.execute("PRAGMA application_id").fetchone() == (0,)
     assert connection.execute("PRAGMA user_version").fetchone() == (0,)
     assert (
@@ -1742,8 +1768,9 @@ def test_authority_tables_reject_update(
     update_column: str,
     update_value: str,
     message: str,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
 ) -> None:
-    connection = _seeded_authority_connection()
+    connection = close_connection(_seeded_authority_connection())
 
     with pytest.raises(sqlite3.IntegrityError, match=message):
         connection.execute(
@@ -1763,15 +1790,18 @@ def test_authority_tables_reject_delete(
     update_column: str,
     update_value: str,
     message: str,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
 ) -> None:
-    connection = _seeded_authority_connection()
+    connection = close_connection(_seeded_authority_connection())
 
     with pytest.raises(sqlite3.IntegrityError, match=message):
         connection.execute(f"DELETE FROM {table} WHERE {pk_column} = ?", (pk_value,))
 
 
-def test_workload_expiry_trigger_rejects_null_expiry_for_workload_grant() -> None:
-    connection = _authority_schema_connection()
+def test_workload_expiry_trigger_rejects_null_expiry_for_workload_grant(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1779,8 +1809,10 @@ def test_workload_expiry_trigger_rejects_null_expiry_for_workload_grant() -> Non
         _insert_grant(connection, principal_id=_WORKLOAD_ID, expires_at=None)
 
 
-def test_workload_expiry_trigger_accepts_null_expiry_for_human_grant() -> None:
-    connection = _authority_schema_connection()
+def test_workload_expiry_trigger_accepts_null_expiry_for_human_grant(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1790,8 +1822,10 @@ def test_workload_expiry_trigger_accepts_null_expiry_for_human_grant() -> None:
     assert connection.execute("SELECT count(*) FROM grants").fetchone() == (1,)
 
 
-def test_workload_expiry_trigger_accepts_workload_grant_with_expiry() -> None:
-    connection = _authority_schema_connection()
+def test_workload_expiry_trigger_accepts_workload_grant_with_expiry(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1801,8 +1835,10 @@ def test_workload_expiry_trigger_accepts_workload_grant_with_expiry() -> None:
     assert connection.execute("SELECT count(*) FROM grants").fetchone() == (1,)
 
 
-def test_principal_uuid_shape_check_rejects_malformed_id() -> None:
-    connection = _authority_schema_connection()
+def test_principal_uuid_shape_check_rejects_malformed_id(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     connection.execute("BEGIN IMMEDIATE")
 
     with pytest.raises(sqlite3.IntegrityError):
@@ -1813,8 +1849,10 @@ def test_principal_uuid_shape_check_rejects_malformed_id() -> None:
         )
 
 
-def test_principal_created_at_shape_check_rejects_malformed_timestamp() -> None:
-    connection = _authority_schema_connection()
+def test_principal_created_at_shape_check_rejects_malformed_timestamp(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     connection.execute("BEGIN IMMEDIATE")
 
     with pytest.raises(sqlite3.IntegrityError):
@@ -1825,8 +1863,10 @@ def test_principal_created_at_shape_check_rejects_malformed_timestamp() -> None:
         )
 
 
-def test_principal_label_syntax_check_rejects_uppercase_label() -> None:
-    connection = _authority_schema_connection()
+def test_principal_label_syntax_check_rejects_uppercase_label(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     connection.execute("BEGIN IMMEDIATE")
 
     with pytest.raises(sqlite3.IntegrityError):
@@ -1837,8 +1877,10 @@ def test_principal_label_syntax_check_rejects_uppercase_label() -> None:
         )
 
 
-def test_credential_verifier_length_check_rejects_short_verifier() -> None:
-    connection = _authority_schema_connection()
+def test_credential_verifier_length_check_rejects_short_verifier(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1851,8 +1893,10 @@ def test_credential_verifier_length_check_rejects_short_verifier() -> None:
         )
 
 
-def test_grant_read_clearance_enum_check_rejects_unknown_value() -> None:
-    connection = _authority_schema_connection()
+def test_grant_read_clearance_enum_check_rejects_unknown_value(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1860,8 +1904,10 @@ def test_grant_read_clearance_enum_check_rejects_unknown_value() -> None:
         _insert_grant(connection, read_clearance="top-secret", expires_at=_TS)
 
 
-def test_grant_delegable_operations_required_when_grant_manage_present() -> None:
-    connection = _authority_schema_connection()
+def test_grant_delegable_operations_required_when_grant_manage_present(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1874,8 +1920,10 @@ def test_grant_delegable_operations_required_when_grant_manage_present() -> None
         )
 
 
-def test_grant_delegable_operations_forbidden_without_grant_manage() -> None:
-    connection = _authority_schema_connection()
+def test_grant_delegable_operations_forbidden_without_grant_manage(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1888,8 +1936,10 @@ def test_grant_delegable_operations_forbidden_without_grant_manage() -> None:
         )
 
 
-def test_grant_delegable_operations_never_contains_grant_manage() -> None:
-    connection = _authority_schema_connection()
+def test_grant_delegable_operations_never_contains_grant_manage(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -1902,8 +1952,10 @@ def test_grant_delegable_operations_never_contains_grant_manage() -> None:
         )
 
 
-def test_grant_delegable_operations_accepts_consistent_grant_manage() -> None:
-    connection = _authority_schema_connection()
+def test_grant_delegable_operations_accepts_consistent_grant_manage(
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
+) -> None:
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
 
@@ -2063,8 +2115,12 @@ def _seeded_custody_connection() -> sqlite3.Connection:
 
 
 @pytest.fixture
-def custody_connection() -> sqlite3.Connection:
-    return _seeded_custody_connection()
+def custody_connection() -> Iterator[sqlite3.Connection]:
+    connection = _seeded_custody_connection()
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 _CUSTODY_GUARD_TABLES = [
@@ -2152,8 +2208,12 @@ def _seeded_outbox_connection() -> sqlite3.Connection:
 
 
 @pytest.fixture
-def outbox_connection() -> sqlite3.Connection:
-    return _seeded_outbox_connection()
+def outbox_connection() -> Iterator[sqlite3.Connection]:
+    connection = _seeded_outbox_connection()
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 @pytest.mark.parametrize(
@@ -2511,8 +2571,9 @@ _FACT_INVALIDATION_CHECK_CASES = [
 def test_fact_invalidations_check_rejects_violating_row(
     overrides: dict[str, object],
     constraint: str,
+    close_connection: Callable[[sqlite3.Connection], sqlite3.Connection],
 ) -> None:
-    connection = _authority_schema_connection()
+    connection = close_connection(_authority_schema_connection())
     _seed_realm_and_principals(connection)
     connection.execute("BEGIN IMMEDIATE")
     _insert_assertion(connection)

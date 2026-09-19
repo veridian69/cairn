@@ -2,6 +2,7 @@
 
 import importlib.util
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import ModuleType
 
@@ -26,7 +27,7 @@ def test_the_probe_distinguishes_a_stored_payload_from_an_absent_one(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     database = tmp_path / "attic.sqlite3"
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute("CREATE TABLE payloads(payload BLOB NOT NULL) STRICT")
         connection.execute(
             "INSERT INTO payloads(payload) VALUES (?)", (b"attic evidence fixture",)

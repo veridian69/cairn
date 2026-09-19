@@ -4,7 +4,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -358,12 +358,12 @@ def test_create_principal_succeeds_for_root_grant_manage_holder(tmp_path: Path) 
     assert outcome.value.kind is PrincipalKind.HUMAN
     assert outcome.value.created_at == _NOW
     assert _audit_rows(tmp_path) == [("allow", "principal_created")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    canonical_event = connection.execute(
-        "SELECT canonical_event FROM audit_events"
-    ).fetchone()[0]
-    document = json.loads(canonical_event)
-    assert document["grant_id"] == str(_MANAGER_GRANT_ID)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        canonical_event = connection.execute(
+            "SELECT canonical_event FROM audit_events"
+        ).fetchone()[0]
+        document = json.loads(canonical_event)
+        assert document["grant_id"] == str(_MANAGER_GRANT_ID)
 
 
 def test_create_principal_unknown_realm_is_not_found(tmp_path: Path) -> None:
@@ -971,18 +971,20 @@ def test_grant_01_create_grant_within_envelope_succeeds(tmp_path: Path) -> None:
 
     assert isinstance(outcome, Committed)
     assert isinstance(outcome.value, GrantCreated)
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    row = connection.execute(
-        "SELECT principal_id, issued_by FROM grants WHERE grant_id = ?",
-        (str(outcome.value.grant_id),),
-    ).fetchone()
-    assert row == (str(_WORKLOAD_ID), str(_MANAGER_ID))
-    audit_row = connection.execute("SELECT reason_code FROM audit_events").fetchone()
-    assert audit_row == ("grant_created",)
-    scope_row = connection.execute(
-        "SELECT segment_kind, segment_id FROM audit_scope_index WHERE role = 'requested'"
-    ).fetchone()
-    assert scope_row == ("repository", "acme-repo")
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        row = connection.execute(
+            "SELECT principal_id, issued_by FROM grants WHERE grant_id = ?",
+            (str(outcome.value.grant_id),),
+        ).fetchone()
+        assert row == (str(_WORKLOAD_ID), str(_MANAGER_ID))
+        audit_row = connection.execute(
+            "SELECT reason_code FROM audit_events"
+        ).fetchone()
+        assert audit_row == ("grant_created",)
+        scope_row = connection.execute(
+            "SELECT segment_kind, segment_id FROM audit_scope_index WHERE role = 'requested'"
+        ).fetchone()
+        assert scope_row == ("repository", "acme-repo")
 
 
 def test_grant_02_scope_widening_is_rejected(tmp_path: Path) -> None:
@@ -1396,20 +1398,20 @@ def test_affected_grant_ids_recorded_for_create_and_revoke(tmp_path: Path) -> No
     )
     assert isinstance(revoked, Committed)
 
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    rows = connection.execute(
-        "SELECT sequence, segment_id FROM audit_scope_index "
-        "WHERE role = 'target' ORDER BY sequence"
-    ).fetchall()
-    assert (
-        rows == []
-    )  # affected_grant_ids is not scope-indexed; check event bytes instead
-    events = connection.execute(
-        "SELECT canonical_event FROM audit_events ORDER BY sequence"
-    ).fetchall()
-    documents = [json.loads(row[0]) for row in events]
-    assert documents[0]["affected_grant_ids"] == [str(created.value.grant_id)]
-    assert documents[1]["affected_grant_ids"] == [str(created.value.grant_id)]
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        rows = connection.execute(
+            "SELECT sequence, segment_id FROM audit_scope_index "
+            "WHERE role = 'target' ORDER BY sequence"
+        ).fetchall()
+        assert (
+            rows == []
+        )  # affected_grant_ids is not scope-indexed; check event bytes instead
+        events = connection.execute(
+            "SELECT canonical_event FROM audit_events ORDER BY sequence"
+        ).fetchall()
+        documents = [json.loads(row[0]) for row in events]
+        assert documents[0]["affected_grant_ids"] == [str(created.value.grant_id)]
+        assert documents[1]["affected_grant_ids"] == [str(created.value.grant_id)]
 
 
 def test_idempotent_replay_of_create_grant_returns_original_result(
@@ -1439,10 +1441,10 @@ def test_idempotent_replay_of_create_grant_returns_original_result(
     assert isinstance(first, Committed)
     assert isinstance(second, Replayed)
     assert first.value == second.value
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert (
-        connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 2
-    )  # manager + new
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert (
+            connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 2
+        )  # manager + new
 
 
 def test_a_create_grant_replay_event_names_the_grant_that_exists(
@@ -1615,11 +1617,11 @@ def test_issue_credential_unknown_realm_is_not_found(tmp_path: Path) -> None:
 
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.NOT_FOUND
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    row = connection.execute(
-        "SELECT chain_kind, chain_identity, reason_code FROM audit_events"
-    ).fetchone()
-    assert row == ("instance", str(_INSTANCE_ID), "realm_not_found")
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        row = connection.execute(
+            "SELECT chain_kind, chain_identity, reason_code FROM audit_events"
+        ).fetchone()
+        assert row == ("instance", str(_INSTANCE_ID), "realm_not_found")
 
 
 def test_revoke_credential_unknown_realm_is_not_found(tmp_path: Path) -> None:
@@ -1737,8 +1739,8 @@ def test_idempotent_replay_of_create_principal_returns_original_result(
     assert isinstance(first, Committed)
     assert isinstance(second, Replayed)
     assert first.value == second.value
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 2
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 2
 
 
 def test_idempotent_replay_of_revoke_credential_returns_original_result(
@@ -1769,11 +1771,13 @@ def test_idempotent_replay_of_revoke_credential_returns_original_result(
     assert isinstance(first, Committed)
     assert isinstance(second, Replayed)
     assert first.value == second.value
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert (
-        connection.execute("SELECT count(*) FROM credential_revocations").fetchone()[0]
-        == 1
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM credential_revocations"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_idempotent_replay_of_revoke_grant_returns_original_result(
@@ -1811,10 +1815,11 @@ def test_idempotent_replay_of_revoke_grant_returns_original_result(
     assert isinstance(first, Committed)
     assert isinstance(second, Replayed)
     assert first.value == second.value
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert (
-        connection.execute("SELECT count(*) FROM grant_revocations").fetchone()[0] == 1
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert (
+            connection.execute("SELECT count(*) FROM grant_revocations").fetchone()[0]
+            == 1
+        )
 
 
 # === Fix round 1: finding 1 — the specific pre-checked grant is re-verified,
@@ -1893,12 +1898,12 @@ def test_grant_revoked_between_precheck_and_transaction_fails_closed(
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.AUTHORISATION_DENIED
     assert _audit_rows(tmp_path) == [("deny", "authorising_grant_changed")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 1
-    assert (
-        connection.execute("SELECT count(*) FROM idempotency_records").fetchone()[0]
-        == 0
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 1
+        assert (
+            connection.execute("SELECT count(*) FROM idempotency_records").fetchone()[0]
+            == 0
+        )
 
 
 def _seed_two_manager_grants(tmp_path: Path) -> tuple[UUID, UUID]:
@@ -1938,10 +1943,10 @@ def test_issue_credential_grant_revoked_between_precheck_and_transaction_fails_c
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.AUTHORISATION_DENIED
     assert _audit_rows(tmp_path) == [("deny", "authorising_grant_changed")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    # 1, not 0: _seed_two_manager_grants already inserted the manager's own
-    # credential; no new one was issued for the target by the denied call.
-    assert connection.execute("SELECT count(*) FROM credentials").fetchone()[0] == 1
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        # 1, not 0: _seed_two_manager_grants already inserted the manager's own
+        # credential; no new one was issued for the target by the denied call.
+        assert connection.execute("SELECT count(*) FROM credentials").fetchone()[0] == 1
 
 
 def test_issue_credential_cross_realm_grant_created_mid_flight_fails_closed(
@@ -1980,8 +1985,8 @@ def test_issue_credential_cross_realm_grant_created_mid_flight_fails_closed(
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.AUTHORISATION_DENIED
     assert _audit_rows(tmp_path) == [("deny", "cross_realm_principal")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM credentials").fetchone()[0] == 1
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM credentials").fetchone()[0] == 1
 
 
 def test_revoke_credential_grant_revoked_between_precheck_and_transaction_fails_closed(
@@ -2010,11 +2015,13 @@ def test_revoke_credential_grant_revoked_between_precheck_and_transaction_fails_
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.AUTHORISATION_DENIED
     assert _audit_rows(tmp_path) == [("deny", "authorising_grant_changed")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert (
-        connection.execute("SELECT count(*) FROM credential_revocations").fetchone()[0]
-        == 0
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM credential_revocations"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_create_grant_grant_revoked_between_precheck_and_transaction_fails_closed(
@@ -2040,9 +2047,9 @@ def test_create_grant_grant_revoked_between_precheck_and_transaction_fails_close
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.AUTHORISATION_DENIED
     assert _audit_rows(tmp_path) == [("deny", "authorising_grant_changed")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    # Only the two seeded manager grants — nothing new was created.
-    assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 2
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        # Only the two seeded manager grants — nothing new was created.
+        assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 2
 
 
 def test_revoke_grant_grant_revoked_between_precheck_and_transaction_fails_closed(
@@ -2077,16 +2084,16 @@ def test_revoke_grant_grant_revoked_between_precheck_and_transaction_fails_close
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.AUTHORISATION_DENIED
     assert _audit_rows(tmp_path) == [("deny", "authorising_grant_changed")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    # The side effect itself revoked first_grant (one row); _TARGET_GRANT_ID
-    # must not have been revoked by the denied call.
-    assert (
-        connection.execute(
-            "SELECT count(*) FROM grant_revocations WHERE grant_id = ?",
-            (str(_TARGET_GRANT_ID),),
-        ).fetchone()[0]
-        == 0
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        # The side effect itself revoked first_grant (one row); _TARGET_GRANT_ID
+        # must not have been revoked by the denied call.
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM grant_revocations WHERE grant_id = ?",
+                (str(_TARGET_GRANT_ID),),
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_create_grant_finds_nothing_precheck_denies_even_if_state_now_allows(
@@ -2116,8 +2123,8 @@ def test_create_grant_finds_nothing_precheck_denies_even_if_state_now_allows(
 
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.NOT_FOUND
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 1
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 1
 
 
 def test_allow_events_record_the_grant_that_actually_authorised_each_command(
@@ -2228,13 +2235,13 @@ def test_create_principal_malformed_label_is_invalid_request(tmp_path: Path) -> 
 
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.INVALID_REQUEST
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    row = connection.execute(
-        "SELECT chain_kind, chain_identity, reason_code FROM audit_events"
-    ).fetchone()
-    assert row == ("instance", str(_INSTANCE_ID), "invalid_label")
-    # 1, not 0: _seed_manager already inserted the manager principal itself.
-    assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 1
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        row = connection.execute(
+            "SELECT chain_kind, chain_identity, reason_code FROM audit_events"
+        ).fetchone()
+        assert row == ("instance", str(_INSTANCE_ID), "invalid_label")
+        # 1, not 0: _seed_manager already inserted the manager principal itself.
+        assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 1
 
 
 def test_create_principal_malformed_realm_id_is_invalid_request(tmp_path: Path) -> None:
@@ -2255,15 +2262,15 @@ def test_create_principal_malformed_realm_id_is_invalid_request(tmp_path: Path) 
     # Fix round 2, finding 2: repeated probes with the same malformed
     # realm_id must correlate via a forensic fingerprint, matching the
     # existing unknown-realm denial's behaviour.
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    canonical_event = connection.execute(
-        "SELECT canonical_event FROM audit_events"
-    ).fetchone()[0]
-    document = json.loads(canonical_event)
-    assert (
-        document["safe_request_fingerprint"]
-        == hashlib.sha256(b"Not A Realm!!").hexdigest()
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        canonical_event = connection.execute(
+            "SELECT canonical_event FROM audit_events"
+        ).fetchone()[0]
+        document = json.loads(canonical_event)
+        assert (
+            document["safe_request_fingerprint"]
+            == hashlib.sha256(b"Not A Realm!!").hexdigest()
+        )
 
 
 def test_create_principal_malformed_label_carries_no_fingerprint(
@@ -2284,12 +2291,12 @@ def test_create_principal_malformed_label_carries_no_fingerprint(
     )
 
     assert isinstance(outcome, Rejected)
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    canonical_event = connection.execute(
-        "SELECT canonical_event FROM audit_events"
-    ).fetchone()[0]
-    document = json.loads(canonical_event)
-    assert document["safe_request_fingerprint"] is None
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        canonical_event = connection.execute(
+            "SELECT canonical_event FROM audit_events"
+        ).fetchone()[0]
+        document = json.loads(canonical_event)
+        assert document["safe_request_fingerprint"] is None
 
 
 def test_revoke_credential_malformed_reason_code_is_invalid_request(
@@ -2314,15 +2321,17 @@ def test_revoke_credential_malformed_reason_code_is_invalid_request(
 
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.INVALID_REQUEST
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    row = connection.execute(
-        "SELECT chain_kind, reason_code FROM audit_events"
-    ).fetchone()
-    assert row == ("instance", "invalid_reason_code")
-    assert (
-        connection.execute("SELECT count(*) FROM credential_revocations").fetchone()[0]
-        == 0
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        row = connection.execute(
+            "SELECT chain_kind, reason_code FROM audit_events"
+        ).fetchone()
+        assert row == ("instance", "invalid_reason_code")
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM credential_revocations"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_revoke_grant_malformed_reason_code_is_invalid_request(tmp_path: Path) -> None:
@@ -2365,12 +2374,12 @@ def test_create_grant_over_16_segments_is_invalid_request(tmp_path: Path) -> Non
 
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.INVALID_REQUEST
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    row = connection.execute(
-        "SELECT chain_kind, reason_code FROM audit_events"
-    ).fetchone()
-    assert row == ("instance", "invalid_scope")
-    assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 1
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        row = connection.execute(
+            "SELECT chain_kind, reason_code FROM audit_events"
+        ).fetchone()
+        assert row == ("instance", "invalid_scope")
+        assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == 1
 
 
 def test_issue_credential_naive_expiry_is_invalid_request(tmp_path: Path) -> None:
@@ -2389,13 +2398,13 @@ def test_issue_credential_naive_expiry_is_invalid_request(tmp_path: Path) -> Non
 
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.INVALID_REQUEST
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    row = connection.execute(
-        "SELECT chain_kind, reason_code FROM audit_events"
-    ).fetchone()
-    assert row == ("instance", "invalid_expiry")
-    # 1, not 0: _seed_manager already inserted the manager's own credential.
-    assert connection.execute("SELECT count(*) FROM credentials").fetchone()[0] == 1
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        row = connection.execute(
+            "SELECT chain_kind, reason_code FROM audit_events"
+        ).fetchone()
+        assert row == ("instance", "invalid_expiry")
+        # 1, not 0: _seed_manager already inserted the manager's own credential.
+        assert connection.execute("SELECT count(*) FROM credentials").fetchone()[0] == 1
 
 
 def test_create_grant_naive_expiry_is_invalid_request_not_a_crash(
@@ -2422,9 +2431,9 @@ def test_create_grant_naive_expiry_is_invalid_request_not_a_crash(
     assert isinstance(outcome, Rejected)
     assert outcome.failure.code is FailureCode.INVALID_REQUEST
     assert _audit_rows(tmp_path) == [("deny", "invalid_expiry")]
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    row = connection.execute("SELECT chain_kind FROM audit_events").fetchone()
-    assert row == ("instance",)  # not the realm chain
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        row = connection.execute("SELECT chain_kind FROM audit_events").fetchone()
+        assert row == ("instance",)  # not the realm chain
 
 
 def test_issue_credential_expiry_with_fixed_offset_timezone_is_accepted(
@@ -2477,21 +2486,21 @@ def test_replay_after_authorising_grant_revoked_is_denied_not_replayed(
 
     assert isinstance(replay_attempt, Rejected)
     assert replay_attempt.failure.code is FailureCode.AUTHORISATION_DENIED
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert (
-        connection.execute("SELECT count(*) FROM idempotency_records").fetchone()[0]
-        == 1
-    )
-    stored_mutation_id = connection.execute(
-        "SELECT mutation_id FROM idempotency_records"
-    ).fetchone()[0]
-    assert stored_mutation_id == str(committed.mutation_receipt.mutation_id)
-    # 2, not 1: _seed_manager's own principal plus the one "new-op" commit —
-    # the rejected replay attempt must not have added a second "new-op".
-    assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 2
-    rows = _audit_rows(tmp_path)
-    assert rows[-1] == ("deny", "grant_manage_not_held")
-    assert not any(reason == "idempotent_replay" for _outcome, reason in rows)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert (
+            connection.execute("SELECT count(*) FROM idempotency_records").fetchone()[0]
+            == 1
+        )
+        stored_mutation_id = connection.execute(
+            "SELECT mutation_id FROM idempotency_records"
+        ).fetchone()[0]
+        assert stored_mutation_id == str(committed.mutation_receipt.mutation_id)
+        # 2, not 1: _seed_manager's own principal plus the one "new-op" commit —
+        # the rejected replay attempt must not have added a second "new-op".
+        assert connection.execute("SELECT count(*) FROM principals").fetchone()[0] == 2
+        rows = _audit_rows(tmp_path)
+        assert rows[-1] == ("deny", "grant_manage_not_held")
+        assert not any(reason == "idempotent_replay" for _outcome, reason in rows)
 
 
 def test_replay_after_authorising_grant_revoked_never_calls_the_mutation_body(
@@ -2512,11 +2521,10 @@ def test_replay_after_authorising_grant_revoked_never_calls_the_mutation_body(
         correlation_id=_CORRELATION_ID,
     )
     assert isinstance(committed, Committed)
-    grants_after_commit = (
-        sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-        .execute("SELECT count(*) FROM grants")
-        .fetchone()[0]
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        grants_after_commit = connection.execute(
+            "SELECT count(*) FROM grants"
+        ).fetchone()[0]
 
     _revoke_grant_row(tmp_path, _MANAGER_GRANT_ID)
 
@@ -2528,11 +2536,11 @@ def test_replay_after_authorising_grant_revoked_never_calls_the_mutation_body(
     )
 
     assert isinstance(replay_attempt, Rejected)
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    # No new grant row was inserted by a wrongly-permitted replay.
-    assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == (
-        grants_after_commit
-    )
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        # No new grant row was inserted by a wrongly-permitted replay.
+        assert connection.execute("SELECT count(*) FROM grants").fetchone()[0] == (
+            grants_after_commit
+        )
 
 
 # === Fix wave: final review ==================================================

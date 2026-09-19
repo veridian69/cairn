@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,9 @@ from typing import Any
 from .core import InstallError, defer_spawn_signals, secure_directory
 
 _MAX_RECEIPT_BYTES = 16 * 1024
+# A direct caller can stop its own detached child without finalising a live
+# Popen; the normal helper CLI exits and leaves supervision to the receipt.
+_spawned_processes: dict[int, subprocess.Popen[bytes]] = {}
 
 
 class _HelperInterrupted(Exception):
@@ -118,6 +122,7 @@ def spawn_detached(
     cwd: Path,
 ) -> ProcessIdentity:
     """Start one detached process and durably publish its exact identity."""
+    _prune_spawned_processes()
     command = [str(item) for item in argv]
     if not command or any(not item or "\x00" in item for item in command):
         raise InstallError("Detached native command is invalid")
@@ -147,9 +152,35 @@ def spawn_detached(
             )
         if received:
             raise KeyboardInterrupt
-        identity = process_identity(process.pid)
-        if identity is None:
-            raise InstallError("Native process exited before its identity was recorded")
+        deadline = time.monotonic() + 1.0
+        transient_error: InstallError | None = None
+        while True:
+            try:
+                identity = process_identity(process.pid)
+                transient_error = None
+            except InstallError as error:
+                if str(error) != (
+                    f"Native process {process.pid} has no inspectable command line"
+                ):
+                    raise
+                # A newly spawned child can briefly expose an empty cmdline
+                # while the kernel replaces its image. Retry only this owned
+                # Popen child and only during its bounded startup window.
+                identity = None
+                transient_error = error
+            if identity is not None:
+                break
+            if process.poll() is not None:
+                raise InstallError(
+                    "Native process exited before its identity was recorded"
+                )
+            if time.monotonic() >= deadline:
+                if transient_error is not None:
+                    raise transient_error
+                raise InstallError(
+                    "Native process identity was not inspectable during startup"
+                )
+            time.sleep(0.005)
         if identity.uid != os.getuid() or identity.argv != tuple(command):
             raise InstallError(
                 "Started native process does not match the requested identity"
@@ -160,6 +191,7 @@ def spawn_detached(
             )
         _create_receipt(receipt_path, identity)
         published = True
+        _spawned_processes[process.pid] = process
     except BaseException as error:
         if process is not None and not published:
             with defer_spawn_signals():
@@ -211,10 +243,12 @@ def stop_process(identity: ProcessIdentity, *, timeout: float = 30.0) -> bool:
     try:
         pid_fd = os.pidfd_open(identity.pid)
     except ProcessLookupError:
+        _reap_if_child(identity.pid)
         return False
     try:
         observed = process_identity(identity.pid)
         if observed is None:
+            _reap_if_child(identity.pid)
             return False
         if observed != identity:
             raise InstallError(
@@ -260,10 +294,23 @@ def _create_receipt(path: Path, identity: ProcessIdentity) -> None:
 
 
 def _reap_if_child(pid: int) -> None:
+    process = _spawned_processes.pop(pid, None)
+    if process is not None:
+        try:
+            process.wait(timeout=0)
+        except subprocess.TimeoutExpired:
+            _spawned_processes[pid] = process
+        return
     try:
         os.waitpid(pid, os.WNOHANG)
     except ChildProcessError:
         pass
+
+
+def _prune_spawned_processes() -> None:
+    for pid, process in tuple(_spawned_processes.items()):
+        if process.poll() is not None:
+            _spawned_processes.pop(pid, None)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

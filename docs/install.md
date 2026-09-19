@@ -21,17 +21,26 @@ Most people should start here. `cairn-install` runs from a
 [trusted checkout](#obtain-a-trusted-checkout), checks prerequisites before
 preparing the runtime, installs one named Cairn, verifies it, and keeps private state
 so it can resume, roll back or remove exactly what it created. It does not
-upgrade or adopt an existing installation and does not install to Kubernetes.
-The [installer reference](operations/guided-installation.md) covers every flag
-and recovery path.
+upgrade or adopt an existing installation. Kubernetes mode installs one new
+instance into an administrator-prepared namespace; it does not provision or
+repair a cluster. The [installer reference](operations/guided-installation.md)
+covers every flag and recovery path.
 
-Three modes, two feature choices:
+**Garden is not supported on macOS.** Run Garden on Linux.
+
+For centrally hosted agent chat, add the optional
+[managed Garden component](operations/managed-garden.md) with `--garden-config`.
+On Linux it supports native, Docker and Kubernetes installations, verified HTTPS for
+remote adapters, and Garden-aware resume, rollback and removal.
+
+Four modes, two feature choices:
 
 | Mode | What you get | Features |
 | --- | --- | --- |
 | `disposable` | Throwaway check on loopback; process stopped after verification, data retained for inspection | Attic only |
 | `native` | Persistent `systemd --user` service on Linux, or per-user launchd service on macOS | Linux: Attic only or Attic plus semantic search; macOS: Attic only |
 | `docker` | Persistent Compose project with volumes | Attic only, or Attic plus semantic search |
+| `kubernetes` | One named instance in an existing, administrator-prepared namespace | Attic only, or Attic plus semantic search |
 
 Prerequisites, all of which the installer checks itself:
 
@@ -48,6 +57,14 @@ Prerequisites, all of which the installer checks itself:
   trusted access to the Docker daemon.
 - Semantic search: an OpenAI API key in a protected file and outbound OpenAI
   access. Native semantic mode also needs Docker for its FalkorDB index.
+- Kubernetes mode: `uv 0.12.14` for the locked YAML helper runtime; an explicit
+  kube context; a dedicated, labelled namespace; Ready Linux/amd64 capacity; a
+  `ReadWriteOncePod` CSI StorageClass; a digest-pinned Cairn image; CNI and
+  DNS; and, for semantic search, a healthy shared gateway. It needs
+  namespace-scoped mutation permissions for its documented resources and
+  cluster-scoped read access to Namespace, Nodes, StorageClass and CSIDriver
+  for preflight. The administrator owns these cluster prerequisites; the
+  installer never mutates cluster prerequisites.
 
 Run from the root of the checkout. `./cairn-install` alone asks each question
 interactively; the non-interactive forms below make the same choices explicit
@@ -59,9 +76,10 @@ interactively; the non-interactive forms below make the same choices explicit
 ./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
 ```
 
-For RC4 semantic installs, first download and load the [maintained FalkorDB
-offline image](../deploy/falkordb/README.md#install-the-maintained-offline-image). Its
-loader needs Docker's containerd image store; this image is not yet on GHCR.
+For semantic installs, first [build FalkorDB locally](../deploy/falkordb/README.md).
+Pass the resulting `--falkordb-runtime` descriptor for Docker/native installs,
+or prepare the Kubernetes nodes and pass `--kube-falkordb-receipt`. Cairn ships
+the recipe; each operator retains their built image and its digest.
 
 For **Attic plus semantic search**, add `--semantic` to a Linux native or docker
 command. macOS native supports Attic only. On its first run the installer creates an empty owner-only key file
@@ -230,8 +248,9 @@ PY
 Expect an executable path for every tool, curl 8.4.0 or newer, jq 1.6 or newer,
 and uv `0.12.14`. `python3 --version` reports the system Python and may show
 `3.14.x`; it is used here only for the standard-library socket check.
-`uv python find 3.14` must report the separate Python 3.14 interpreter used by
-Cairn. Do not replace the system interpreter. Expect writable-directory checks
+`uv python find 3.14` must report a Python 3.14 interpreter discoverable by
+uv. Do not replace the system interpreter. On a distribution whose system
+Python is already 3.14, that system path is expected and acceptable. Expect writable-directory checks
 and successful loopback binding to produce no output. A bind error means
 port 8000 is already in use. Both documented native procedures use port 8000;
 resolve the conflict before continuing, or use the Docker Compose procedure,
@@ -281,6 +300,14 @@ commands. `down` and volume deletion have different retention consequences.
 
 ## Kubernetes installation
 
+For a new instance in an existing prepared namespace, use Kubernetes mode in
+the guided installer. The [Kubernetes guided-installation reference](operations/guided-installation.md#install-to-an-existing-kubernetes-namespace)
+has the exact non-interactive semantic command, its protected provider-key
+handling, resume/status/rollback/blitz behaviour and the strict ownership
+boundary. It does not reproduce the manual procedure here.
+
+### Manual deployment procedure
+
 **For semantic search, have an OpenAI API key ready.** Supply it through the
 protected credential Secret described in [credentials and retrieval egress](operations/deployment.md#credentials-and-retrieval-egress).
 The base Kubernetes installation and inline Attic check need no OpenAI key.
@@ -305,20 +332,27 @@ validation; do not assume the Kubernetes result proves OpenShift support.
   are needed locally only if you build the Cairn image yourself.
 - A reviewed Cairn image available to the workers by immutable digest, including
   any registry pull credentials under the cluster's normal policy. The checkout's
-  `cairn:v0.5.0-rc.4` tag is a local build tag, not a published registry image. See the
-  [image boundary](operations/deployment.md).
+  `CAIRN_IMAGE` tag in `deploy/images.lock` is a local build tag, not a published
+  registry image. The guided installer also supports its documented, single-node
+  preloaded-image exception; the manual procedure below remains registry-only.
+  See the [image boundary](operations/deployment.md).
 - A dedicated namespace and an approved CSI StorageClass supporting
   `ReadWriteOncePod`, reliable POSIX locks and `fsync`. NFS and other shared or
   network filesystems are unsuitable for the SQLite WAL catalogue.
-- A CNI that enforces the rendered NetworkPolicies, functioning cluster DNS, and
-  namespace-scoped authority to manage the documented workloads, ConfigMaps,
-  Secrets, Services, ServiceAccounts, PVCs and policies. Bootstrap also requires
-  Pod create/delete, rollout/scale and `pods/exec` access. Namespace creation and
-  the shared egress gateway may require separate administrator authority.
+- A CNI that enforces the rendered NetworkPolicies and functioning cluster DNS.
+  The installer needs namespace-scoped mutation permissions for the documented
+  workloads, ConfigMaps, Secrets, Services, ServiceAccounts, PVCs and policies;
+  bootstrap also requires Pod create/delete, rollout/scale and `pods/exec`
+  access. It also needs cluster-scoped read access to Namespace, Nodes,
+  StorageClass and CSIDriver for preflight only. Namespace creation and the
+  shared egress gateway may require separate administrator authority; the
+  installer never mutates cluster prerequisites.
 - For semantic retrieval: the pinned FalkorDB image, provider credentials supplied
-  as Secret files, and the shared egress gateway with its approved provider
-  allow-list. Provider calls can incur charges. The index-free path requires none
-  of those semantic dependencies.
+  as Secret files, the shared egress gateway with its approved provider allow-list,
+  and an existing owner-controlled site GitOps checkout for the gateway record.
+  The gateway procedure requires its six generated record files to be committed
+  with a clean worktree before deployment. Provider calls can incur charges. The
+  index-free path requires none of those semantic dependencies.
 
 Resolve missing local tools using [the prerequisite instructions](#get-missing-prerequisites).
 From the repository root, install the locked manifest tooling and put the pinned
@@ -359,8 +393,10 @@ in this order. All site-specific values must be chosen before applying anything:
 2. Generate the [complete site overlay](operations/kubernetes-site.md) with the
    dedicated namespace, stable instance UUID, registry-published image digest and
    approved storage class, then complete namespace preparation and the
-   preflight probes. The image must be published to a registry first; a local
-   containerd import alone is not this installation path. Use the
+   preflight probes. This manual path requires a registry image; for the guided
+   single-node preloaded-image exception, use the
+   [guided installation reference](operations/guided-installation.md#install-to-an-existing-kubernetes-namespace).
+   Use the
    [targeted instance-label example](operations/deployment.md#customise-instance-labels-without-changing-external-destinations)
    to replace existing labels. Verify DNS/gateway destination selectors and
    namespace selectors remain intact and retain both default-deny directions.
@@ -493,8 +529,9 @@ explained in the [full round-trip procedure](operations/evidence-verification.md
 This path is for changing or validating Cairn, not a prerequisite for using it.
 It requires the native tools above, Python 3.12–3.14 (the repository defaults to
 3.14), uv 0.12.14, Go 1.26.8+, make,
-a C compiler for Go race tests, Docker with the Compose plugin, and the pinned
-kubectl fetched below. Bubblewrap at `/usr/bin/bwrap` (verified with 0.9.0),
+a C compiler for Go race tests, Docker with the Compose plugin, and curl for the
+pinned kubectl that `make check` fetches and verifies on demand. Bubblewrap at
+`/usr/bin/bwrap` (verified with 0.9.0),
 `/usr/bin/python3`, merged-`/usr` and permitted unprivileged user/PID/mount
 namespaces are required for host-isolation tests. Do not disable host security
 policy to conceal a failed namespace check. Ask the host administrator for a
@@ -516,8 +553,6 @@ docker compose version
 /usr/bin/bwrap --version
 /usr/bin/bwrap --unshare-user --unshare-pid --ro-bind / / /usr/bin/true
 uv sync --locked
-./scripts/fetch-kubectl
-build/tools/kubectl version --client
 make check
 ```
 

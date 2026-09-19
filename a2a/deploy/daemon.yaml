@@ -1,0 +1,8 @@
+# Install as /var/lib/garden/.a2a/config.yaml for the garden service account.
+agents: {}
+stream:
+  data_dir: /var/lib/garden/.a2a/data
+  max_age: 168h
+  max_bytes: 1073741824
+memory:
+  enabled: false

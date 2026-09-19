@@ -27,6 +27,7 @@ exactly the one this module would otherwise stop noticing.
 import json
 import sqlite3
 from collections.abc import Awaitable, Callable
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -214,7 +215,10 @@ def comparable(outcome: OperationOutcome) -> dict[str, object]:
 def audit_evidence(instance: Instance) -> list[dict[str, object]]:
     """Every event the interaction appended, in the order it appended
     them, projected onto I-90's four members."""
-    with sqlite3.connect(instance.data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(instance.data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         rows = connection.execute(
             "SELECT canonical_event FROM audit_events ORDER BY rowid"
         ).fetchall()
@@ -235,7 +239,10 @@ def side_effects(instance: Instance) -> dict[str, int]:
     hand-written list of tables would only ever contain the ones somebody
     did.
     """
-    with sqlite3.connect(instance.data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(instance.data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         names = [
             str(row[0])
             for row in connection.execute(

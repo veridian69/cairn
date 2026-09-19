@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import closing
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -296,7 +297,10 @@ def wait_for_path(path: Path, timeout: float) -> bool:
 
 
 def bundle_heads(bundle_path: Path) -> list[dict[str, object]]:
-    with sqlite3.connect(bundle_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(bundle_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         rows = connection.execute(
             "SELECT chain_kind, chain_identity, last_sequence, last_hash "
             "FROM audit_heads ORDER BY chain_kind, chain_identity"
@@ -424,7 +428,10 @@ async def test_backup_under_mutation_load_is_one_declared_instant(
     assert bundle_heads(result.bundle_path) == manifest["audit_boundary"]
     assert member_digests_verify(result.bundle_path, manifest)
     assert result.barrier_ms > 0
-    with sqlite3.connect(result.bundle_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(result.bundle_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
 
@@ -695,7 +702,10 @@ async def test_bundle_members_are_closed_and_attic_is_never_behind(
     listed = sorted(entry.name for entry in result.bundle_path.iterdir())
     assert listed == [ATTIC_FILENAME, CATALOGUE_FILENAME, MANIFEST_FILENAME]
 
-    with sqlite3.connect(result.bundle_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(result.bundle_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         evidence_ids = {
             row[0]
             for row in connection.execute(
@@ -708,7 +718,10 @@ async def test_bundle_members_are_closed_and_attic_is_never_behind(
                 "SELECT evidence_id FROM evidence_outbox"
             ).fetchall()
         }
-    with sqlite3.connect(result.bundle_path / ATTIC_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(result.bundle_path / ATTIC_FILENAME)) as connection,
+        connection,
+    ):
         attic_ids = {
             row[0]
             for row in connection.execute("SELECT evidence_id FROM payloads").fetchall()
@@ -739,7 +752,10 @@ def test_backup_refuses_a_catalogue_with_the_wrong_storage_identity(
 ) -> None:
     config = make_config(tmp_path)
     migrate_catalogue(config, lambda: NOW)
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         connection.execute("PRAGMA application_id = 0")
 
     with pytest.raises(CatalogueStorageError) as refusal:
@@ -750,7 +766,10 @@ def test_backup_refuses_a_catalogue_with_the_wrong_storage_identity(
 def test_backup_refuses_a_malformed_audit_boundary(tmp_path: Path) -> None:
     config = make_config(tmp_path)
     migrate_catalogue(config, lambda: NOW)
-    with sqlite3.connect(config.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(config.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         connection.execute("PRAGMA ignore_check_constraints = ON")
         connection.execute(
             "UPDATE audit_heads SET last_hash = ? WHERE chain_kind = 'instance'",
@@ -850,7 +869,7 @@ def test_member_copy_maps_finalisation_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source.sqlite3"
-    with sqlite3.connect(source) as connection:
+    with closing(sqlite3.connect(source)) as connection, connection:
         connection.execute("CREATE TABLE member (value INTEGER) STRICT")
 
     def refusing_chmod(path: Path, mode: int) -> None:

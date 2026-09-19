@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 
 def main(argv: list[str]) -> int:
     database, expected = argv[1], argv[2]
     uri = f"{Path(database).resolve().as_uri()}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as connection:
+    with closing(sqlite3.connect(uri, uri=True)) as connection, connection:
         connection.execute("PRAGMA query_only = ON")
         found = connection.execute(
             "SELECT 1 FROM payloads WHERE payload = ? LIMIT 1",

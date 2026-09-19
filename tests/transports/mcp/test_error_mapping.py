@@ -42,7 +42,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime
 from itertools import count
 from pathlib import Path
@@ -166,7 +166,10 @@ async def post(
 
 
 def audit_events(data_path: Path) -> list[dict[str, Any]]:
-    with sqlite3.connect(data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         rows = connection.execute(
             "SELECT canonical_event FROM audit_events ORDER BY sequence"
         ).fetchall()

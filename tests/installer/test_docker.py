@@ -22,6 +22,85 @@ OWNER_LABELS = {
     "io.cairn.install.run": "22222222-2222-4222-8222-222222222222",
 }
 
+LOCAL_FALKORDB_IMAGE = "cairn.local/falkordb-runtime@sha256:" + "b" * 64
+
+
+def test_local_runtime_compose_cannot_fall_back_to_registry(tmp_path: Path) -> None:
+    import yaml
+
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    ctx.outputs[("docker", "image", "inspect", LOCAL_FALKORDB_IMAGE)] = json.dumps(
+        [
+            {
+                "RepoDigests": [LOCAL_FALKORDB_IMAGE],
+                "Os": "linux",
+                "Architecture": "amd64",
+            }
+        ]
+    )
+    backend = Backend(cast(Context, ctx))
+    backend.prepare()
+
+    services = yaml.safe_load(backend.compose_path.read_text())["services"]
+    assert services["falkordb"]["image"] == LOCAL_FALKORDB_IMAGE
+    assert services["falkordb"]["pull_policy"] == "never"
+    assert (
+        ctx.state["resources"]["docker"]["semantic"]["falkordb_image"]
+        == LOCAL_FALKORDB_IMAGE
+    )
+    assert not any(command[:2] == ["docker", "pull"] for command, _, _ in ctx.commands)
+
+
+@pytest.mark.parametrize("digests", [[], ["other@sha256:" + "b" * 64]])
+def test_local_runtime_refuses_missing_exact_engine_digest(
+    tmp_path: Path, digests: list[str]
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    ctx.outputs[("docker", "image", "inspect", LOCAL_FALKORDB_IMAGE)] = json.dumps(
+        [{"RepoDigests": digests, "Os": "linux", "Architecture": "amd64"}]
+    )
+    backend = Backend(cast(Context, ctx))
+    with pytest.raises(InstallError, match="local.*FalkorDB|FalkorDB.*local"):
+        backend.prepare()
+    assert not any(command[:2] == ["docker", "build"] for command, _, _ in ctx.commands)
+
+
+def test_local_runtime_refuses_changed_retained_semantic_image(tmp_path: Path) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    backend = Backend(cast(Context, ctx))
+    ctx.state["resources"]["docker"]["semantic"] = {
+        "falkordb_image": "other@sha256:" + "a" * 64
+    }
+    with pytest.raises(InstallError, match="FalkorDB.*changed"):
+        backend.prepare()
+
+
+def test_local_runtime_resume_refuses_changed_image_without_preflight(
+    tmp_path: Path,
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    backend = Backend(cast(Context, ctx))
+    ctx.state["resources"]["docker"]["semantic"] = {
+        "falkordb_image": "other@sha256:" + "a" * 64
+    }
+    with pytest.raises(InstallError, match="FalkorDB.*changed"):
+        backend.validate_ownership()
+
+
+def test_legacy_semantic_resume_retains_its_recorded_falkordb_image(
+    tmp_path: Path,
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    legacy = "ghcr.io/example/legacy-falkordb@sha256:" + "a" * 64
+    backend = Backend(cast(Context, ctx))
+    backend._docker["semantic"] = {"falkordb_image": legacy}  # noqa: SLF001
+
+    assert backend._falkordb_image() == legacy  # noqa: SLF001
+
 
 class FakeContext:
     def __init__(self, tmp_path: Path, *, semantic: bool = False) -> None:

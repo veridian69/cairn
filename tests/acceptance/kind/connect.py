@@ -31,45 +31,43 @@ def attempt(
     target_port: int,
     timeout: float,
 ) -> str:
-    connection = socket.socket()
-    connection.settimeout(timeout)
-    try:
-        connection.connect((proxy_host, proxy_port))
-    except TimeoutError:
-        return "blocked"
-    except socket.gaierror:
-        return "unresolved"
-    except OSError as error:
-        if error.errno == errno.ECONNREFUSED:
-            return "refused"
-        return f"error:{errno.errorcode.get(error.errno or 0, str(error.errno))}"
-    try:
-        # The ACL squid matches is `dstdomain` against this authority, so
-        # it is written once and sent in both places a proxy may read it.
-        authority = f"{target_host}:{target_port}"
-        request = f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n"
-        connection.sendall(request.encode("ascii"))
-        status_line = _status_line(connection)
-    except TimeoutError:
-        # The proxy took the connection and never answered. Distinct from
-        # every word above: those are facts about reaching the gateway,
-        # and this is a fact about the gateway itself.
-        return "timeout"
-    except OSError as error:
-        return f"error:{errno.errorcode.get(error.errno or 0, str(error.errno))}"
-    finally:
-        connection.close()
-    if not status_line:
-        return "truncated"
-    fields = status_line.split()
-    if len(fields) < 2 or not fields[1].isdigit():
-        return "unparseable"
-    status = int(fields[1])
-    if status == 200:
-        return "established"
-    if status == 403:
-        return "forbidden"
-    return f"status:{status}"
+    with socket.socket() as connection:
+        connection.settimeout(timeout)
+        try:
+            connection.connect((proxy_host, proxy_port))
+        except TimeoutError:
+            return "blocked"
+        except socket.gaierror:
+            return "unresolved"
+        except OSError as error:
+            if error.errno == errno.ECONNREFUSED:
+                return "refused"
+            return f"error:{errno.errorcode.get(error.errno or 0, str(error.errno))}"
+        try:
+            # The ACL squid matches is `dstdomain` against this authority, so
+            # it is written once and sent in both places a proxy may read it.
+            authority = f"{target_host}:{target_port}"
+            request = f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n"
+            connection.sendall(request.encode("ascii"))
+            status_line = _status_line(connection)
+        except TimeoutError:
+            # The proxy took the connection and never answered. Distinct from
+            # every word above: those are facts about reaching the gateway,
+            # and this is a fact about the gateway itself.
+            return "timeout"
+        except OSError as error:
+            return f"error:{errno.errorcode.get(error.errno or 0, str(error.errno))}"
+        if not status_line:
+            return "truncated"
+        fields = status_line.split()
+        if len(fields) < 2 or not fields[1].isdigit():
+            return "unparseable"
+        status = int(fields[1])
+        if status == 200:
+            return "established"
+        if status == 403:
+            return "forbidden"
+        return f"status:{status}"
 
 
 def _status_line(connection: socket.socket) -> str:

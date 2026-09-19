@@ -187,7 +187,7 @@ def _copy_git_archive(
     archive_prefix: PurePosixPath,
     epoch: int,
 ) -> None:
-    process = subprocess.Popen(
+    with subprocess.Popen(
         [
             "git",
             "-C",
@@ -200,17 +200,19 @@ def _copy_git_archive(
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-    )
-    assert process.stdout is not None
-    with tarfile.open(fileobj=process.stdout, mode="r|") as source:
-        for member in source:
-            name = str(archive_prefix / member.name.rstrip("/"))
-            contents = source.extractfile(member) if member.isfile() else None
-            _normalise_member(member, name, epoch)
-            output.addfile(member, contents)
-    stderr = process.stderr.read() if process.stderr is not None else b""
-    if process.wait() != 0:
-        raise BundleError(f"git archive failed: {stderr.decode('utf-8', 'replace')}")
+    ) as process:
+        assert process.stdout is not None
+        with tarfile.open(fileobj=process.stdout, mode="r|") as source:
+            for member in source:
+                name = str(archive_prefix / member.name.rstrip("/"))
+                contents = source.extractfile(member) if member.isfile() else None
+                _normalise_member(member, name, epoch)
+                output.addfile(member, contents)
+        stderr = process.stderr.read() if process.stderr is not None else b""
+        if process.wait() != 0:
+            raise BundleError(
+                f"git archive failed: {stderr.decode('utf-8', 'replace')}"
+            )
 
 
 def create_git_source_archive(

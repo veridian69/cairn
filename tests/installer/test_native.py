@@ -23,6 +23,121 @@ from cairn_install.native_index import (
     stop_process,
 )
 
+LOCAL_FALKORDB_IMAGE = "cairn.local/falkordb-runtime@sha256:" + "b" * 64
+
+
+def test_local_runtime_native_initialiser_and_server_never_pull(tmp_path: Path) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    ctx.state["resources"]["native_index_port"] = 19123
+    index = native._NativeIndex(cast(Context, ctx))  # noqa: SLF001
+    index._prepare_volumes()  # noqa: SLF001
+    index._ensure_container()  # noqa: SLF001
+    launches = [
+        argv
+        for argv, _ in ctx.commands
+        if argv[:2] in (["docker", "create"], ["docker", "run"])
+    ]
+    assert len(launches) == 2
+    for argv in launches:
+        assert LOCAL_FALKORDB_IMAGE in argv
+        assert argv[argv.index("--pull") + 1] == "never"
+
+
+def test_local_runtime_native_refuses_missing_exact_engine_digest(
+    tmp_path: Path,
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    index = native._NativeIndex(cast(Context, ctx))  # noqa: SLF001
+    with pytest.raises(InstallError, match="local.*FalkorDB|FalkorDB.*local"):
+        index.preflight()
+    assert "native_index_image" not in ctx.state["resources"]
+
+
+def test_local_runtime_native_refuses_changed_retained_image(tmp_path: Path) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    ctx.state["resources"]["native_index_image"] = "other@sha256:" + "a" * 64
+    index = native._NativeIndex(cast(Context, ctx))  # noqa: SLF001
+    with pytest.raises(InstallError, match="FalkorDB.*changed"):
+        index.preflight()
+
+
+def test_local_runtime_native_resume_refuses_changed_image_without_preflight(
+    tmp_path: Path,
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    ctx.state["resources"]["native_index_image"] = "other@sha256:" + "a" * 64
+    index = native._NativeIndex(cast(Context, ctx))  # noqa: SLF001
+    with pytest.raises(InstallError, match="FalkorDB.*changed"):
+        index.validate_ownership()
+
+
+def test_legacy_native_resume_retains_its_recorded_falkordb_image(
+    tmp_path: Path,
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    legacy = "ghcr.io/example/legacy-falkordb@sha256:" + "a" * 64
+    ctx.state["resources"]["native_index_image"] = legacy
+
+    assert native._NativeIndex(cast(Context, ctx))._locked_image() == legacy  # noqa: SLF001
+
+
+@pytest.mark.parametrize("operation", ["validate_ownership", "_ensure_container"])
+def test_local_runtime_native_refuses_owned_container_with_different_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    index = native._NativeIndex(cast(Context, ctx))  # noqa: SLF001
+    ctx.state["resources"].update(
+        native_index_port=19123,
+        native_index_container={"name": index.container, "label": ctx.instance_id},
+    )
+    value = {
+        "Config": {
+            "Image": "other@sha256:" + "a" * 64,
+            "Labels": {native._INDEX_LABEL: ctx.instance_id},
+        },
+        "HostConfig": {
+            "PortBindings": {"6379/tcp": [{"HostIp": "127.0.0.1", "HostPort": "19123"}]}
+        },
+    }  # noqa: SLF001
+    monkeypatch.setattr(index, "_inspect", lambda kind, name: value)
+    with pytest.raises(InstallError, match="FalkorDB.*changed"):
+        getattr(index, operation)()
+    assert not any(argv[:2] == ["docker", "start"] for argv, _ in ctx.commands)
+
+
+def test_local_runtime_native_preflight_records_exact_available_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = FakeContext(tmp_path, semantic=True)
+    ctx.state["falkordb_runtime"] = {"image": LOCAL_FALKORDB_IMAGE}
+    original = ctx.command
+
+    def command(argv: list[str], **kwargs: Any) -> str:
+        if argv == ["docker", "image", "inspect", LOCAL_FALKORDB_IMAGE]:
+            ctx.commands.append((argv, kwargs))
+            return json.dumps(
+                [
+                    {
+                        "RepoDigests": [LOCAL_FALKORDB_IMAGE],
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                    }
+                ]
+            )
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(ctx, "command", command)
+    index = native._NativeIndex(cast(Context, ctx))  # noqa: SLF001
+    index.preflight()
+    assert ctx.state["resources"]["native_index_image"] == LOCAL_FALKORDB_IMAGE
+    assert not any(argv[:2] == ["docker", "pull"] for argv, _ in ctx.commands)
+
 
 class FakeContext:
     def __init__(
@@ -1079,6 +1194,40 @@ def test_detached_helper_records_real_kernel_identity_and_stops_only_that_proces
             ProcessIdentity.from_json(json.loads(receipt_path.read_text())) == identity
         )
         assert process_identity(identity.pid) == identity
+        assert identity.pid in native_index._spawned_processes
     finally:
         stop_process(identity, timeout=2.0)
     assert process_identity(identity.pid) is None
+    assert identity.pid not in native_index._spawned_processes
+
+
+def test_detached_helper_retries_only_transient_empty_startup_cmdline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inspect = native_index.process_identity
+    calls = 0
+
+    def transient_identity(pid: int) -> ProcessIdentity | None:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise InstallError(f"Native process {pid} has no inspectable command line")
+        return inspect(pid)
+
+    monkeypatch.setattr(native_index, "process_identity", transient_identity)
+    identity = spawn_detached(
+        tmp_path / "process.json",
+        tmp_path / "service.log",
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=tmp_path,
+    )
+    try:
+        assert calls >= 3
+        assert (
+            ProcessIdentity.from_json(
+                json.loads((tmp_path / "process.json").read_text())
+            )
+            == identity
+        )
+    finally:
+        stop_process(identity, timeout=2.0)

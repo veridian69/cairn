@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import threading
 from _thread import LockType
+from contextlib import closing
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
@@ -354,7 +355,10 @@ def test_embedding_repair_compares_exact_payload_and_updates_timestamp(
     assert store.get_embedding("same") == "replacement"
     assert store.get_embedding("changed") == "winner"
     assert store.get_embedding("absent") == "inserted"
-    with sqlite3.connect(tmp_path / "catalogue.sqlite3") as connection:
+    with (
+        closing(sqlite3.connect(tmp_path / "catalogue.sqlite3")) as connection,
+        connection,
+    ):
         rows = dict(
             connection.execute(
                 "SELECT cache_key, created_at FROM projection_embedding_cache"
@@ -374,7 +378,10 @@ def test_embedding_repair_is_atomic_and_emits_only_safe_failure(tmp_path: Path) 
     repairer = ExtractionCacheStore(
         tmp_path, writer_gate=threading.Lock(), logger=configure_logging(stream)
     )
-    with sqlite3.connect(tmp_path / "catalogue.sqlite3") as connection:
+    with (
+        closing(sqlite3.connect(tmp_path / "catalogue.sqlite3")) as connection,
+        connection,
+    ):
         connection.execute(
             "CREATE TRIGGER fail_second BEFORE UPDATE ON projection_embedding_cache "
             "WHEN NEW.cache_key = 'second' BEGIN SELECT RAISE(ABORT, 'private payload'); END"

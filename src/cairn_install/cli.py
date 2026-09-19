@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import platform
+import re
 import signal
 import stat
 import sys
@@ -16,11 +18,16 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Never
 
-from .core import InstallError, atomic_write, open_context
+from .core import InstallError, atomic_write, open_context, open_read_context
 from .output import paint
 
 DEFAULT_PORT = 8000
-MODES = ("disposable", "native", "docker")
+MODES = ("disposable", "native", "docker", "kubernetes")
+_IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-fA-F]{64}\Z")
+_RECEIPT_IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
+_LOCAL_IMAGE_TAG = re.compile(r"[^@\s]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
+_KUBERNETES_NAMESPACE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\Z")
+_KUBERNETES_NODE = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?\Z")
 FINGERPRINT_FILES = (
     "pyproject.toml",
     "uv.lock",
@@ -31,10 +38,23 @@ FINGERPRINT_FILES = (
     "LICENSE-Apache-2.0.txt",
     "NOTICE.md",
     "deploy/images.lock",
+    "deploy/kustomize/rendered/kubernetes.yaml",
+    "deploy/kustomize/rendered/kubernetes-retrieval.yaml",
     "integrations/codex/cairn-memory/SKILL.md",
     "integrations/claude/cairn-memory/SKILL.md",
+    "a2a/go.mod",
+    "a2a/go.sum",
+    "a2a/main.go",
+    "a2a/Dockerfile",
 )
-FINGERPRINT_TREES = ("src/cairn", "src/cairn_install", "scripts")
+FINGERPRINT_TREES = (
+    "src/cairn",
+    "src/cairn_install",
+    "scripts",
+    "a2a/cmd",
+    "a2a/internal",
+    "a2a/scripts",
+)
 
 
 class ArgumentParser(argparse.ArgumentParser):
@@ -144,12 +164,24 @@ def _parser() -> ArgumentParser:
     parser.add_argument("--name")
     parser.add_argument("--port", type=int)
     parser.add_argument("--semantic", action="store_true")
+    parser.add_argument("--falkordb-runtime", type=Path)
     parser.add_argument(
         "--keep-running",
         action="store_true",
         help="keep a verified disposable instance in the foreground until Ctrl-C",
     )
     parser.add_argument("--provider-key-file", type=Path)
+    parser.add_argument(
+        "--garden-config",
+        type=Path,
+        help="Enable managed Garden using an explicit HTTPS/TLS configuration JSON file",
+    )
+    parser.add_argument("--kube-context")
+    parser.add_argument("--kube-namespace")
+    parser.add_argument("--kube-storage-class")
+    parser.add_argument("--kube-image")
+    parser.add_argument("--kube-preloaded-image", action="store_true", default=None)
+    parser.add_argument("--kube-falkordb-receipt", type=Path)
     parser.add_argument(
         "--state-root", type=Path, default=Path("~/.local/state/cairn-install")
     )
@@ -188,7 +220,7 @@ def _prompt_mode(non_interactive: bool) -> str:
         raise InstallError(
             "--mode is required in non-interactive mode", "invalid_arguments"
         )
-    print("Installation modes: disposable, native, docker")
+    print("Installation modes: disposable, native, docker, kubernetes")
     return input("Mode: ").strip()
 
 
@@ -272,11 +304,242 @@ def _show_configuration(
     print(
         "The installer will explain each stage and retain state for resume or rollback."
     )
+    sys.stdout.flush()
+
+
+def _load_falkordb_receipt(path: Path) -> dict[str, object]:
+    source = _absolute_safe_path(path, purpose="FalkorDB receipt")
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_size > 64 * 1024
+            ):
+                raise InstallError(
+                    "FalkorDB receipt must be a small owned regular file"
+                )
+            raw = stream.read(64 * 1024 + 1)
+    except OSError as error:
+        raise InstallError(f"Cannot safely read FalkorDB receipt: {error}") from error
+    try:
+        value = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise InstallError("FalkorDB receipt is malformed JSON") from error
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "image",
+        "archive_sha256",
+        "nodes",
+    }:
+        raise InstallError("FalkorDB receipt has an invalid schema")
+    image = value.get("image")
+    archive = value.get("archive_sha256")
+    nodes = value.get("nodes")
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or not isinstance(image, str)
+        or not _RECEIPT_IMAGE_DIGEST.fullmatch(image)
+        or not isinstance(archive, str)
+        or re.fullmatch(r"[0-9a-f]{64}", archive) is None
+        or not isinstance(nodes, list)
+        or not nodes
+    ):
+        raise InstallError("FalkorDB receipt has an invalid schema")
+    normalised_nodes: list[dict[str, str]] = []
+    names: set[str] = set()
+    uids: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict) or set(node) != {"name", "uid"}:
+            raise InstallError("FalkorDB receipt has an invalid node record")
+        node_name = node.get("name")
+        uid = node.get("uid")
+        if (
+            not isinstance(node_name, str)
+            or not _KUBERNETES_NODE.fullmatch(node_name)
+            or not isinstance(uid, str)
+            or not uid
+            or len(uid) > 128
+            or any(char.isspace() or ord(char) < 32 for char in uid)
+            or node_name in names
+            or uid in uids
+        ):
+            raise InstallError("FalkorDB receipt has invalid or duplicate nodes")
+        names.add(node_name)
+        uids.add(uid)
+        normalised_nodes.append({"name": node_name, "uid": uid})
+    return {
+        "schema_version": 1,
+        "image": image,
+        "archive_sha256": archive,
+        "nodes": normalised_nodes,
+    }
+
+
+def _load_falkordb_runtime(path: Path) -> dict[str, object]:
+    source = _absolute_safe_path(path, purpose="FalkorDB runtime descriptor")
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_size > 64 * 1024
+            ):
+                raise InstallError(
+                    "FalkorDB runtime descriptor must be a small owned regular file"
+                )
+            raw = stream.read(64 * 1024 + 1)
+    except OSError as error:
+        raise InstallError(
+            f"Cannot safely read FalkorDB runtime descriptor: {error}"
+        ) from error
+    try:
+        value = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise InstallError("FalkorDB runtime descriptor is malformed JSON") from error
+    expected = {
+        "schema_version",
+        "image",
+        "local_tag",
+        "platform",
+        "archive",
+        "archive_sha256",
+        "published",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise InstallError("FalkorDB runtime descriptor has an invalid schema")
+    image = value.get("image")
+    local_tag = value.get("local_tag")
+    archive_name = value.get("archive")
+    archive_sha256 = value.get("archive_sha256")
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or not isinstance(image, str)
+        or not _RECEIPT_IMAGE_DIGEST.fullmatch(image)
+        or not isinstance(local_tag, str)
+        or not _LOCAL_IMAGE_TAG.fullmatch(local_tag)
+        or value.get("platform") != "linux/amd64"
+        or not isinstance(archive_name, str)
+        or Path(archive_name).name != archive_name
+        or archive_name in {"", ".", ".."}
+        or not isinstance(archive_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", archive_sha256) is None
+        or value.get("published") is not False
+    ):
+        raise InstallError("FalkorDB runtime descriptor has an invalid schema")
+    archive = _absolute_safe_path(
+        source.parent / archive_name, purpose="FalkorDB runtime archive"
+    )
+    try:
+        fd = os.open(archive, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise InstallError(
+                    "FalkorDB runtime archive must be an owned regular file"
+                )
+            actual_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+    except OSError as error:
+        raise InstallError(
+            f"Cannot safely read FalkorDB runtime archive: {error}"
+        ) from error
+    if actual_sha256 != archive_sha256:
+        raise InstallError("FalkorDB runtime archive digest does not match descriptor")
+    return {
+        "schema_version": 1,
+        "image": image,
+        "local_tag": local_tag,
+        "platform": "linux/amd64",
+        "archive": str(archive),
+        "archive_sha256": archive_sha256,
+        "published": False,
+    }
+
+
+def _kubernetes_configuration(
+    args: argparse.Namespace, *, name: str, semantic: bool
+) -> dict[str, object]:
+    context = _required(
+        args.kube_context,
+        "--kube-context",
+        "Kubernetes context: ",
+        non_interactive=args.non_interactive,
+    )
+    storage_class = _required(
+        args.kube_storage_class,
+        "--kube-storage-class",
+        "Kubernetes StorageClass: ",
+        non_interactive=args.non_interactive,
+    )
+    image = _required(
+        args.kube_image,
+        "--kube-image",
+        "Kubernetes image (repository@sha256:digest): ",
+        non_interactive=args.non_interactive,
+    )
+    namespace = name if args.kube_namespace is None else args.kube_namespace
+    if not all(
+        isinstance(value, str) and value and not any(char.isspace() for char in value)
+        for value in (context, storage_class)
+    ):
+        raise InstallError(
+            "Kubernetes context and StorageClass must be non-empty single arguments",
+            "invalid_arguments",
+        )
+    if not _KUBERNETES_NAMESPACE.fullmatch(namespace):
+        raise InstallError(
+            "--kube-namespace must be a 1–63 character lowercase Kubernetes name",
+            "invalid_arguments",
+        )
+    if not _IMAGE_DIGEST.fullmatch(image):
+        raise InstallError(
+            "--kube-image must use a sha256 digest (REPOSITORY@sha256:DIGEST)",
+            "invalid_arguments",
+        )
+    preloaded = bool(args.kube_preloaded_image)
+    options: dict[str, object] = {
+        "context": context,
+        "namespace": namespace,
+        "storage_class": storage_class,
+        "image": image,
+        "image_policy": "IfNotPresent" if preloaded else "Always",
+        "preloaded_image": preloaded,
+    }
+    receipt_path = args.kube_falkordb_receipt
+    if semantic and receipt_path is None:
+        if args.non_interactive:
+            raise InstallError(
+                "--kube-falkordb-receipt is required for semantic Kubernetes installs",
+                "invalid_arguments",
+            )
+        receipt_path = Path(
+            _required(
+                None,
+                "--kube-falkordb-receipt",
+                "FalkorDB node-staging receipt: ",
+                non_interactive=False,
+            )
+        )
+    if receipt_path is not None:
+        if not semantic:
+            raise InstallError(
+                "--kube-falkordb-receipt requires --semantic", "invalid_arguments"
+            )
+        options["falkordb_receipt"] = _load_falkordb_receipt(receipt_path)
+    return options
 
 
 def _new_configuration(
     args: argparse.Namespace, default_source: Path | None
-) -> tuple[str, str, int, bool, Path, str]:
+) -> tuple[
+    str, str, int, bool, Path, str, dict[str, object] | None, dict[str, object] | None
+]:
     mode = args.mode or _prompt_mode(args.non_interactive)
     if args.keep_running and mode != "disposable":
         raise InstallError(
@@ -284,7 +547,7 @@ def _new_configuration(
         )
     if mode not in MODES:
         raise InstallError(
-            "Mode must be disposable, native or docker", "invalid_arguments"
+            "Mode must be disposable, native, docker or kubernetes", "invalid_arguments"
         )
     name = _required(
         args.name,
@@ -306,8 +569,50 @@ def _new_configuration(
             "invalid_arguments",
         )
     _validate_platform_features(mode, semantic)
+    _validate_garden_platform(mode, enabled=args.garden_config is not None)
     if not args.semantic:
         semantic = _prompt_semantic(mode, args.non_interactive)
+    runtime = None
+    if semantic and mode in {"native", "docker"}:
+        runtime_path = args.falkordb_runtime
+        if runtime_path is None:
+            if args.non_interactive:
+                raise InstallError(
+                    "--falkordb-runtime is required for semantic native and docker installs",
+                    "invalid_arguments",
+                )
+            runtime_path = Path(
+                _required(
+                    None,
+                    "--falkordb-runtime",
+                    "FalkorDB runtime descriptor: ",
+                    non_interactive=False,
+                )
+            )
+        runtime = _load_falkordb_runtime(runtime_path)
+    elif args.falkordb_runtime is not None:
+        raise InstallError(
+            "--falkordb-runtime requires semantic native or docker mode",
+            "invalid_arguments",
+        )
+    kubernetes_options = (
+        _kubernetes_configuration(args, name=name, semantic=semantic)
+        if mode == "kubernetes"
+        else None
+    )
+    if mode != "kubernetes" and any(
+        (
+            args.kube_context,
+            args.kube_namespace,
+            args.kube_storage_class,
+            args.kube_image,
+            args.kube_preloaded_image,
+            args.kube_falkordb_receipt,
+        )
+    ):
+        raise InstallError(
+            "--kube-* options require --mode kubernetes", "invalid_arguments"
+        )
     source_value = args.source or default_source
     if source_value is None:
         raise InstallError(
@@ -315,7 +620,16 @@ def _new_configuration(
             "invalid_arguments",
         )
     source = validate_source(source_value)
-    return name, mode, port, semantic, source, source_fingerprint(source)
+    return (
+        name,
+        mode,
+        port,
+        semantic,
+        source,
+        source_fingerprint(source),
+        kubernetes_options,
+        runtime,
+    )
 
 
 def _validate_platform_features(mode: str, semantic: bool) -> None:
@@ -326,12 +640,89 @@ def _validate_platform_features(mode: str, semantic: bool) -> None:
         )
 
 
+def _validate_garden_platform(_mode: str, *, enabled: bool) -> None:
+    if enabled and platform.system() == "Darwin":
+        raise InstallError(
+            "Garden is not supported on macOS; install Garden on Linux.",
+            "invalid_arguments",
+        )
+
+
 def _assert_immutable(state: dict[str, Any], requested: dict[str, Any]) -> None:
     changed = [key for key, value in requested.items() if state.get(key) != value]
     if changed:
         names = ", ".join(changed)
         raise InstallError(
             f"Recorded installation options differ ({names}); use its original options."
+        )
+
+
+def _assert_resume_kubernetes_options(
+    state: dict[str, Any], args: argparse.Namespace
+) -> None:
+    supplied: dict[str, object | None] = {
+        "--kube-context": args.kube_context,
+        "--kube-namespace": args.kube_namespace,
+        "--kube-storage-class": args.kube_storage_class,
+        "--kube-image": args.kube_image,
+        "--kube-preloaded-image": args.kube_preloaded_image,
+        "--kube-falkordb-receipt": (
+            _load_falkordb_receipt(args.kube_falkordb_receipt)
+            if args.kube_falkordb_receipt is not None
+            else None
+        ),
+    }
+    requested = {flag: value for flag, value in supplied.items() if value is not None}
+    if not requested:
+        return
+    kubernetes = state.get("kubernetes")
+    if not isinstance(kubernetes, dict):
+        raise InstallError(
+            "Kubernetes options were supplied for an installation without a Kubernetes transport record.",
+            "invalid_arguments",
+        )
+    keys = {
+        "--kube-context": "context",
+        "--kube-namespace": "namespace",
+        "--kube-storage-class": "storage_class",
+        "--kube-image": "image",
+        "--kube-preloaded-image": "preloaded_image",
+        "--kube-falkordb-receipt": "falkordb_receipt",
+    }
+    changed = [
+        flag for flag, value in requested.items() if kubernetes.get(keys[flag]) != value
+    ]
+    if changed:
+        raise InstallError(
+            "Recorded Kubernetes options differ ("
+            + ", ".join(changed)
+            + "); use its original options.",
+            "invalid_arguments",
+        )
+
+
+def _assert_resume_core_options(
+    state: dict[str, Any], args: argparse.Namespace
+) -> None:
+    requested: dict[str, object] = {}
+    if args.mode is not None:
+        requested["mode"] = args.mode
+    if args.port is not None:
+        requested["port"] = _validate_port(args.port)
+    if args.semantic:
+        requested["semantic"] = True
+    _assert_immutable(state, requested)
+
+
+def _assert_resume_falkordb_runtime(
+    state: dict[str, Any], args: argparse.Namespace
+) -> None:
+    if args.falkordb_runtime is None:
+        return
+    if state.get("falkordb_runtime") != _load_falkordb_runtime(args.falkordb_runtime):
+        raise InstallError(
+            "Recorded FalkorDB runtime differs; use its original configuration.",
+            "invalid_arguments",
         )
 
 
@@ -400,6 +791,8 @@ def _render_result(result: object, *, operation: str, verbose: bool) -> None:
         ("Endpoint", "endpoint"),
         ("State", "state"),
         ("Credential", "credential_file"),
+        ("Garden", "garden_endpoint"),
+        ("Garden adapters", "garden_profiles"),
     )
     for label, key in fields:
         if value := result.get(key):
@@ -497,7 +890,32 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 ) from error
             _render_result(result, operation=operation, verbose=args.verbose)
         return
-    if operation in {"status", "rollback"}:
+    if operation == "status":
+        name = _required(
+            args.name,
+            "--name",
+            "Installation name: ",
+            non_interactive=args.non_interactive,
+        )
+        with open_read_context(state_root, name) as ctx:
+            from . import workflow
+
+            ctx.verbose = args.verbose
+            args.transcript_path = ctx.directory / "commands.log"
+            _show_configuration(
+                operation=operation,
+                name=ctx.name,
+                mode=ctx.mode,
+                port=ctx.port,
+                semantic=ctx.semantic,
+                source=None,
+                state_root=state_root,
+            )
+            _render_result(
+                workflow.status_install(ctx), operation=operation, verbose=args.verbose
+            )
+        return
+    if operation == "rollback":
         name = _required(
             args.name,
             "--name",
@@ -518,12 +936,11 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 source=None,
                 state_root=state_root,
             )
-            function = (
-                workflow.status_install
-                if operation == "status"
-                else workflow.rollback_install
+            _render_result(
+                workflow.rollback_install(ctx),
+                operation=operation,
+                verbose=args.verbose,
             )
-            _render_result(function(ctx), operation=operation, verbose=args.verbose)
         return
 
     if operation == "resume":
@@ -548,6 +965,17 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 ctx.state,
                 {"source": str(source), "source_fingerprint": fingerprint},
             )
+            _assert_resume_core_options(ctx.state, args)
+            _assert_resume_kubernetes_options(ctx.state, args)
+            _assert_resume_falkordb_runtime(ctx.state, args)
+            if args.garden_config is not None:
+                from .garden import load_options
+
+                saved = ctx.state.get("garden", {}).get("options")
+                if saved != load_options(args.garden_config, ctx.mode):
+                    raise InstallError(
+                        "Recorded Garden options differ; resume with the original configuration"
+                    )
             _show_configuration(
                 operation=operation,
                 name=ctx.name,
@@ -558,6 +986,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 state_root=state_root,
             )
             _validate_platform_features(ctx.mode, ctx.semantic)
+            _validate_garden_platform(ctx.mode, enabled="garden" in ctx.state)
             if ctx.semantic:
                 _prepare_provider_key(ctx, args.provider_key_file)
             _render_result(
@@ -571,8 +1000,8 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
             )
         return
 
-    name, mode, port, semantic, source, fingerprint = _new_configuration(
-        args, default_source
+    name, mode, port, semantic, source, fingerprint, kubernetes_options, runtime = (
+        _new_configuration(args, default_source)
     )
     _show_configuration(
         operation="install",
@@ -590,12 +1019,34 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
         "source": str(source),
         "source_fingerprint": fingerprint,
     }
+    if kubernetes_options is not None:
+        create["kubernetes"] = kubernetes_options
+    if runtime is not None:
+        create["falkordb_runtime"] = runtime
+    garden_options = None
+    if args.garden_config is not None:
+        from .garden import load_options
+
+        garden_options = load_options(args.garden_config, mode)
+        if garden_options["port"] == port:
+            raise InstallError("Garden and Cairn need different listening ports")
+        create["garden"] = {"options": garden_options}
+        print(f"  Garden HTTPS endpoint: {garden_options['endpoint']}")
+        print("  Garden data: preserved by restart/rollback; deleted by blitz")
     with open_context(state_root, name, create=create) as ctx:
         from . import workflow
 
         ctx.verbose = args.verbose
         args.transcript_path = ctx.directory / "commands.log"
-        _assert_immutable(ctx.state, create)
+        # Garden's enrolment and lifecycle receipts accumulate under this key;
+        # only its options form the immutable user configuration.
+        _assert_immutable(
+            ctx.state, {key: value for key, value in create.items() if key != "garden"}
+        )
+        if ctx.state.get("garden", {}).get("options") != garden_options:
+            raise InstallError(
+                "Recorded Garden options differ; use the original configuration"
+            )
         if semantic:
             _prepare_provider_key(ctx, args.provider_key_file)
         _render_result(
@@ -624,12 +1075,16 @@ def main(
         return 0
     except InstallError as error:
         failed = True
+        sys.stdout.flush()
         print(
-            f"{paint('error', 'error', fd=2)} [{error.code}]: {error}", file=sys.stderr
+            f"{paint('error', 'error', fd=2)} [{error.code}]: {error}",
+            file=sys.stderr,
+            flush=True,
         )
         return 2
     except KeyboardInterrupt:
         failed = True
+        sys.stdout.flush()
         recovery = (
             "recovery information retained. Retry blitz with the same name."
             if operation == "blitz"
@@ -638,6 +1093,7 @@ def main(
         print(
             f"{paint('error', 'error', fd=2)} [interrupted]: interrupted; {recovery}",
             file=sys.stderr,
+            flush=True,
         )
         return 130
     finally:

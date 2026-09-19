@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -161,7 +162,10 @@ async def post_ingest(
 
 
 def realm_events(data_path: Path) -> list[dict[str, object]]:
-    with sqlite3.connect(data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         rows = connection.execute(
             "SELECT canonical_event FROM audit_events "
             "WHERE chain_kind = 'realm' ORDER BY sequence"

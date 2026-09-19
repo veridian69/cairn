@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 FALKORDB_IMAGE = (
-    "ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:"
-    "37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578"
+    "cairn.local/falkordb-runtime@sha256:"
+    "0000000000000000000000000000000000000000000000000000000000000000"
 )
 
 _SECRET_INIT = """\
@@ -120,6 +120,10 @@ def render_compose(
     semantic: bool,
     provider_key_file: Path | None = None,
     falkordb_password_file: Path | None = None,
+    falkordb_image: str = FALKORDB_IMAGE,
+    falkordb_local: bool = False,
+    garden_image: str | None = None,
+    garden_port: int = 8443,
 ) -> str:
     credentials_mount = f"""\
       - type: bind
@@ -194,7 +198,8 @@ def render_compose(
     restart: "no"
 
   falkordb:
-    image: {_quoted(FALKORDB_IMAGE)}
+    image: {_quoted(falkordb_image)}
+{("    pull_policy: never" + chr(10)) if falkordb_local else ""}\
     depends_on:
       secret-init:
         condition: service_completed_successfully
@@ -245,12 +250,105 @@ def render_compose(
 {_labels(instance_id, run_id, "      ")}
 """
 
+    garden_services = ""
+    garden_volumes = ""
+    garden_publish = ""
+    if garden_image:
+        garden_publish = f"\n      - {_quoted(f'0.0.0.0:{garden_port}:9443')}"
+        # Reuse only the atomic publisher; TLS PEM deliberately permits newlines.
+        code = (
+            _SECRET_INIT.split("def install(")[0]
+            + """
+for name in ("server.crt", "server.key"):
+    value = Path("/source/" + name).read_bytes()
+    if not value or len(value) > 1048576:
+        raise SystemExit("invalid TLS source")
+    publish("/target/tls/" + name, value, 65532)
+os.chown("/target/data", 65532, 65532)
+os.chmod("/target/data", 0o700)
+"""
+        )
+        init_code = "\n".join(f"        {line}" for line in code.splitlines())
+        garden_services = f"""
+  garden:
+    profiles: [garden]
+    image: {_quoted(garden_image)}
+    user: "65532:65532"
+    network_mode: service:cairn
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    volumes:
+      - type: bind
+        source: {_source(root / "garden/host.json", root)}
+        target: /etc/garden/host.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: garden-data
+        target: /var/lib/garden
+      - type: volume
+        source: garden-tls
+        target: /var/run/secrets/garden
+        read_only: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    labels:
+{_labels(instance_id, run_id, "      ")}
+  garden-secret-init:
+    profiles: [garden]
+    image: {_quoted(image)}
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    entrypoint: [python, -c]
+    command:
+      - |-
+{init_code}
+    volumes:
+      - type: bind
+        source: {_source(root / "garden/tls/server.crt", root)}
+        target: /source/server.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: {_source(root / "garden/tls/server.key", root)}
+        target: /source/server.key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: garden-tls
+        target: /target/tls
+      - type: volume
+        source: garden-data
+        target: /target/data
+    restart: "no"
+    labels:
+{_labels(instance_id, run_id, "      ")}
+"""
+        garden_volumes = f"""
+  garden-data:
+    labels:
+{_labels(instance_id, run_id, "      ")}
+  garden-tls:
+    labels:
+{_labels(instance_id, run_id, "      ")}
+"""
+
     return f"""\
 services:
   cairn:
     image: {_quoted(image)}
     ports:
-      - {_quoted(f"127.0.0.1:{port}:8000")}
+      - {_quoted(f"127.0.0.1:{port}:8000")}{garden_publish}
     read_only: true
     cap_drop:
       - ALL
@@ -285,11 +383,13 @@ services:
     labels:
 {_labels(instance_id, run_id, "      ")}
 {semantic_services}
+{garden_services}
 volumes:
   cairn-data:
     labels:
 {_labels(instance_id, run_id, "      ")}
 {semantic_volumes}
+{garden_volumes}
 networks:
   default:
     labels:

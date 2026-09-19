@@ -39,7 +39,7 @@ import sqlite3
 import subprocess
 import threading
 from collections.abc import AsyncGenerator, Generator, Iterable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -378,7 +378,10 @@ class Instance:
         return (self.data_path / CATALOGUE_FILENAME).read_bytes()
 
     def events(self, chain_kind: str) -> list[dict[str, object]]:
-        with sqlite3.connect(self.data_path / CATALOGUE_FILENAME) as connection:
+        with (
+            closing(sqlite3.connect(self.data_path / CATALOGUE_FILENAME)) as connection,
+            connection,
+        ):
             rows = connection.execute(
                 "SELECT canonical_event FROM audit_events "
                 "WHERE chain_kind = ? ORDER BY sequence",
@@ -393,7 +396,10 @@ class Instance:
 
     def count(self, table: str) -> int:
         assert table.isidentifier()
-        with sqlite3.connect(self.data_path / CATALOGUE_FILENAME) as connection:
+        with (
+            closing(sqlite3.connect(self.data_path / CATALOGUE_FILENAME)) as connection,
+            connection,
+        ):
             row = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
         return int(row[0])
 

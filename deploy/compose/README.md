@@ -37,7 +37,7 @@ recovery procedure.
 
 ## Image and contract boundary
 
-`CAIRN_IMAGE=cairn:v0.5.0-rc.4` in `../images.lock` is a local build tag, not a
+`CAIRN_IMAGE=cairn:v0.7.8` in `../images.lock` is a local build tag, not a
 published image. Use the reviewed local build produced below or a separately
 reviewed registry digest and record its exact identity.
 
@@ -95,9 +95,11 @@ systemctl is-enabled docker
 curl --version
 ```
 
-For RC4 semantic retrieval, first load the [maintained FalkorDB offline
-archive](../falkordb/README.md#install-the-maintained-offline-image) on this Docker host.
-The loader requires Docker's containerd image store; GHCR publication is pending.
+For semantic retrieval, first [build FalkorDB locally](../falkordb/README.md)
+on this Docker host. Set `FALKORDB_IMAGE` in the shell to the resulting
+`runtime.json` image reference; the shell value overrides the historical
+deployment lock used by the manual Compose commands below. Guided installation
+uses `--falkordb-runtime` instead.
 
 If you plan to enable semantic retrieval, run its additional checks before
 creating the instance:
@@ -147,8 +149,8 @@ repository root, verify the contracts, build the image named by
 ```sh
 (cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-make image IMAGE=cairn:v0.5.0-rc.4
-docker image inspect --format '{{.Id}}' cairn:v0.5.0-rc.4
+make image IMAGE=cairn:v0.7.8
+docker image inspect --format '{{.Id}}' cairn:v0.7.8
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
@@ -172,7 +174,7 @@ removes an object only when both still match.
 set -eu
 set -o pipefail
 
-preflight_image='cairn:v0.5.0-rc.4'
+preflight_image='cairn:v0.7.8'
 preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 preflight_label_key='io.cairn.compose-preflight'
 preflight_network="cairn-preflight-$preflight_id"

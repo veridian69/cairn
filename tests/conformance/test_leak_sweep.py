@@ -25,6 +25,7 @@ refused there.
 """
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -379,7 +380,10 @@ async def test_every_corpus_positive_leaves_no_trace_anywhere(
     catalogue_blob = instance.catalogue_bytes()
     attic_path = instance.data_path / ATTIC_FILENAME
     attic_blob = attic_path.read_bytes() if attic_path.exists() else b""
-    with sqlite3.connect(instance.data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(instance.data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         outbox_rows = connection.execute(
             "SELECT COUNT(*) FROM evidence_outbox"
         ).fetchone()[0]

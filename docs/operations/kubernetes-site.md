@@ -7,12 +7,14 @@ result in your site's GitOps repository; it contains configuration, not secrets.
 
 ## Publish the Cairn image first
 
-This installation path requires a registry that every selected worker can pull
-from. A local Docker build or a containerd import alone is insufficient: the
-worker must resolve the **exact digest reference** used in the Pod. Importing an
-image under a tag does not necessarily register that digest reference. Local
-containerd import and alias registration are outside this procedure; publish to
-a registry first instead of relying on a node-local image cache.
+This manual GitOps installation path requires a registry that every selected
+worker can pull from. A local Docker build or a containerd import alone is
+insufficient here: the worker must resolve the **exact digest reference** used
+in the Pod. Importing an image under a tag does not necessarily register that
+digest reference. The guided installer separately documents a supported
+single-node node-local staging exception; it is deliberately outside this
+multi-node-capable manual procedure. See the
+[guided installation reference](guided-installation.md#install-to-an-existing-kubernetes-namespace).
 
 If your distributor provides a reviewed registry digest, use it directly below.
 Otherwise, on a trusted Linux x86_64 build host with Docker access, replace the
@@ -136,7 +138,7 @@ for document in documents:
                 fsGroup=65532, fsGroupChangePolicy="OnRootMismatch"
             )
             for container in pod.get("initContainers", []) + pod["containers"]:
-                assert container["image"] == "cairn:v0.5.0-rc.4"
+                assert container["image"] == "cairn:v0.7.8"
                 container["image"] = image
 
 # NetworkPolicy changes must consist only of replacing existing instance values.

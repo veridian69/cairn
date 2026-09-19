@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -128,7 +129,10 @@ def make_transactions(data_path: Path) -> CatalogueTransactions:
 
 
 def instance_events(data_path: Path) -> list[dict[str, object]]:
-    with sqlite3.connect(data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         rows = connection.execute(
             "SELECT canonical_event FROM audit_events "
             "WHERE chain_kind = 'instance' ORDER BY sequence"

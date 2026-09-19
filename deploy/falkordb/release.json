@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "image": "ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578",
+  "image_placeholder": "cairn.local/falkordb-runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "local_image": "cairn-local/falkordb-server:v4.20.4-runtime-fix",
   "archive_sha256": "b36492a4358dbd15b52e874338c975a6606fda30bb5418140b3060312cc881ec"
 }

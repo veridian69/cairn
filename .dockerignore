@@ -21,3 +21,6 @@ config/
 docs/
 scripts/
 tests/
+
+# Garden is built independently of the Cairn service image.
+a2a/

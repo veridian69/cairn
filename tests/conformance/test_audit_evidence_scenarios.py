@@ -9,6 +9,7 @@ durable Attic write — is proven here, through the wire.
 
 import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -59,7 +60,7 @@ async def test_evidence_04_secret_material_never_reaches_the_attic(
     assert AWS_EXAMPLE_KEY.encode() not in instance.catalogue_bytes()
     attic_path = instance.data_path / ATTIC_FILENAME
     if attic_path.exists():
-        with sqlite3.connect(attic_path) as connection:
+        with closing(sqlite3.connect(attic_path)) as connection, connection:
             rows = connection.execute("SELECT COUNT(*) FROM payloads").fetchone()
         assert rows[0] == 0
         assert AWS_EXAMPLE_KEY.encode() not in attic_path.read_bytes()
@@ -162,7 +163,10 @@ async def test_audit_03_events_omit_all_prohibited_content(
 
     assert allowed.outcome == "committed"
     assert secret_attempt.failure_code == "secret_rejected"
-    with sqlite3.connect(instance.data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(instance.data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         stored_events = [
             bytes(row[0]).decode("utf-8")
             for row in connection.execute(
@@ -229,7 +233,12 @@ def _tampered_copy(instance: Instance, destination: Path) -> CairnConfig:
     the way an attacker with file access would."""
     shutil.copytree(instance.data_path, destination / "data")
     (destination / "credentials").mkdir(exist_ok=True)
-    with sqlite3.connect(destination / "data" / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(
+            sqlite3.connect(destination / "data" / CATALOGUE_FILENAME)
+        ) as connection,
+        connection,
+    ):
         connection.execute("DROP TRIGGER trg_audit_events_no_update")
         connection.execute("DROP TRIGGER trg_audit_events_no_delete")
         connection.commit()
@@ -268,7 +277,12 @@ async def test_audit_05_chain_verifies_and_tampering_is_detected(
     # body itself is deliberately absent from events (AUDIT-03), so the
     # forgery targets a field every event does carry.
     modified = _tampered_copy(instance, tmp_path / "modified")
-    with sqlite3.connect(modified.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(
+            sqlite3.connect(modified.paths.data / CATALOGUE_FILENAME)
+        ) as connection,
+        connection,
+    ):
         row = connection.execute(
             "SELECT rowid, canonical_event FROM audit_events "
             "WHERE chain_kind = 'realm' AND sequence = 1"
@@ -284,7 +298,10 @@ async def test_audit_05_chain_verifies_and_tampering_is_detected(
         verify_catalogue(modified)
 
     removed = _tampered_copy(instance, tmp_path / "removed")
-    with sqlite3.connect(removed.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(removed.paths.data / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         connection.execute(
             "DELETE FROM audit_events WHERE chain_kind = 'realm' AND sequence = 2"
         )
@@ -293,7 +310,12 @@ async def test_audit_05_chain_verifies_and_tampering_is_detected(
         verify_catalogue(removed)
 
     reordered = _tampered_copy(instance, tmp_path / "reordered")
-    with sqlite3.connect(reordered.paths.data / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(
+            sqlite3.connect(reordered.paths.data / CATALOGUE_FILENAME)
+        ) as connection,
+        connection,
+    ):
         first = connection.execute(
             "SELECT canonical_event FROM audit_events "
             "WHERE chain_kind = 'realm' AND sequence = 1"

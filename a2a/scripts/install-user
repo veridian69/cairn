@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Stage Garden binaries and templates without changing credentials or services."""
+
+import argparse
+import hashlib
+import json
+import os
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+MODULE = Path(__file__).absolute().parent.parent
+
+
+def regular_path(path, directory=False):
+    """Reject symlinks and unexpected types, including in existing ancestors."""
+    for parent in reversed(path.parents):
+        if parent.is_symlink():
+            raise ValueError(f"symlink is not allowed: {parent}")
+        if parent.exists() and not parent.is_dir():
+            raise ValueError(f"not a directory: {parent}")
+    if path.is_symlink():
+        raise ValueError(f"symlink is not allowed: {path}")
+    if path.exists():
+        mode = path.stat().st_mode
+        wanted = stat.S_ISDIR(mode) if directory else stat.S_ISREG(mode)
+        if not wanted:
+            raise ValueError(f"unexpected file type: {path}")
+
+
+def absolute_destination(value):
+    path = Path(value).expanduser()
+    if not path.is_absolute() or ".." in path.parts:
+        raise argparse.ArgumentTypeError(
+            "destination must be an absolute path without '..'"
+        )
+    if path == Path("/mnt") or Path("/mnt") in path.parents:
+        raise argparse.ArgumentTypeError(
+            "installation requires a native Linux path outside /mnt"
+        )
+    return path
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def atomic_write(path, data, mode):
+    regular_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    regular_path(path)
+    if (
+        path.exists()
+        and path.read_bytes() == data
+        and stat.S_IMODE(path.stat().st_mode) == mode
+    ):
+        return
+    descriptor, temporary = tempfile.mkstemp(prefix=".garden-install-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+        regular_path(path)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def main(kind="user"):
+    parser = argparse.ArgumentParser(description=__doc__)
+    if kind == "server":
+        parser.add_argument(
+            "--root",
+            required=True,
+            type=absolute_destination,
+            help="absolute staging root; / explicitly selects this host",
+        )
+    else:
+        parser.add_argument(
+            "--prefix",
+            type=absolute_destination,
+            default=str(Path.home() / ".local"),
+            help="installation prefix (default: ~/.local)",
+        )
+    parser.add_argument(
+        "--binary", type=Path, help="prebuilt executable; skips the source build"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate and print paths without building or writing",
+    )
+    args = parser.parse_args()
+    try:
+        if not sys.platform.startswith("linux"):
+            raise ValueError("installers support Linux and WSL only")
+        root = args.root if kind == "server" else args.prefix
+        regular_path(root, directory=True)
+        prefix = Path("usr/local") if kind == "server" else Path(".")
+        manifest_path = root / prefix / "share/garden/install-manifest.json"
+        regular_path(manifest_path)
+        previous = {}
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text())
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("version") != 1
+                or manifest.get("kind") != kind
+            ):
+                raise ValueError(f"unrecognised installation manifest: {manifest_path}")
+            previous = manifest.get("files")
+            if not isinstance(previous, dict) or any(
+                not isinstance(key, str)
+                or not isinstance(value, str)
+                or len(value) != 64
+                for key, value in previous.items()
+            ):
+                raise ValueError(f"invalid ownership manifest: {manifest_path}")
+
+        # Validate every destination before building or creating installation files.
+        sources = {
+            prefix / "bin/a2a": args.binary.absolute()
+            if args.binary
+            else MODULE / "a2a"
+        }
+        for name in ("garden-config", "garden-session"):
+            sources[prefix / "bin" / name] = MODULE / "scripts" / name
+        deploy = MODULE / "deploy"
+        regular_path(deploy, directory=True)
+        for source in sorted(deploy.iterdir()):
+            sources[prefix / "share/garden/deploy" / source.name] = source
+        preserved = {}
+        if kind == "server":
+            for name in ("garden-daemon.service", "garden-mcp.service"):
+                sources[Path("etc/systemd/system") / name] = deploy / name
+            preserved = {
+                Path("etc/garden/garden.json"): deploy / "garden.example.json",
+                Path("var/lib/garden/.a2a/config.yaml"): deploy / "daemon.yaml",
+            }
+            runtime = root / "var/lib/garden/.a2a"
+            regular_path(runtime, directory=True)
+            if runtime.exists() and stat.S_IMODE(runtime.stat().st_mode) & 0o077:
+                raise ValueError(
+                    f"runtime directory must already be private (mode 0700): {runtime}"
+                )
+
+        for relative, source in (sources | preserved).items():
+            destination = root / relative
+            regular_path(destination)
+            regular_path(source)
+            building = relative == prefix / "bin/a2a" and args.binary is None
+            if not building and not source.is_file():
+                raise ValueError(f"missing installation source: {source}")
+            if relative in sources and destination.exists():
+                if previous.get(str(relative)) != digest(destination.read_bytes()):
+                    raise ValueError(
+                        f"refusing to replace unowned or modified file: {destination}"
+                    )
+        if args.binary is not None and not os.access(args.binary, os.X_OK):
+            raise ValueError(f"binary must be executable: {args.binary}")
+
+        if args.dry_run:
+            if args.binary is None:
+                print(f"Would build: make -C {MODULE} build")
+            for relative in sources:
+                print(f"Would install: {root / relative}")
+            for relative in preserved:
+                print(
+                    f"Would {'preserve' if (root / relative).exists() else 'create'}: {root / relative}"
+                )
+            print(f"Would record ownership: {manifest_path}")
+            return 0
+
+        if args.binary is None:
+            subprocess.run(["make", "-C", str(MODULE), "build"], check=True)
+        binary = sources[prefix / "bin/a2a"]
+        regular_path(binary)
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ValueError(f"binary must be a regular executable: {binary}")
+        # Read all payloads before changing destinations; an unreadable source
+        # cannot leave an otherwise valid installation partly replaced.
+        payloads = {
+            relative: source.read_bytes() for relative, source in sources.items()
+        }
+        initial_config = {
+            relative: source.read_bytes() for relative, source in preserved.items()
+        }
+        if kind == "server":
+            runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for relative, data in payloads.items():
+            mode = 0o755 if relative.parent == prefix / "bin" else 0o644
+            atomic_write(root / relative, data, mode)
+        for relative, data in initial_config.items():
+            destination = root / relative
+            if not destination.exists():
+                atomic_write(destination, data, 0o600)
+        manifest = {
+            "version": 1,
+            "kind": kind,
+            "files": {
+                str(relative): digest(data) for relative, data in payloads.items()
+            },
+        }
+        atomic_write(
+            manifest_path,
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+            0o644,
+        )
+        print(f"Installed Garden {kind} files under {root}")
+        if kind == "server":
+            print(
+                "Stage only: no account, credentials, TLS material or services were created or started."
+            )
+            print(
+                "On the target host, provision the garden system account with home /var/lib/garden."
+            )
+            print(
+                "Edit /etc/garden/garden.json and provision its TLS files before starting services."
+            )
+            print("Then run these host commands with administrative authority:")
+            print("  getent group garden >/dev/null || groupadd --system garden")
+            print(
+                "  getent passwd garden >/dev/null || useradd --system --gid garden"
+                " --home-dir /var/lib/garden --shell /usr/sbin/nologin garden"
+            )
+            print("  chown -R garden:garden /var/lib/garden")
+            print("  chown root:garden /etc/garden/garden.json")
+            print("  chmod 0640 /etc/garden/garden.json")
+            print("  systemctl daemon-reload")
+            print("  systemctl enable --now garden-daemon.service garden-mcp.service")
+        else:
+            print(
+                f"Add {root / 'bin'} to PATH; run garden-config --help to configure MCP for an existing profile."
+            )
+        return 0
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"install-{kind}: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

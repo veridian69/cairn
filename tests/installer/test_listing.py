@@ -19,6 +19,7 @@ def _state(
     status: str = "verified",
     port: int = 18000,
     semantic: bool = False,
+    garden: bool = False,
 ) -> dict[str, object]:
     value: dict[str, object] = {
         "schema": 1,
@@ -34,6 +35,10 @@ def _state(
         "port": port,
         "semantic": semantic,
     }
+    if garden:
+        value["garden"] = {
+            "options": {"endpoint": "https://garden.example:8443/mcp", "port": 8443}
+        }
     directory = root / name
     directory.mkdir(mode=0o700)
     path = directory / "state.json"
@@ -90,6 +95,57 @@ def test_lists_recorded_state_in_name_order_and_ignores_unrelated_entries(
             "instance_id": "22222222-2222-4222-8222-222222222222",
         },
     ]
+
+
+def test_lists_managed_garden_as_an_installed_feature(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _state(root, "demo", garden=True)
+
+    assert list_instances(root)[0]["features"] == "Attic only; Garden"
+
+
+def test_malformed_managed_garden_state_is_unavailable(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    state = _state(root, "demo")
+    state["garden"] = {"options": {"endpoint": 123}}
+    path = root / "demo" / "state.json"
+    path.write_text(json.dumps(state))
+    path.chmod(0o600)
+
+    assert list_instances(root)[0]["status"] == "unavailable"
+
+
+def test_lists_kubernetes_state_with_a_complete_transport_contract(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    state = _state(root, "demo", mode="kubernetes")
+    state["kubernetes"] = {
+        "context": "reference",
+        "namespace": "demo",
+        "storage_class": "cairn-rwop",
+        "image": "registry.example/cairn@sha256:" + "a" * 64,
+        "image_policy": "Always",
+        "preloaded_image": False,
+    }
+    path = root / "demo" / "state.json"
+    path.write_text(json.dumps(state))
+    path.chmod(0o600)
+
+    assert list_instances(root)[0]["mode"] == "kubernetes"
+
+
+def test_kubernetes_listing_refuses_an_incomplete_transport_contract(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    state = _state(root, "demo", mode="kubernetes")
+    state["kubernetes"] = {"context": "reference", "namespace": "demo"}
+    path = root / "demo" / "state.json"
+    path.write_text(json.dumps(state))
+    path.chmod(0o600)
+
+    assert list_instances(root)[0]["status"] == "unavailable"
 
 
 def test_protected_recovery_journal_is_authoritative_and_deduplicated(

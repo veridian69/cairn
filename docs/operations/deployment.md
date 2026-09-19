@@ -2,11 +2,11 @@
 
 **Installing for the first time?** Start with the
 [guided installer quick install](../install.md#quick-install-with-the-guided-installer)
-for disposable native, persistent native and Docker. The manual
+for disposable, native, Docker and Kubernetes modes. The manual
 [persistent native installation](native-installation.md) and
 [complete Compose procedure](../../deploy/compose/README.md) remain the full
-reference. Kubernetes is a separate manual deployment path without installer
-support. Fresh-user beginner acceptance is still pending.
+host references; Kubernetes also retains a separate manual GitOps path.
+Fresh-user beginner acceptance is still pending.
 
 This guide selects and deploys one Cairn v0.1 instance. Read the
 [backup and restore runbook](backup-restore.md) before first production use,
@@ -15,7 +15,7 @@ configure REST or MCP callers.
 
 ## Image and contract boundary
 
-`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.5.0-rc.4`. This is a
+`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.7.8`. This is a
 local build tag, not evidence of a published or registry-verified image. Build
 from a trusted checkout or supply an operator-controlled immutable image
 reference. Record the image digest with the rendered deployment manifest. Do

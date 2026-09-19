@@ -1,7 +1,7 @@
 # Security policy
 
-Cairn `v0.5.0-rc.4` is a release candidate. There is no stable release or
-long-term support policy yet.
+Cairn `v0.7.8` is the current stable source release. There is no long-term
+support policy yet.
 
 ## Report a vulnerability
 

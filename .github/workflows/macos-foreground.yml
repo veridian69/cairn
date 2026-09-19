@@ -60,6 +60,8 @@ jobs:
           tests/installer/test_macos_native_acceptance.py
           tests/installer/test_macos_cli.py
           tests/installer/test_cli.py
+          tests/installer/test_garden_native.py::test_macos_refuses_new_garden_before_creating_state
+          tests/installer/test_garden_native.py::test_macos_refuses_retained_garden_before_workflow
           tests/catalogue/test_sqlite_durability.py
       - name: Exercise persistent launchd, memory, Attic and lifecycle recovery
         run: >-

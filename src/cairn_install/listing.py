@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,7 +15,9 @@ from uuid import UUID
 
 from .core import MAX_OUTPUT, NAME, InstallError
 
-_MODES = frozenset({"disposable", "native", "docker"})
+_MODES = frozenset({"disposable", "native", "docker", "kubernetes"})
+_IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-fA-F]{64}\Z")
+_KUBERNETES_NAMESPACE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\Z")
 _STATUSES = frozenset(
     {
         "planned",
@@ -127,6 +130,49 @@ def _uuid(value: object) -> str:
     return value
 
 
+def _valid_kubernetes(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    context = value.get("context")
+    namespace = value.get("namespace")
+    storage_class = value.get("storage_class")
+    image = value.get("image")
+    policy = value.get("image_policy")
+    preloaded = value.get("preloaded_image")
+    if not all(
+        isinstance(item, str) and item and not any(char.isspace() for char in item)
+        for item in (context, storage_class)
+    ):
+        return False
+    if (
+        not isinstance(namespace, str)
+        or not _KUBERNETES_NAMESPACE.fullmatch(namespace)
+        or not isinstance(image, str)
+        or not _IMAGE_DIGEST.fullmatch(image)
+        or type(preloaded) is not bool
+    ):
+        return False
+    return policy == ("IfNotPresent" if preloaded else "Always")
+
+
+def _valid_garden(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    options = value.get("options")
+    if not isinstance(options, dict):
+        return False
+    endpoint = options.get("endpoint")
+    port = options.get("port")
+    return (
+        isinstance(endpoint, str)
+        and endpoint.startswith("https://")
+        and endpoint.endswith("/mcp")
+        and not any(ord(char) < 32 or char.isspace() for char in endpoint)
+        and type(port) is int
+        and 1024 <= port <= 65535
+    )
+
+
 def _row(value: dict[str, Any], name: str) -> dict[str, object]:
     mode = value.get("mode")
     status_value = value.get("status")
@@ -145,15 +191,20 @@ def _row(value: dict[str, Any], name: str) -> dict[str, object]:
         or type(port) is not int
         or not 1 <= port <= 65535
         or type(semantic) is not bool
+        or (mode == "kubernetes" and not _valid_kubernetes(value.get("kubernetes")))
+        or ("garden" in value and not _valid_garden(value.get("garden")))
     ):
         raise _Unavailable
     instance_id = _uuid(value.get("instance_id"))
+    features = "Attic plus semantic search" if semantic else "Attic only"
+    if "garden" in value:
+        features += "; Garden"
     return {
         "name": name,
         "mode": mode,
         "status": status_value,
         "port": port,
-        "features": "Attic plus semantic search" if semantic else "Attic only",
+        "features": features,
         "instance_id": instance_id,
     }
 

@@ -12,6 +12,7 @@ import stat
 import sys
 from pathlib import Path
 
+from . import garden
 from .core import Context, InstallError
 from .docker_assets import FALKORDB_IMAGE, render_compose, render_config
 
@@ -96,6 +97,7 @@ class Backend:
         fingerprint = str(ctx.state.get("source_fingerprint", "source"))
         suffix = re.sub(r"[^a-z0-9_.-]", "-", fingerprint.lower())[:24]
         self.image = f"{self.project}:{suffix or 'source'}"
+        self.garden_image = f"{self.project}-garden:{suffix or 'source'}"
         self.compose_path = ctx.root / "compose.yaml"
         self.env_path = ctx.root / "compose.env"
         self.config_path = ctx.root / "config.yaml"
@@ -117,6 +119,27 @@ class Backend:
             )
         if self._docker.get("owner_labels") != self._owner_labels:
             raise InstallError("Recorded Docker ownership labels do not match this run")
+
+    @property
+    def garden_enabled(self) -> bool:
+        return bool(self.ctx.state.get("garden"))
+
+    def _check_garden_options(self) -> None:
+        if self.garden_enabled:
+            if self.ctx.state["garden"]["options"].get("image"):
+                raise InstallError(
+                    "Docker Garden requires an owned source build; --garden-image is not supported"
+                )
+            if not (self.ctx.source / "a2a/Dockerfile").is_file():
+                raise InstallError("Source checkout has no Garden a2a/Dockerfile")
+
+    @property
+    def _all_compose(self) -> list[str]:
+        return (
+            [*self._compose, "--profile", "garden"]
+            if self.garden_enabled
+            else self._compose
+        )
 
     @property
     def runtime_python(self) -> str:
@@ -160,6 +183,7 @@ class Backend:
         )
 
     def preflight(self) -> None:
+        self._check_garden_options()
         if not (3, 12) <= sys.version_info[:2] <= (3, 14):
             raise InstallError("The installer needs host Python 3.12–3.14")
         if platform.system() != "Linux" or platform.machine() not in {
@@ -192,10 +216,60 @@ class Backend:
             raise InstallError("Docker daemon must be Linux x86_64")
         if not (self.ctx.source / "Dockerfile").is_file():
             raise InstallError("Source checkout has no Dockerfile")
+        self._check_local_falkordb()
         if not self._project_container_ids():
             _check_loopback_port(self.ctx.port)
+            if "garden" in self.ctx.state:
+                from .garden import require_listener_available
+
+                require_listener_available(
+                    int(self.ctx.state["garden"]["options"]["port"]), wildcard=True
+                )
+
+    def _falkordb_image(self) -> str:
+        runtime = self.ctx.state.get("falkordb_runtime")
+        if runtime is None:
+            recorded = self._docker.get("semantic", {}).get("falkordb_image")
+            if isinstance(recorded, str) and re.fullmatch(
+                r"[^@\s]+@sha256:[0-9a-f]{64}", recorded
+            ):
+                return recorded
+            return FALKORDB_IMAGE
+        image = runtime.get("image") if isinstance(runtime, dict) else None
+        if not isinstance(image, str) or not re.fullmatch(
+            r"cairn\.local/falkordb-runtime@sha256:[0-9a-f]{64}", image
+        ):
+            raise InstallError("Invalid local FalkorDB runtime image")
+        recorded = self._docker.get("semantic", {}).get("falkordb_image", image)
+        if recorded != image:
+            raise InstallError("Recorded FalkorDB runtime image changed")
+        return image
+
+    def _check_local_falkordb(self) -> None:
+        if not self.ctx.semantic or "falkordb_runtime" not in self.ctx.state:
+            return
+        image = self._falkordb_image()
+        try:
+            items = json.loads(self._command(["docker", "image", "inspect", image]))
+            valid = (
+                isinstance(items, list)
+                and len(items) == 1
+                and isinstance(items[0], dict)
+                and image in (items[0].get("RepoDigests") or [])
+                and items[0].get("Os") == "linux"
+                and items[0].get("Architecture") == "amd64"
+            )
+        except (InstallError, ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise InstallError(
+                "Exact local FalkorDB runtime is unavailable; build or load the "
+                "retained runtime into Docker's containerd image store"
+            )
 
     def prepare(self) -> None:
+        self._check_garden_options()
+        self._check_local_falkordb()
         password_file = self.credentials_path / "falkordb-password.source"
         if self.ctx.semantic:
             password_present = password_file.exists() or password_file.is_symlink()
@@ -232,7 +306,7 @@ class Backend:
                 self.ctx.write_file(password_file, password + "\n", secret=True)
             self.ctx.add_secret(password)
             self._docker["semantic"] = {
-                "falkordb_image": FALKORDB_IMAGE,
+                "falkordb_image": self._falkordb_image(),
                 "provider_key_file": str(provider),
                 "falkordb_password_file": str(password_file),
             }
@@ -254,10 +328,20 @@ class Backend:
                 semantic=self.ctx.semantic,
                 provider_key_file=provider,
                 falkordb_password_file=password_file_for_compose,
+                falkordb_image=self._falkordb_image(),
+                falkordb_local="falkordb_runtime" in self.ctx.state,
+                garden_image=self.garden_image if self.garden_enabled else None,
+                garden_port=int(
+                    self.ctx.state.get("garden", {})
+                    .get("options", {})
+                    .get("port", 8443)
+                ),
             ),
             mode=0o644,
         )
         self._build_image()
+        if self.garden_enabled:
+            self._build_image(garden=True)
         self._command([*self._compose, "config", "--quiet"])
         self._bridge_preflight()
         self._docker["project_intent"] = "create_without_starting"
@@ -296,23 +380,26 @@ class Backend:
         }
         self.ctx.save()
 
-    def _build_image(self) -> None:
+    def _build_image(self, *, garden: bool = False) -> None:
+        reference = self.garden_image if garden else self.image
+        key = "garden_image" if garden else "image"
+        source = self.ctx.source / "a2a" if garden else self.ctx.source
         image_ids = self._ids(
             "image",
-            ["--filter", f"reference={self.image}"],
+            ["--filter", f"reference={reference}"],
             extra=["--no-trunc"],
         )
         if image_ids:
-            labels, image_id = self._image_details(self.image)
-            self._require_owned(labels, "Docker image", self.image)
-            self._docker["image"] = {"reference": self.image, "id": image_id}
+            labels, image_id = self._image_details(reference)
+            self._require_owned(labels, "Docker image", reference)
+            self._docker[key] = {"reference": reference, "id": image_id}
             self.ctx.save()
             return
-        self._docker["image"] = {"reference": self.image, "intent": "build"}
+        self._docker[key] = {"reference": reference, "intent": "build"}
         self.ctx.save()
         label_arguments: list[str] = []
-        for key, value in self._owner_labels.items():
-            label_arguments.extend(["--label", f"{key}={value}"])
+        for label, value in self._owner_labels.items():
+            label_arguments.extend(["--label", f"{label}={value}"])
         self._command(
             [
                 "docker",
@@ -322,14 +409,14 @@ class Backend:
                 "--build-arg",
                 f"REVISION={self.ctx.state.get('source_fingerprint', 'unknown')}",
                 "--tag",
-                self.image,
-                str(self.ctx.source),
+                reference,
+                str(source),
             ],
             timeout=1800,
         )
-        observed, image_id = self._image_details(self.image)
-        self._require_owned(observed, "Docker image", self.image)
-        self._docker["image"] = {"reference": self.image, "id": image_id}
+        observed, image_id = self._image_details(reference)
+        self._require_owned(observed, "Docker image", reference)
+        self._docker[key] = {"reference": reference, "id": image_id}
         self.ctx.save()
 
     def lifecycle_argv(self, operation: str) -> list[str]:
@@ -347,7 +434,15 @@ class Backend:
         ]
 
     def validate_ownership(self) -> None:
-        for path in (self.config_path, self.env_path, self.compose_path):
+        if self.ctx.semantic:
+            self._falkordb_image()
+        paths = [self.config_path, self.env_path, self.compose_path]
+        if self.garden_enabled:
+            paths.extend(
+                self.ctx.root / "garden" / name
+                for name in ("host.json", "tls/server.crt", "tls/server.key")
+            )
+        for path in paths:
             if (
                 path.exists()
                 or path.is_symlink()
@@ -410,15 +505,26 @@ class Backend:
                 f"replacement: {', '.join(missing_volumes)}"
             )
 
-        image_ids = self._ids(
-            "image",
-            ["--filter", f"reference={self.image}"],
-            extra=["--no-trunc"],
-        )
-        if image_ids:
-            labels, image_id = self._image_details(self.image)
-            self._require_owned(labels, "Docker image", self.image)
-            self._docker["image"] = {"reference": self.image, "id": image_id}
+        images = [("image", self.image)]
+        if self.garden_enabled:
+            images.append(("garden_image", self.garden_image))
+        for key, reference in images:
+            self._docker.setdefault(key, {"reference": reference})
+            image_ids = self._ids(
+                "image", ["--filter", f"reference={reference}"], extra=["--no-trunc"]
+            )
+            if image_ids:
+                labels, image_id = self._image_details(reference)
+                self._require_owned(labels, "Docker image", reference)
+                receipt = self._docker[key]
+                if (
+                    receipt.get("reference") != reference
+                    or receipt.get("id", image_id) != image_id
+                ):
+                    raise InstallError(
+                        f"Recorded Docker image reference was replaced: {reference}"
+                    )
+                self._docker[key] = {"reference": reference, "id": image_id}
         self._docker["containers"] = containers
         self._docker["network"] = network
         self._docker["volumes"] = volumes
@@ -426,14 +532,114 @@ class Backend:
 
     @property
     def _volume_names(self) -> tuple[str, ...]:
+        names: tuple[str, ...] = ("cairn-data",)
         if self.ctx.semantic:
-            return (
-                "cairn-data",
-                "cairn-credentials",
-                "falkordb-config",
-                "falkordb-data",
+            names += ("cairn-credentials", "falkordb-config", "falkordb-data")
+        if self.garden_enabled:
+            names += ("garden-data", "garden-tls")
+        return names
+
+    def garden_prepare(self) -> None:
+        self._check_garden_options()
+        self.validate_ownership()
+        config = garden.gateway_config(
+            self.ctx,
+            data_dir="/var/lib/garden/data",
+            daemon_url_file="/var/lib/garden/run/daemon.url",
+            cert_file="/var/run/secrets/garden/server.crt",
+            key_file="/var/run/secrets/garden/server.key",
+            listen="0.0.0.0:9443",
+            cairn_url="http://127.0.0.1:8000/memory/v1/diagnose",
+        )
+        garden.write_json_config(
+            self.ctx,
+            self.ctx.root / "garden/host.json",
+            {"gateway": config, "stream": {"max_age": "0", "max_bytes": 0}},
+            mode=0o644,
+        )
+        self._command(
+            [
+                *self._all_compose,
+                "up",
+                "--no-deps",
+                "--no-build",
+                "--abort-on-container-exit",
+                "--exit-code-from",
+                "garden-secret-init",
+                "garden-secret-init",
+            ],
+            timeout=120,
+        )
+        self.validate_ownership()
+
+    def garden_start(self) -> None:
+        self.validate_ownership()
+        if not self._docker["containers"].get("cairn"):
+            raise InstallError("Garden needs the owned Cairn container")
+        # Recreate explicitly: a recreated Cairn container has a new namespace.
+        # Inspect the attachment before allowing Garden to authenticate or serve.
+        self._command(
+            [
+                *self._all_compose,
+                "up",
+                "--no-start",
+                "--no-deps",
+                "--force-recreate",
+                "--no-build",
+                "garden",
+            ],
+            timeout=120,
+        )
+        self._check_garden_namespace()
+        self._command(
+            [
+                *self._all_compose,
+                "up",
+                "--detach",
+                "--no-deps",
+                "--no-recreate",
+                "--no-build",
+                "--wait",
+                "garden",
+            ],
+            timeout=120,
+        )
+        self._check_garden_namespace()
+
+    def _check_garden_namespace(self) -> None:
+        self.validate_ownership()
+        containers = self._docker["containers"]
+        central, cairn = containers.get("garden"), containers.get("cairn")
+        if not central or not cairn:
+            raise InstallError("Garden or Cairn container is missing")
+        namespace = self._command(
+            [
+                "docker",
+                "container",
+                "inspect",
+                "--format",
+                "{{.HostConfig.NetworkMode}}",
+                central,
+            ]
+        ).strip()
+        if namespace != "container:" + cairn:
+            raise InstallError(
+                "Garden is not attached to the owned Cairn network namespace"
             )
-        return ("cairn-data",)
+
+    def garden_stop(self) -> None:
+        self.validate_ownership()
+        if self._docker["containers"].get("garden"):
+            self._command(
+                [*self._all_compose, "stop", "--timeout", "30", "garden"], timeout=60
+            )
+
+    def garden_open_endpoint(self) -> int:
+        self._check_garden_namespace()
+        return int(self.ctx.state["garden"]["options"]["port"])
+
+    def garden_close_endpoint(self) -> None:
+        pass
 
     def is_running(self) -> bool:
         self.validate_ownership()
@@ -462,7 +668,7 @@ class Backend:
             return
         self._docker["service_intent"] = "stop"
         self.ctx.save()
-        self._command([*self._compose, "stop", "--timeout", "60"], timeout=90)
+        self._command([*self._all_compose, "stop", "--timeout", "60"], timeout=90)
         self.validate_ownership()
         self._docker["service_state"] = "stopped"
         self.ctx.save()
@@ -479,7 +685,7 @@ class Backend:
         if self._project_container_ids() or self._ids(
             "network", ["--filter", f"name=^{self.project}_default$"]
         ):
-            self._command([*self._compose, "down"], timeout=120)
+            self._command([*self._all_compose, "down"], timeout=120)
         if self._project_container_ids() or self._ids(
             "network", ["--filter", f"name=^{self.project}_default$"]
         ):
@@ -509,6 +715,19 @@ class Backend:
         self._cleanup_recorded_bridge_preflight()
 
         containers, networks, volumes, image_id = self._blitz_inventory()
+        images = [("image", self.image, image_id)]
+        if self.garden_enabled:
+            images.append(
+                ("garden_image", self.garden_image, self._blitz_image_id(garden=True))
+            )
+            containers.sort(
+                key=lambda identifier: (
+                    self._inspect_labels("container", identifier).get(
+                        "com.docker.compose.service"
+                    )
+                    == "cairn"
+                )
+            )
         for container_id in containers:
             self._command(
                 ["docker", "container", "rm", "--force", container_id],
@@ -531,26 +750,27 @@ class Backend:
             }
             self.ctx.save()
 
-        if image_id is not None:
-            users = self._ids(
-                "container",
-                ["--filter", f"ancestor={image_id}"],
-                extra=["--all"],
-            )
-            if users:
-                raise InstallError(
-                    "Owned Docker image is used by another container; refusing "
-                    f"forced removal: {image_id}"
+        for key, reference, image_id in images:
+            if image_id is not None:
+                users = self._ids(
+                    "container",
+                    ["--filter", f"ancestor={image_id}"],
+                    extra=["--all"],
                 )
-            # Removing by immutable ID proves this is the recorded build. Without
-            # --force Docker also protects other tags and unexpected references.
-            self._command(["docker", "image", "rm", image_id])
-            self._docker["image"] = {
-                "reference": self.image,
-                "id": image_id,
-                "status": "removed",
-            }
-            self.ctx.save()
+                if users:
+                    raise InstallError(
+                        "Owned Docker image is used by another container; refusing "
+                        f"forced removal: {image_id}"
+                    )
+                # Removing by immutable ID proves this is the recorded build. Without
+                # --force Docker also protects other tags and unexpected references.
+                self._command(["docker", "image", "rm", image_id])
+                self._docker[key] = {
+                    "reference": reference,
+                    "id": image_id,
+                    "status": "removed",
+                }
+                self.ctx.save()
 
         if self._project_container_ids() or self._ids(
             "network", ["--filter", f"name=^{self.project}_default$"]
@@ -566,12 +786,22 @@ class Backend:
                 "Owned Docker volume remains after blitz: "
                 + ", ".join(remaining_volumes)
             )
-        if image_id is not None and self._optional_image_details(image_id) is not None:
-            raise InstallError(f"Owned Docker image remains after blitz: {image_id}")
+        for _, _, image_id in images:
+            if (
+                image_id is not None
+                and self._optional_image_details(image_id) is not None
+            ):
+                raise InstallError(
+                    f"Owned Docker image remains after blitz: {image_id}"
+                )
         self._docker["blitz"] = "complete"
         self.ctx.save()
 
     def _blitz_may_have_resources(self) -> bool:
+        if self.garden_enabled and set(self._docker.get("garden_image", {})) - {
+            "reference"
+        }:
+            return True
         image = self._docker.get("image")
         if not isinstance(image, dict) or image.get("reference") != self.image:
             raise InstallError("Recorded Docker image ownership is malformed")
@@ -646,39 +876,41 @@ class Backend:
         # validate_ownership durably published its receipt.
         return expected
 
-    def _blitz_image_id(self) -> str | None:
-        receipt = self._docker.get("image")
-        if not isinstance(receipt, dict) or receipt.get("reference") != self.image:
+    def _blitz_image_id(self, *, garden: bool = False) -> str | None:
+        reference = self.garden_image if garden else self.image
+        key = "garden_image" if garden else "image"
+        receipt = self._docker.get(key, {"reference": reference})
+        if not isinstance(receipt, dict) or receipt.get("reference") != reference:
             raise InstallError("Recorded Docker image ownership is malformed")
         recorded_id = receipt.get("id")
         if recorded_id is None:
-            by_reference = self._optional_image_details(self.image)
+            by_reference = self._optional_image_details(reference)
             if by_reference is None:
                 return None
             if receipt.get("intent") != "build":
                 raise InstallError(
                     "Docker image exists without a recorded build intent; refusing "
-                    f"removal: {self.image}"
+                    f"removal: {reference}"
                 )
             labels, recorded_id = by_reference
-            self._require_owned(labels, "Docker image", self.image)
+            self._require_owned(labels, "Docker image", reference)
             # Reconcile the narrow crash window after docker build returned but
             # before the immutable image identity was durably published.
-            self._docker["image"] = {
-                "reference": self.image,
+            self._docker[key] = {
+                "reference": reference,
                 "id": recorded_id,
             }
             self.ctx.save()
         if not isinstance(recorded_id, str) or not recorded_id.startswith("sha256:"):
             raise InstallError("Recorded Docker image ownership is malformed")
 
-        by_reference = self._optional_image_details(self.image)
+        by_reference = self._optional_image_details(reference)
         if by_reference is not None:
             labels, observed_id = by_reference
-            self._require_owned(labels, "Docker image", self.image)
+            self._require_owned(labels, "Docker image", reference)
             if observed_id != recorded_id:
                 raise InstallError(
-                    f"Recorded Docker image reference was replaced: {self.image}"
+                    f"Recorded Docker image reference was replaced: {reference}"
                 )
         by_id = self._optional_image_details(recorded_id)
         if by_id is None:
@@ -720,7 +952,7 @@ class Backend:
         return self._ids(
             "container",
             ["--filter", f"label=com.docker.compose.project={self.project}"],
-            extra=["--all"],
+            extra=["--all", "--no-trunc"] if self.garden_enabled else ["--all"],
         )
 
     def _ids(
@@ -778,7 +1010,7 @@ class Backend:
             listed = self._ids(
                 "image",
                 ["--filter", f"reference={reference}"],
-                extra=["--all", "--no-trunc"],
+                extra=["--all", "--no-trunc"] if self.garden_enabled else ["--all"],
             )
             if not listed:
                 return None

@@ -1,7 +1,7 @@
 import sqlite3
 import stat
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -62,7 +62,7 @@ def test_fetch_of_directly_corrupted_row_is_corrupt(tmp_path: Path) -> None:
     attic = SqliteAttic(tmp_path)
     attic.store(_EVIDENCE_ID, b"trustworthy payload")
 
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute(
             "UPDATE payloads SET payload = ? WHERE evidence_id = ?",
             (b"tampered payload", str(_EVIDENCE_ID)),
@@ -190,7 +190,7 @@ def test_restoring_over_a_tampered_payload_is_corrupt_not_stored(
     attic = SqliteAttic(tmp_path)
     attic.store(_EVIDENCE_ID, b"trustworthy payload")
 
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute(
             "UPDATE payloads SET payload = ? WHERE evidence_id = ?",
             (b"tampered payload", str(_EVIDENCE_ID)),
@@ -210,7 +210,7 @@ def test_restoring_over_a_tampered_digest_is_corrupt_not_stored(
     attic = SqliteAttic(tmp_path)
     attic.store(_EVIDENCE_ID, b"trustworthy payload")
 
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute(
             "UPDATE payloads SET digest = ? WHERE evidence_id = ?",
             (b"not the real digest", str(_EVIDENCE_ID)),
@@ -233,7 +233,7 @@ def test_a_failed_fts_insert_rolls_back_the_payload_row(tmp_path: Path) -> None:
     notice the gap.
     """
     tmp_path.joinpath(ATTIC_FILENAME).touch(mode=0o660)
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute("CREATE TABLE payloads_fts(other TEXT)")
         connection.commit()
     attic = SqliteAttic(tmp_path)
@@ -242,7 +242,7 @@ def test_a_failed_fts_insert_rolls_back_the_payload_row(tmp_path: Path) -> None:
         attic.store(_EVIDENCE_ID, b"payload that must not survive")
 
     assert attic.fetch(_EVIDENCE_ID) == PayloadAbsent()
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         assert connection.execute("SELECT COUNT(*) FROM payloads").fetchone() == (0,)
 
 
@@ -261,7 +261,7 @@ def test_a_failed_store_raises_the_typed_error_not_a_raw_sqlite_error(
     reaches the same wrapper without waiting out the 5s busy timeout.
     """
     tmp_path.joinpath(ATTIC_FILENAME).touch(mode=0o660)
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute("CREATE TABLE payloads_fts(other TEXT)")
         connection.commit()
 
@@ -289,7 +289,7 @@ def test_a_failed_fetch_raises_the_typed_error_not_a_raw_sqlite_error(
     alone, so schema preparation passes and the SELECT is what fails.
     """
     tmp_path.joinpath(ATTIC_FILENAME).touch(mode=0o660)
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute(
             "CREATE TABLE payloads ("
             "id INTEGER PRIMARY KEY, evidence_id TEXT NOT NULL UNIQUE, "
@@ -356,7 +356,7 @@ def test_a_corrupted_stored_identity_is_a_typed_error_not_a_raw_value_error(
     attic = SqliteAttic(tmp_path)
     attic.store(_EVIDENCE_ID, b"findme in the index")
 
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute(
             "UPDATE payloads SET evidence_id = ? WHERE evidence_id = ?",
             ("not-a-uuid-at-all", str(_EVIDENCE_ID)),
@@ -383,7 +383,7 @@ def test_a_stored_identity_of_the_wrong_type_is_also_a_typed_error(
     module created.
     """
     tmp_path.joinpath(ATTIC_FILENAME).touch(mode=0o660)
-    with sqlite3.connect(tmp_path / ATTIC_FILENAME) as connection:
+    with closing(sqlite3.connect(tmp_path / ATTIC_FILENAME)) as connection, connection:
         connection.execute(
             "CREATE TABLE payloads ("
             "id INTEGER PRIMARY KEY, evidence_id, payload BLOB, digest BLOB)"

@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import multiprocessing
 import os
 import shutil
 import socket
@@ -78,6 +79,10 @@ def invocation(sandbox: Any, stage: Path, tmp_path: Path, seconds: float = 5) ->
     return native().Invocation(
         sandbox.seal(stage), tmp_path / "admission", deadline=time.monotonic() + seconds
     )
+
+
+def launch_in_spawned_process(controller: Any, incoming: Any, outgoing: Any) -> None:
+    controller.launch(incoming.detach(), outgoing.detach())
 
 
 @pytest.mark.host_isolation
@@ -635,28 +640,31 @@ def test_process_crash_keeps_admission_consumed(
     controller = invocation(sandbox, stage, tmp_path)
     incoming, send = os.pipe()
     receive_fd, outgoing = os.pipe()
-    child: int | None = os.fork()
-    if child == 0:
-        try:
-            controller.launch(incoming, outgoing)
-        finally:
-            os._exit(0)
+    context = multiprocessing.get_context("spawn")
+    child = context.Process(
+        target=launch_in_spawned_process,
+        args=(
+            controller,
+            multiprocessing.reduction.DupFd(incoming),
+            multiprocessing.reduction.DupFd(outgoing),
+        ),
+    )
+    child.start()
     try:
         until = time.monotonic() + 2
         while not (tmp_path / "admission/used").exists() and time.monotonic() < until:
             time.sleep(0.005)
         assert (tmp_path / "admission/used").is_file()
-        os.kill(cast(int, child), 9)
-        os.waitpid(cast(int, child), 0)
-        child = None
+        child.kill()
+        child.join()
         with running(controller) as state:
             eof(state)
             assert receive(state) == b""
             assert str(done(state)) == "native_launcher_already_used"
     finally:
-        if child is not None:
-            os.kill(child, 9)
-            os.waitpid(child, 0)
+        if child.is_alive():
+            child.kill()
+            child.join()
         for fd in (incoming, send, receive_fd, outgoing):
             os.close(fd)
 

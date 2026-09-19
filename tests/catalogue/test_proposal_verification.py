@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -78,7 +78,7 @@ def _call(service: Any, method: str, command: Any, **kwargs: Any) -> Any:
 
 def _seed(path: Path, state: str = "pending") -> tuple[Any, Any, Any]:
     f._seed_authority_catalogue(path)
-    with sqlite3.connect(path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(path / CATALOGUE_FILENAME)) as c, c:
         c.execute(
             "INSERT INTO grants VALUES (?, ?, 'local', '[]', "
             '\'["ingest","invalidate","promote","retrieve"]\', \'restricted\', '
@@ -118,7 +118,7 @@ def _seed(path: Path, state: str = "pending") -> tuple[Any, Any, Any]:
 @contextmanager
 def _edit(path: Path) -> Iterator[sqlite3.Connection]:
     # Retain CHECKs and FKs, restoring exact trigger bytes before verification.
-    with sqlite3.connect(path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(path / CATALOGUE_FILENAME)) as c, c:
         c.execute("PRAGMA foreign_keys=ON")
         c.execute("PRAGMA defer_foreign_keys=ON")
         triggers = c.execute(
@@ -276,7 +276,7 @@ def test_exact_original_and_replay_audit_binding(
     tmp_path: Path, replay: bool, field: str, value: Any
 ) -> None:
     _seed(tmp_path, "accepted")
-    with sqlite3.connect(tmp_path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as c, c:
         events = _events(c)
         event = next(
             e
@@ -381,7 +381,7 @@ def test_multiple_proposals_legacy_promotion_and_historical_grants(
         InvalidateFacts((p.source_fact_id,), "Later invalidation", None),
     )
     _call(service, "accept", command, key=key)
-    with sqlite3.connect(tmp_path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as c, c:
         c.execute(
             "INSERT INTO grant_revocations SELECT grant_id, ?, ?, 'revoked' FROM grants WHERE grant_id NOT IN (SELECT grant_id FROM grant_revocations)",
             ("2026-08-06T12:00:00.000000Z", str(ACTOR.principal_id)),
@@ -408,7 +408,7 @@ def test_backup_restore_and_recovery_at_most_once(tmp_path: Path, state: str) ->
             again.value == first.value
             and again.mutation_receipt == first.mutation_receipt
         )
-    with sqlite3.connect(target / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(target / CATALOGUE_FILENAME)) as c, c:
         assert c.execute(
             "SELECT count(*) FROM facts WHERE derived_from=?", (str(p.source_fact_id),)
         ).fetchone() == (0 if state == "rejected" else 1,)
@@ -557,7 +557,7 @@ def test_cross_proposal_and_principal_decision_receipts_do_not_swap(
     actor = ACTOR
     if different_principal:
         actor = Actor(uuid4(), uuid4())
-        with sqlite3.connect(tmp_path / CATALOGUE_FILENAME) as c:
+        with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as c, c:
             c.execute(
                 "INSERT INTO principals VALUES (?, 'human', 'second-reviewer', ?)",
                 (str(actor.principal_id), canonical_timestamp(f.NOW)),
@@ -703,7 +703,7 @@ def test_invalidation_before_original_acceptance_is_not_legal_history(
         InvalidateFacts((p.source_fact_id,), "Later correction", None),
     )
     verify_catalogue(f._config(tmp_path))
-    with sqlite3.connect(tmp_path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as c, c:
         events = _events(c)
         acceptance = next(
             e
@@ -775,7 +775,7 @@ def test_advancing_clock_acceptance_and_replay_preserve_distinct_record_times(
     assert isinstance(first, Committed) and isinstance(replay, Replayed)
     assert first.value == replay.value
     assert first.mutation_receipt == replay.mutation_receipt
-    with sqlite3.connect(tmp_path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as c, c:
         for table in ("memory_proposals", "memory_proposal_decisions"):
             at, receipt_at, audit_at = c.execute(
                 f"SELECT p.recorded_at,r.created_at,a.recorded_at FROM {table} p "

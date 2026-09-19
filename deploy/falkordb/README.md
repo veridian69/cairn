@@ -1,91 +1,173 @@
-# Cairn-maintained FalkorDB runtime
+# Build FalkorDB locally
 
-Cairn v0.5 selects `v4.20.4-cairn.1`, a Linux amd64 server-only runtime.
-The exact tag and OCI index digest are in `release.json` and
-`../images.lock`. This candidate has not yet been published to GHCR.
+Cairn ships a recipe for a Linux amd64 server runtime. The operator builds it
+locally from pinned source: FalkorDB 4.20.4 at commit
+`5ac6db8059013c9d74842c02b6a9f1a4858a6a1b` with its exact recursive gitlinks,
+Redis 8.6.3 with SHA-256
+`9f54d4458c52be5472cdd1347d737f1d488b520fc3d0911cba47302de8d836e2`, and
+`google/cpu_features` at commit
+`438a66e41807cd73e0c403966041b358f5eafc68`. The builder and final runtime
+stages use Ubuntu 24.04 pinned at digest
+`sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4`.
+Cairn does not publish this database image to GHCR or attach database images or
+source bundles to new releases.
 
-The image retains the exact published FalkorDB 4.20.4 module, uses the pinned
-Redis 8.6.3 base and refreshed Debian packages, and includes the shell failure
-handling fix submitted in [FalkorDB PR #2838](https://github.com/FalkorDB/FalkorDB/pull/2838).
-The browser is absent. `provenance.json` records the upstream commits, module
-hash, base and distinct index/platform/config digests. The recorded scan found
-zero fixable HIGH/CRITICAL findings and 36 HIGH findings without available fixes.
+The `FALKORDB_IMAGE` value in `deploy/images.lock` and the committed Kubernetes
+renders is an all-zero, deliberately unusable placeholder. It is not a fallback
+image. For manual Compose or Kubernetes deployment, replace it with the reviewed
+local runtime descriptor's `image` value; guided native, Docker and Kubernetes
+installs require that local runtime explicitly.
 
+The recipe fetches the pinned sources during each local build, compiles the
+upstream FalkorDB module and omits the browser. It takes `run.sh` and
+`gen-certs.sh` from that verified FalkorDB checkout and copies the FalkorDB and
+recursive-dependency, Redis and `cpu_features` licence files into
+`/usr/share/licenses/cairn-falkordb` in the runtime. It does not ship a new
+source bundle. Redis is built with TLS support and without bundled modules.
+FalkorDB's VecSim tests and AVX, AVX512F and AVX512DQ specialisation are
+disabled for the supported generic amd64 baseline; the compilation steps run
+without network access. The final runtime upgrades the pinned Ubuntu base from
+its current APT repositories and installs its runtime libraries, so a fresh
+build has its own identity and needs fresh checks. Retain the accepted local
+archive for restaging; do not rebuild merely to reload a node.
+
+## Build and retain the runtime
+
+Requirements: Linux amd64, Docker with its containerd image store, Git, curl,
+`sha256sum`, Python 3.12 or newer, and outbound HTTPS access to GitHub, the
+Redis download site, the Ubuntu image registry and Ubuntu APT repositories.
+Run from the trusted Cairn checkout root. The build uses at most ten parallel
+jobs by default; choose a lower bound from 1 to 10 on a smaller host:
+
+```sh
+CAIRN_BUILD_JOBS=10 bash deploy/falkordb/build.sh
+python3 scripts/falkordb_runtime.py --output build/falkordb-local
+```
+
+`CAIRN_BUILD_JOBS` defaults to `10` and rejects zero, negative values and values
+above `10`. The output directory must be new. It contains `image.tar`,
+`runtime.json` and `SHA256SUMS`. The descriptor records the actual image digest
+and archive hash; it makes no registry-publication claim. Scan and test that
+build before using it for a real installation. The export verifies the complete
+OCI graph, so a Docker store which loses the image index is rejected.
+
+The pinned upstream build currently emits non-fatal diagnostics from Ubuntu's
+missing optional manual-page alternatives, package-configuration deferral and
+container service-start/runlevel handling; Redis/FalkorDB cleanup and configure
+steps; CMake policy checks and unused manually supplied variables; absent
+Doxygen; and upstream compiler warnings. Do not treat the words `warning` or
+`Error` alone as proof of success or failure.
+The build is accepted only when `build.sh` exits zero, prints the final `Built
+cairn-local/falkordb-server:rebuild` line, and `falkordb_runtime.py` exits zero
+after writing all three files above. Any non-zero exit, missing final line,
+missing output, checksum failure or diagnostic outside those listed categories
+remains a failure to investigate.
+
+For a guided Docker or Linux native semantic install, provide
+`--falkordb-runtime /absolute/path/to/build/falkordb-local/runtime.json` alongside
+the normal `--semantic` and protected provider-key options. The runtime must be
+present in the Docker daemon used by the installer. A different build requires
+a new descriptor; resume retains the originally selected runtime.
+
+## Prepare Kubernetes nodes
+
+The node-preparation command is a separate host-administrator operation. Treat
+its prerequisites as two separately staged gates:
+
+1. Build and retain the local runtime archive and descriptor from the preceding
+   section. This stage uses Docker and outbound source-download access on the
+   checkout host; it does not test node access.
+2. Arrange node administration before invoking the staging helper: the
+   operator must have existing SSH access, a host key verified through the
+   site's normal process, and non-interactive sudo for containerd
+   administration. This stage does not create privileged Kubernetes pods or
+   grant itself permissions.
+
+The initial transport supports containerd on Linux amd64 nodes. Supply explicit
+node-name to SSH-host mappings; Kubernetes node addresses are not automatically
+trusted as SSH destinations. The helper always uses SSH, including when the
+checkout and the only Kubernetes node are on the same host. In that one-node
+case, configure and verify an SSH alias for the node itself before starting:
+
+```sh
+ssh reference true
+ssh reference sudo -n ctr -n k8s.io version
+```
+
+The first command must succeed without a prompt and the host key must already
+be verified. Do not replace the mapping with a local file copy or omit it. If
+site policy forbids SSH self-access, this staging path is unavailable; use the
+site's authenticated registry and the manual Kubernetes procedure instead.
+Before every run, verify each `--node NODE=SSH_ALIAS` mapping non-interactively
+with `ssh SSH_ALIAS true` and confirm that the SSH identity can run the
+documented containerd commands through non-interactive `sudo`.
+
+The following example prepares the single node `reference` using the operator's
+existing SSH configuration alias of the same name:
+
+```sh
+set -eu
+set -o pipefail
+runtime_dir="$PWD/build/falkordb-local"
+test -d "$runtime_dir"
+test -s "$runtime_dir/runtime.json"
+test -s "$runtime_dir/image.tar"
+kube_context='REPLACE_WITH_KUBE_CONTEXT'
+case "$kube_context" in
+  ''|REPLACE_WITH_KUBE_CONTEXT)
+    printf 'Set kube_context to the reviewed target context before staging\n' >&2
+    exit 2
+    ;;
+esac
+image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$runtime_dir/runtime.json")
+python3 scripts/kubernetes_image_stage.py \
+  --context "$kube_context" \
+  --archive "$runtime_dir/image.tar" \
+  --image "$image" \
+  --node reference=reference \
+  --output "$runtime_dir/kubernetes-receipt.json"
+```
+
+Repeat `--node NODE=SSH_ALIAS` for each eligible node. The helper checks current
+node identity, readiness, architecture, scheduling status and runtime before
+transfer. It verifies the copied archive's checksum before privileged import,
+imports into containerd's `k8s.io` namespace, and verifies the canonical image
+digest through CRI. A receipt is written only after all requested nodes pass.
+Partial failure may leave useful cached images; it does not certify partial
+success. Rerun with a fresh output receipt after correcting the failure.
+
+## Install with the prepared nodes
+
+Add the following to the normal semantic Kubernetes installation command:
+
+```sh
+--kube-falkordb-receipt /absolute/path/to/build/falkordb-local/kubernetes-receipt.json
+```
+
+The installer retains the receipt, verifies the recorded node UIDs and runs
+ordinary unprivileged image probes. FalkorDB uses the actual local digest,
+`imagePullPolicy: Never`, and required node affinity to the prepared node names.
+Cairn and Garden image options remain independent. Storage topology, taints and
+admission rules still apply; a prepared node is not automatically a valid
+location for a bound PVC.
+
+Node affinity matches names, not UIDs. Install/resume rechecks the recorded UIDs;
+replacement or additional nodes require preparation. Between installer runs,
+a replacement node with a reused name may be considered by the scheduler, but
+cannot pull the local image. Kubelet may also garbage-collect unused cached
+images. If the image is absent, the pod fails with a missing-image error;
+restage the retained archive. This first implementation does not run a cache
+maintenance controller. Sites without node administration access can use their
+own authenticated registry and the manual site-manifest workflow instead.
+
+## Earlier releases
+
+<a id="install-the-maintained-offline-image"></a>
 <a id="install-the-rc3-offline-image"></a>
 <a id="install-the-rc4-offline-image"></a>
+<a id="kubernetes-with-an-offline-containerd-image-store"></a>
 
-## Install the maintained offline image
-
-Download the [image archive](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/cairn-falkordb-v4.20.4-cairn.1.tar)
-and [matching corresponding-source bundle](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/cairn-falkordb-v4.20.4-cairn.1-source.tar.gz)
-from the RC4 release. The source, build inputs and component notices are
-available at no charge alongside the binary. Retain the release
-[checksums](https://github.com/veridian69/cairn/releases/download/v0.5.0-rc.4/SHA256SUMS).
-Before `cairn-install --semantic`, run from the trusted checkout root on the
-Docker host:
-
-```sh
-python3 scripts/falkordb_release.py load \
-  --descriptor deploy/falkordb/release.json \
-  --archive /path/to/cairn-falkordb-v4.20.4-cairn.1.tar
-./cairn-install --non-interactive --mode docker --name cairn \
-  --port 8000 --semantic --provider-key-file /path/to/protected/openai-key
-```
-
-Offline loading requires Docker's containerd image store to retain the full
-OCI index. It was selected for testing on Docker 29.7.2. The loader verifies the
-trusted archive checksum before Docker consumes it, then checks the exact
-repository digest. A failed identity check stops installation preparation;
-do not substitute a config digest or edit installer state to bypass it.
-Normal registry pulls, once published, retain the existing Docker minimum.
-
-## Prepare and rebuild
-
-To prepare an archive from the already validated local image:
-
-```sh
-python3 scripts/falkordb_release.py prepare \
-  --descriptor deploy/falkordb/release.json \
-  --archive build/cairn-falkordb-v4.20.4-cairn.1.tar
-```
-
-The archive contains the full index, including its attestation. A platform-only
-export is not interchangeable. Release checksums belong to the exact prepared
-artefact; do not rewrite them merely because a different archive was produced.
-
-`build.sh` verifies and extracts the vendor module, creates the compiler shim,
-and builds the preserved patched upstream recipe with a pinned Redis base.
-Run it from the checkout root:
-
-```sh
-bash deploy/falkordb/build.sh
-```
-
-Package security repositories are mutable. This is a repeatable build procedure,
-not a promise of bit-identical future images. A rebuild must receive its own
-version/digest, provenance, scan and acceptance evidence before selection.
-The module was not recompiled in this release; corresponding source and build
-instructions are supplied separately alongside the binary.
-
-See [source-bundle preparation and verification](SOURCE_BUNDLE.md) for the
-exact recursive source, component notice and checksum procedure.
-
-## Distribution and replacement
-
-Publish the image and its checksummed corresponding-source bundle together,
-with a clear no-charge source download adjacent to the binary download.
-Preserve the upstream and component licences and notices; the derivative is
-not relicensed under Cairn's Apache licence. Complete the source-bundle checks
-before distribution. Registry publication is a separate release action.
-
-When upstream publishes the fix:
-
-1. Select an immutable official release and inspect its runtime and application
-   changes; merge any Cairn compatibility changes needed.
-2. Repeat vulnerability scanning, `make check`, real database/Graphiti tests,
-   and fresh installer semantic search, exact Attic evidence and restart checks.
-3. Update all image pins and provenance together, review the committed export,
-   then publish a new Cairn release. Never change an existing release's pin.
-
-Until then Cairn owns derivative rebuilds, security review and corresponding
-source availability. The upstream PR's merge alone does not replace our image.
+Older RC3/RC4 tags described a prebuilt maintained image and paired source
+bundle. Their metadata and historical acceptance do not identify a fresh local
+build. Use documentation from those immutable tags when operating those older
+releases. New installations follow the recipe and local receipts above.

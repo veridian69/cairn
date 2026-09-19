@@ -418,7 +418,14 @@ def test_darwin_native_backend_selects_delegate(
         delegate = SimpleNamespace(
             **{
                 name: (lambda name=name: calls.append(name))
-                for name in ("start", "stop", "restart", "remove", "close")
+                for name in (
+                    "start",
+                    "stop",
+                    "restart",
+                    "remove",
+                    "close",
+                    "validate_ownership",
+                )
             }
         )
         monkeypatch.setattr(
@@ -430,6 +437,7 @@ def test_darwin_native_backend_selects_delegate(
         backend.stop()
         backend.restart()
         backend.rollback()
+        backend.validate_blitz_inventory()
         backend.blitz()
         backend.close()
         assert calls == [
@@ -438,6 +446,7 @@ def test_darwin_native_backend_selects_delegate(
             "restart",
             "remove",
             "close",
+            "validate_ownership",
             "remove",
             "close",
         ]

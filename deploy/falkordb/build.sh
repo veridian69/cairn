@@ -1,69 +1,60 @@
 #!/usr/bin/env bash
-# Rebuild the maintained amd64 runtime without changing the accepted release tag.
-# APT security repositories move: a rebuild has a new digest and needs acceptance.
+# Build the maintained linux/amd64 runtime from immutable upstream sources.
 set -euo pipefail
 
 if (( $# != 0 )); then
   printf 'usage: %s\nBuilds cairn-local/falkordb-server:rebuild; does not publish it.\n' "$0" >&2
   exit 2
 fi
+jobs=${CAIRN_BUILD_JOBS:-10}
+if [[ ! $jobs =~ ^([1-9]|10)$ ]]; then
+  printf 'CAIRN_BUILD_JOBS must be an integer from 1 to 10\n' >&2; exit 2
+fi
 
 recipe_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-source_image=falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62
-source_digest=falkordb/falkordb@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62
-redis_image=redis:8.6.3@sha256:4d25e2fe601f7ffaeb4437cb6ced3518bc36edf34ebe98863c80836943d94529
-redis_digest=redis@sha256:4d25e2fe601f7ffaeb4437cb6ced3518bc36edf34ebe98863c80836943d94529
-module_sha=81ea6b989dc2fd4c9ad905e246018b220b02f0e40c406255f9da4768c1684555
+falkor_commit=5ac6db8059013c9d74842c02b6a9f1a4858a6a1b
+cpu_features_commit=438a66e41807cd73e0c403966041b358f5eafc68
+redis_version=8.6.3
+redis_sha=9f54d4458c52be5472cdd1347d737f1d488b520fc3d0911cba47302de8d836e2
 output_image=cairn-local/falkordb-server:rebuild
-
-for command in docker python3 sha256sum mktemp; do
+for command in docker git curl sha256sum mktemp; do
   command -v "$command" >/dev/null || { printf 'required command missing: %s\n' "$command" >&2; exit 1; }
 done
-(cd "$recipe_dir/upstream" && sha256sum --check SHA256SUMS)
 
-build_dir=$(mktemp -d "${TMPDIR:-/tmp}/cairn-falkordb-build.XXXXXXXX")
-source_container=
-shim_image="cairn-local/falkordb-compiler-shim:build-${build_dir##*.}"
-cleanup() {
-  if [[ -n "$source_container" ]]; then docker rm -v "$source_container" >/dev/null 2>&1 || true; fi
-  docker image rm "$shim_image" >/dev/null 2>&1 || true
-  rm -rf -- "$build_dir"
-}
+build_dir=$(mktemp -d "${TMPDIR:-/tmp}/cairn-falkordb-source.XXXXXXXX")
+cleanup() { rm -rf -- "$build_dir"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for image in "$source_image" "$redis_image"; do
-  docker pull --platform linux/amd64 "$image"
-  [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image") == linux/amd64 ]] || {
-    printf 'image platform differs from linux/amd64\n' >&2; exit 1;
-  }
-done
-docker image inspect --format '{{join .RepoDigests "\n"}}' "$source_image" | grep -Fx -- "$source_digest" >/dev/null
-docker image inspect --format '{{join .RepoDigests "\n"}}' "$redis_image" | grep -Fx -- "$redis_digest" >/dev/null
+git clone --quiet --no-checkout https://github.com/FalkorDB/FalkorDB.git "$build_dir/FalkorDB"
+git -C "$build_dir/FalkorDB" checkout --quiet --detach "$falkor_commit"
+git -C "$build_dir/FalkorDB" submodule update --init --recursive --jobs "$jobs"
+head_commit=$(git -C "$build_dir/FalkorDB" rev-parse HEAD)
+[[ $head_commit == "$falkor_commit" ]]
+submodule_status=$(git -C "$build_dir/FalkorDB" submodule status --recursive)
+if grep -Eq '^[+-U]' <<<"$submodule_status"; then
+  printf 'FalkorDB recursive submodule checkout differs from the pinned gitlinks\n' >&2; exit 1
+fi
+source_status=$(git -C "$build_dir/FalkorDB" status --porcelain --untracked-files=all)
+if [[ -n $source_status ]] ||
+   ! git -C "$build_dir/FalkorDB" submodule foreach --quiet --recursive \
+     'status=$(git status --porcelain --untracked-files=all) && test -z "$status"'; then
+  printf 'FalkorDB source or a recursive submodule is dirty\n' >&2; exit 1
+fi
 
-mkdir -p "$build_dir/compiler" "$build_dir/context/build/docker"
-source_container=$(docker create --network none --entrypoint /bin/true "$source_image")
-docker cp "$source_container:/var/lib/falkordb/bin/falkordb.so" "$build_dir/compiler/falkordb.so"
-printf '%s  %s\n' "$module_sha" "$build_dir/compiler/falkordb.so" | sha256sum --check -
-docker rm -v "$source_container" >/dev/null
-source_container=
-printf 'FROM scratch\nCOPY falkordb.so /FalkorDB/bin/linux-x64-release/falkordb.so\n' > "$build_dir/compiler/Dockerfile"
-docker build --platform linux/amd64 --progress=plain --tag "$shim_image" "$build_dir/compiler"
-
-cp "$recipe_dir/upstream/run.sh" "$recipe_dir/upstream/gen-certs.sh" "$build_dir/context/build/docker/"
-python3 - "$recipe_dir/upstream/Dockerfile.server" "$build_dir/context/Dockerfile" "$redis_image" <<'PY'
-import pathlib
-import sys
-
-source, target, redis = sys.argv[1:]
-dockerfile = pathlib.Path(source).read_bytes()
-original = b"FROM redis:8.6.3\n"
-if dockerfile.count(original) != 1:
-    raise SystemExit("expected exactly one upstream Redis FROM instruction")
-pathlib.Path(target).write_bytes(dockerfile.replace(original, f"FROM {redis}\n".encode()))
-PY
+git clone --quiet --no-checkout https://github.com/google/cpu_features.git "$build_dir/cpu_features"
+git -C "$build_dir/cpu_features" checkout --quiet --detach "$cpu_features_commit"
+cpu_features_head=$(git -C "$build_dir/cpu_features" rev-parse HEAD)
+[[ $cpu_features_head == "$cpu_features_commit" ]]
+cpu_features_status=$(git -C "$build_dir/cpu_features" status --porcelain --untracked-files=all)
+[[ -z $cpu_features_status ]]
+curl --fail --location --retry 3 --output "$build_dir/redis.tar.gz" \
+  "https://download.redis.io/releases/redis-${redis_version}.tar.gz"
+printf '%s  %s\n' "$redis_sha" "$build_dir/redis.tar.gz" | sha256sum --check -
+cp "$recipe_dir/Dockerfile.source" "$build_dir/Dockerfile"
 docker build --no-cache --platform linux/amd64 --progress=plain \
-  --build-arg "BASE_IMAGE=$shim_image" --tag "$output_image" "$build_dir/context"
+  --build-arg "BUILD_JOBS=$jobs" --build-arg "REDIS_VERSION=$redis_version" \
+  --tag "$output_image" "$build_dir"
 docker image inspect --format '{{.Id}}' "$output_image"
 printf 'Built %s. Scan and repeat acceptance before selecting its digest for release.\n' "$output_image"

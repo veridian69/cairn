@@ -15,7 +15,7 @@ Module-local fixtures for the reason ``test_mount_auth.py`` records:
 import json
 import sqlite3
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime
 from itertools import count
 from pathlib import Path
@@ -245,14 +245,20 @@ def catalogue_bytes(data_path: Path) -> bytes:
 
 
 def rows(data_path: Path, table: str) -> int:
-    with sqlite3.connect(data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         count_row = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
     total: int = count_row[0]
     return total
 
 
 def audit_action_codes(data_path: Path) -> list[str]:
-    with sqlite3.connect(data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         found = connection.execute(
             "SELECT canonical_event FROM audit_events ORDER BY sequence"
         ).fetchall()

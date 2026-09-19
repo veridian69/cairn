@@ -29,7 +29,9 @@ evidence of anything.
 
 import importlib.util
 import json
+import os
 import re
+import signal
 import stat
 import subprocess
 import threading
@@ -37,6 +39,8 @@ import urllib.request
 from pathlib import Path
 from types import ModuleType
 from typing import cast
+
+import pytest
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 HARNESS = REPOSITORY / "scripts" / "kind-acceptance"
@@ -705,6 +709,68 @@ def test_the_report_is_emitted_whatever_the_outcome() -> None:
     """A failed run is the one whose transcript is worth most."""
     assert "emit_report" in SOURCE
     assert re.search(r"trap .*cleanup.* EXIT", SOURCE)
+
+
+@pytest.mark.parametrize("owned", [False, True])
+def test_interrupt_reports_failure_and_cleans_only_the_owned_cluster(
+    tmp_path: Path, owned: bool
+) -> None:
+    """SIGINT keeps its status even when cleanup fails, and cannot claim pass."""
+    report = tmp_path / "report.json"
+    calls = tmp_path / "kind.calls"
+    fake_kind = tmp_path / "kind"
+    fake_kind.write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$KIND_CALLS"\nexit 23\n',
+        encoding="utf-8",
+    )
+    fake_kind.chmod(0o755)
+
+    lifecycle_end = SOURCE.index("# One prediction, one observation")
+    lifecycle = SOURCE[:lifecycle_end].replace(
+        'cd "$(dirname "${BASH_SOURCE[0]}")/.."',
+        f"cd {str(REPOSITORY)!r}",
+    )
+    probe = tmp_path / "interrupt-probe"
+    probe.write_text(
+        lifecycle
+        + f"kind={str(fake_kind)!r}\n"
+        + f"cluster_owned={str(owned).lower()}\n"
+        + 'printf "ready %s\\n" "$temporary"\n'
+        + "while :; do sleep 0.05; done\n",
+        encoding="utf-8",
+    )
+    probe.chmod(0o755)
+
+    process = subprocess.Popen(
+        [str(probe)],
+        cwd=REPOSITORY,
+        env={
+            "IMAGE": "cairn:test-signal",
+            "KIND_ACCEPTANCE_REPORT": str(report),
+            "KIND_CALLS": str(calls),
+            "PATH": "/usr/bin:/bin",
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    temporary = Path(process.stdout.readline().removeprefix("ready ").strip())
+    os.killpg(process.pid, signal.SIGINT)
+    stdout, stderr = process.communicate(timeout=5)
+
+    assert process.returncode == 130, (stdout, stderr)
+    document = json.loads(report.read_text(encoding="utf-8"))
+    assert document["status"] == "failed"
+    assert document["termination_signal"] == "INT"
+    assert document["checks"] == []
+    expected_calls = [f"delete cluster --name {document['cluster']}"] if owned else []
+    observed_calls = (
+        calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+    )
+    assert observed_calls == expected_calls
+    assert not temporary.exists()
 
 
 def test_the_cluster_is_the_pinned_shape() -> None:

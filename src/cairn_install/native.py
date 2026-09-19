@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import secrets
 import socket
 import stat
@@ -396,6 +397,15 @@ class Backend:
         self.ctx.note(
             f"Rollback retained configuration, data and credentials under {self.ctx.root}."
         )
+
+    def validate_blitz_inventory(self) -> None:
+        """Prove all survivors before a sibling service begins deletion."""
+        if self._index is not None:
+            self._index._blitz_inventory()
+        if self._launch_agent is not None:
+            self._launch_agent.validate_ownership()
+        elif self.ctx.mode == "native":
+            self._blitz_unit_inventory()
 
     def blitz(self) -> None:
         """Remove all proved-owned native runtime resources and semantic data."""
@@ -916,6 +926,28 @@ class _NativeIndex:
                 f"Docker Engine 25 or newer is required; found {version}"
             )
         image = self._locked_image()
+        if "falkordb_runtime" in self.ctx.state:
+            try:
+                items = json.loads(
+                    self.ctx.command(
+                        ["docker", "image", "inspect", image], cwd=self.ctx.directory
+                    )
+                )
+                valid = (
+                    isinstance(items, list)
+                    and len(items) == 1
+                    and isinstance(items[0], dict)
+                    and image in (items[0].get("RepoDigests") or [])
+                    and items[0].get("Os") == "linux"
+                    and items[0].get("Architecture") == "amd64"
+                )
+            except (InstallError, ValueError, TypeError):
+                valid = False
+            if not valid:
+                raise InstallError(
+                    "Exact local FalkorDB runtime is unavailable; build or load the "
+                    "retained runtime into Docker's containerd image store"
+                )
         self.ctx.state["resources"]["native_index_image"] = image
         self.ctx.save()
         self.ensure_port()
@@ -999,6 +1031,8 @@ class _NativeIndex:
 
     def validate_ownership(self) -> None:
         resources = self.ctx.state["resources"]
+        if "falkordb_runtime" in self.ctx.state:
+            self._locked_image()
         port = None if resources.get(_INDEX_PORT_RESOURCE) is None else self.port
         for kind, name in (
             ("data", self.data_volume),
@@ -1022,6 +1056,7 @@ class _NativeIndex:
                     f"Owned native index container disappeared: {self.container}"
                 )
             self._check_label(value, self.container)
+            self._check_runtime_container(value)
             expected_port = port
             if expected_port is None:
                 expected_port = self._legacy_config_port()
@@ -1238,6 +1273,21 @@ class _NativeIndex:
         self.ctx.save()
 
     def _locked_image(self) -> str:
+        runtime = self.ctx.state.get("falkordb_runtime")
+        if runtime is not None:
+            image = runtime.get("image") if isinstance(runtime, dict) else None
+            if not isinstance(image, str) or not re.fullmatch(
+                r"cairn\.local/falkordb-runtime@sha256:[0-9a-f]{64}", image
+            ):
+                raise InstallError("Invalid local FalkorDB runtime image")
+            if self.ctx.state["resources"].get("native_index_image", image) != image:
+                raise InstallError("Recorded FalkorDB runtime image changed")
+            return image
+        recorded = self.ctx.state["resources"].get("native_index_image")
+        if isinstance(recorded, str) and re.fullmatch(
+            r"[^@\s]+@sha256:[0-9a-f]{64}", recorded
+        ):
+            return recorded
         path = self.ctx.source / "deploy" / "images.lock"
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -1316,6 +1366,11 @@ class _NativeIndex:
                 [
                     "docker",
                     "create",
+                    *(
+                        ["--pull", "never"]
+                        if "falkordb_runtime" in self.ctx.state
+                        else []
+                    ),
                     "--name",
                     init_name,
                     "--label",
@@ -1388,6 +1443,7 @@ class _NativeIndex:
                     f"Refusing existing foreign Docker container: {self.container}"
                 )
             self._check_label(existing, self.container)
+            self._check_runtime_container(existing)
             self._validate_port_mapping(existing, port)
             self.ctx.command(
                 ["docker", "start", self.container],
@@ -1404,6 +1460,7 @@ class _NativeIndex:
             [
                 "docker",
                 "run",
+                *(["--pull", "never"] if "falkordb_runtime" in self.ctx.state else []),
                 "--detach",
                 "--name",
                 self.container,
@@ -1443,6 +1500,13 @@ class _NativeIndex:
         receipt["status"] = "running"
         self.ctx.state["resources"]["native_index_container"] = receipt
         self.ctx.save()
+
+    def _check_runtime_container(self, value: dict[str, Any]) -> None:
+        if (
+            "falkordb_runtime" in self.ctx.state
+            and value.get("Config", {}).get("Image") != self._locked_image()
+        ):
+            raise InstallError("Recorded FalkorDB container image changed")
 
     def _legacy_config_port(self) -> int | None:
         path = self.ctx.root / "config.yaml"

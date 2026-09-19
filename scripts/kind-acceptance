@@ -101,6 +101,8 @@ done
 
 temporary=$(mktemp -d)
 cluster="cairn-$RANDOM-$RANDOM"
+cluster_owned=false
+termination_signal=
 report_path=${KIND_ACCEPTANCE_REPORT:-build/kind-acceptance/report.json}
 checks_file="$temporary/checks.jsonl"
 : >"$checks_file"
@@ -161,6 +163,7 @@ emit_report() {
   mkdir -p "$(dirname "$report_path")"
   jq -n \
     --arg status "$status" \
+    --arg termination_signal "$termination_signal" \
     --arg stage "$(printf '%s' "${completed_stage:-bring-up}")" \
     --arg cluster "$cluster" \
     --arg kind_version "$kind_version" \
@@ -179,6 +182,9 @@ emit_report() {
     --slurpfile checks "$checks_file" \
     '{
       status: $status,
+      termination_signal: (
+        $termination_signal | if length == 0 then null else . end
+      ),
       stage: $stage,
       cluster: $cluster,
       identities: {
@@ -203,16 +209,29 @@ emit_report() {
 
 cleanup() {
   local code=$?
-  if [[ "$code" -eq 0 ]]; then
+  trap - EXIT
+  trap '' HUP INT TERM
+  if [[ "$code" -eq 0 && -z "$termination_signal" ]]; then
     emit_report passed || true
   else
     emit_report failed || true
   fi
-  "$kind" delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  if [[ "$cluster_owned" == true ]]; then
+    "$kind" delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  fi
   rm -rf -- "$temporary"
   return "$code"
 }
+
+interrupt() {
+  termination_signal=$1
+  exit "$2"
+}
+
 trap cleanup EXIT
+trap 'interrupt HUP 129' HUP
+trap 'interrupt INT 130' INT
+trap 'interrupt TERM 143' TERM
 
 # One prediction, one observation, one record. Every claim in this script
 # goes through here, so the report is complete by construction rather
@@ -419,6 +438,15 @@ EOF
 create_cluster() {
   docker image inspect "$IMAGE" >/dev/null
   cairn_image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+
+  local clusters
+  clusters=$("$kind" get clusters) || fail "could not enumerate kind clusters"
+  if grep -Fxq "$cluster" <<<"$clusters"; then
+    fail "generated kind cluster name already exists: $cluster"
+  fi
+  # Claim the proven-absent generated name before creation: interruption can
+  # leave a partial cluster, and cleanup must own that exact residue.
+  cluster_owned=true
 
   # I-15: one control plane and two workers. A single-node cluster cannot
   # observe a policy decision made between nodes, which is most of what

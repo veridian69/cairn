@@ -33,9 +33,10 @@ installation](macos-native.md) for the login-scoped LaunchAgent path. macOS
 native acceptance passed on macOS 26 Intel and Apple Silicon; semantic
 retrieval remains Linux-only.
 
-RC4 semantic setup also requires loading the [maintained FalkorDB offline
-archive](../../deploy/falkordb/README.md#install-the-maintained-offline-image) into
-Docker's containerd image store before starting the index.
+Semantic setup requires a [locally built FalkorDB runtime](../../deploy/falkordb/README.md)
+in Docker's containerd image store before starting the index. Guided installs
+accept its `runtime.json` via `--falkordb-runtime`; for the manual commands below,
+use that descriptor's image reference in place of the historical deployment pin.
 
 **Semantic search requires an OpenAI API key.** The native baseline and Attic
 write/read check need no OpenAI key. Before enabling search, complete the
@@ -418,13 +419,21 @@ recovery, failure details and what a successful check proves.
 BI-2 acceptance includes saving a synthetic fact, restarting the instance and
 retrieving that exact fact. That check requires Graphiti. This supported native
 extension keeps Cairn under the user service above and runs only its per-instance
-FalkorDB index in the same pinned container used by the Compose procedure.
+FalkorDB index from the same retained local runtime used by the Compose procedure.
 FalkorDB publishes only to `127.0.0.1:16379`; it is not reachable from another
 machine. Attic remains enabled.
 
 Complete the optional prerequisites above. Keep working from the repository
-root so `deploy/images.lock` and the bounded verification helper refer to the
-same reviewed revision as the installed runtime. Stop Cairn, generate separate
+root so the build recipe and bounded verification helper refer to the same
+reviewed revision as the installed runtime. Export the absolute descriptor path
+before running the blocks below:
+
+```sh
+export FALKORDB_RUNTIME="$HOME/build/falkordb-local/runtime.json"
+test -f "$FALKORDB_RUNTIME"
+```
+
+Stop Cairn, generate separate
 owner-only provider and index credentials, and retain both in the established
 credential directory:
 
@@ -483,8 +492,8 @@ case "$host_uid" in *[!0-9]*|'') exit 1 ;; esac
 index_name="cairn-native-$host_uid-falkordb"
 index_data_volume="cairn-native-$host_uid-falkordb-data"
 index_config_volume="cairn-native-$host_uid-falkordb-config"
-falkordb_image="$(awk -F= '$1 == "FALKORDB_IMAGE" {print $2}' deploy/images.lock)"
-case "$falkordb_image" in *@sha256:*) ;; *) exit 1 ;; esac
+falkordb_image="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "${FALKORDB_RUNTIME:?set FALKORDB_RUNTIME}")"
+case "$falkordb_image" in cairn.local/falkordb-runtime@sha256:*) ;; *) exit 1 ;; esac
 
 if docker container inspect "$index_name" >/dev/null 2>&1; then
   printf 'Refusing to replace existing index container: %s\n' "$index_name" >&2
@@ -494,6 +503,7 @@ docker volume create "$index_data_volume" >/dev/null
 docker volume create "$index_config_volume" >/dev/null
 
 docker run --rm \
+  --pull never \
   --interactive \
   --name "$index_name-init" \
   --network none \
@@ -526,10 +536,11 @@ case "$host_uid" in *[!0-9]*|'') exit 1 ;; esac
 index_name="cairn-native-$host_uid-falkordb"
 index_data_volume="cairn-native-$host_uid-falkordb-data"
 index_config_volume="cairn-native-$host_uid-falkordb-config"
-falkordb_image="$(awk -F= '$1 == "FALKORDB_IMAGE" {print $2}' deploy/images.lock)"
-case "$falkordb_image" in *@sha256:*) ;; *) exit 1 ;; esac
+falkordb_image="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "${FALKORDB_RUNTIME:?set FALKORDB_RUNTIME}")"
+case "$falkordb_image" in cairn.local/falkordb-runtime@sha256:*) ;; *) exit 1 ;; esac
 
 docker run -d \
+  --pull never \
   --name "$index_name" \
   --hostname falkordb \
   --restart unless-stopped \

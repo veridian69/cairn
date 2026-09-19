@@ -1,0 +1,23 @@
+[Unit]
+Description=Garden authenticated MCP gateway
+Requires=garden-daemon.service
+After=garden-daemon.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=garden
+Group=garden
+WorkingDirectory=/var/lib/garden
+ExecStart=/usr/local/bin/a2a serve --config /etc/garden/garden.json
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/garden
+
+[Install]
+WantedBy=multi-user.target

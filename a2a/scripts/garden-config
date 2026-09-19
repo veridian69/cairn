@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""Merge one owned Garden MCP entry; explicit local files only, Python 3.11+."""
+
+import argparse
+import fcntl
+import ipaddress
+import json
+import os
+import secrets
+import stat
+import sys
+import tomllib
+import uuid
+from pathlib import Path
+from urllib.parse import urlsplit
+
+
+class Refused(Exception):
+    pass
+
+
+def require(condition, message):
+    if not condition:
+        raise Refused(message)
+
+
+def absolute(value):
+    path = Path(value)
+    require(
+        path.is_absolute()
+        and bool(path.name)
+        and not value.startswith("//")
+        and ".." not in path.parts,
+        "absolute paths without .. are required",
+    )
+    require(
+        not any(ord(c) < 32 or ord(c) == 127 for c in value),
+        "control characters in paths are refused",
+    )
+    return path
+
+
+def parent_fd(path, create=False):
+    """Traverse using descriptors, never following symlinks, including ancestors."""
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parent.parts[1:]:
+            try:
+                child = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o700, dir_fd=fd)
+                child = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                )
+            info = os.fstat(child)
+            safe_sticky = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+            if info.st_uid not in (0, os.getuid()) or (
+                info.st_mode & 0o022 and not safe_sticky
+            ):
+                os.close(child)
+                raise Refused("unsafe directory ownership or permissions")
+            os.close(fd)
+            fd = child
+        final = os.fstat(fd)
+        require(
+            not final.st_mode & 0o022,
+            "destination or source parent must not be group/world writable",
+        )
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def read_at(fd, name, limit=2 * 1024 * 1024, executable=False):
+    try:
+        source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(source, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        require(
+            stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+            "single-link regular files are required",
+        )
+        require(
+            info.st_uid in (0, os.getuid()) and not info.st_mode & 0o022,
+            "unsafe file ownership or permissions",
+        )
+        if executable:
+            require(bool(info.st_mode & 0o111), "binary must be executable")
+            return b""
+        data = stream.read(limit + 1)
+        require(len(data) <= limit, "file exceeds size limit")
+        return data
+
+
+def read_path(path, **kwargs):
+    fd = parent_fd(path)
+    try:
+        data = read_at(fd, path.name, **kwargs)
+        require(data is not None, "required file does not exist")
+        return data
+    finally:
+        os.close(fd)
+
+
+def json_load(data):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result, "duplicate JSON keys are refused")
+            result[key] = value
+        return result
+
+    value = json.loads(
+        data,
+        object_pairs_hook=pairs,
+        parse_constant=lambda _: (_ for _ in ()).throw(
+            Refused("invalid JSON constant")
+        ),
+    )
+    require(isinstance(value, dict), "JSON object required")
+    return value
+
+
+def endpoint(value, garden=False):
+    require(isinstance(value, str), "endpoint must be a string")
+    url = urlsplit(value)
+    # urlsplit defers port validation until this property is accessed.
+    # Reject unusable endpoints before any configuration/ownership write.
+    _ = url.port
+    require(
+        url.hostname
+        and not url.username
+        and not url.password
+        and not url.query
+        and not url.fragment,
+        "endpoint must not contain credentials, query or fragment",
+    )
+    require(url.scheme in ("http", "https"), "HTTP or HTTPS endpoint required")
+    if url.scheme == "http":
+        try:
+            loopback = ipaddress.ip_address(url.hostname).is_loopback
+        except ValueError:
+            loopback = False
+        require(loopback, "HTTP is allowed only on numeric loopback")
+    if garden:
+        require(url.path == "/mcp", "Garden endpoint must end in /mcp")
+
+
+def validate_profile(path, host):
+    data = json_load(read_path(path, limit=32768))
+    fields = {
+        "garden_endpoint",
+        "garden_tls_ca_file",
+        "garden_tls_server_name",
+        "credential_file",
+        "instance_id",
+        "scope",
+        "classification",
+        "participant",
+        "adapter",
+        "session_id",
+        "host_endpoint",
+        "host_username",
+        "host_credential_file",
+        "codex_socket",
+        "codex_binary",
+    }
+    require(
+        not (data.keys() - fields),
+        "unknown profile fields; inline credentials are refused",
+    )
+    for key, value in data.items():
+        if key != "scope":
+            require(
+                isinstance(value, str) and not any(ord(c) < 32 for c in value),
+                "invalid profile field",
+            )
+    require(
+        data.get("adapter") in (host, "stdio"), "profile adapter does not match host"
+    )
+    require(
+        data.get("credential_file") and data.get("participant"),
+        "credential file reference and participant are required",
+    )
+    endpoint(data.get("garden_endpoint"), garden=True)
+    if data.get("garden_tls_ca_file") or data.get("garden_tls_server_name"):
+        require(
+            urlsplit(data["garden_endpoint"]).scheme == "https",
+            "Garden TLS settings require HTTPS",
+        )
+    instance = uuid.UUID(data.get("instance_id", ""))
+    require(
+        str(instance) == data["instance_id"] and instance.version == 4,
+        "canonical v4 instance UUID required",
+    )
+    require(
+        data.get("classification") in ("public", "internal", "restricted"),
+        "invalid classification",
+    )
+    scope = data.get("scope")
+    require(
+        isinstance(scope, dict) and set(scope) == {"realm", "segments"},
+        "explicit scope required",
+    )
+    require(
+        isinstance(scope["realm"], str)
+        and scope["realm"]
+        and isinstance(scope["segments"], list),
+        "invalid scope",
+    )
+    for segment in scope["segments"]:
+        require(
+            isinstance(segment, dict)
+            and set(segment) == {"kind", "identifier"}
+            and all(isinstance(v, str) and v for v in segment.values()),
+            "invalid scope segment",
+        )
+    if data["adapter"] in ("codex", "opencode"):
+        session = data.get("session_id", "")
+        require(
+            session
+            and len(session.encode("utf-8")) <= 128
+            and not any(c in session for c in "/\\?#% \t\n\r"),
+            "explicit safe host session required",
+        )
+    if data["adapter"] == "codex":
+        absolute(data.get("codex_socket", ""))
+    if data["adapter"] == "opencode":
+        endpoint(data.get("host_endpoint"))
+    # Credential references are deliberately never opened or copied to host config.
+
+
+def encode(value):
+    return (json.dumps(value, indent=2, ensure_ascii=True) + "\n").encode()
+
+
+def entry_for(host, binary, profile):
+    command = [str(binary), "connect", "--profile", str(profile)]
+    if host == "opencode":
+        return {"type": "local", "command": command, "enabled": True}
+    return {"command": command[0], "args": command[1:]}
+
+
+def plan(host, original, ownership, entry, remove):
+    root = "mcp" if host == "opencode" else "mcpServers"
+    text = (original or b"").decode("utf-8")
+    document = tomllib.loads(text) if host == "codex" else json_load(original or b"{}")
+    root = "mcp_servers" if host == "codex" else root
+    servers = document.get(root, {})
+    require(isinstance(servers, dict), "MCP server map must be an object")
+    existing = servers.get("garden")
+    if ownership is not None:
+        require(
+            ownership.get("version") == 1
+            and ownership.get("host") == host
+            and ownership.get("entry") == entry,
+            "ownership does not match requested host, binary and profile",
+        )
+    if "garden" in servers:
+        require(
+            ownership is not None and existing == entry,
+            "refusing unowned or modified Garden entry",
+        )
+    elif remove:
+        require(ownership is None, "owned Garden entry is missing; reconcile manually")
+        return original, None
+    if host == "codex":
+        start = "# BEGIN garden-config managed MCP\n"
+        end = "# END garden-config managed MCP\n"
+        body = (
+            start
+            + "[mcp_servers.garden]\ncommand = "
+            + json.dumps(entry["command"], ensure_ascii=False)
+            + "\nargs = "
+            + json.dumps(entry["args"], ensure_ascii=False)
+            + "\n"
+            + end
+        )
+        if ownership:
+            block = ownership.get("block", "")
+            require(
+                isinstance(block, str) and block in ("\n" + body, body),
+                "invalid ownership block",
+            )
+            require(
+                text.count(start) == 1
+                and text.count(end) == 1
+                and text.count(block) == 1,
+                "managed block is missing or modified",
+            )
+            updated = text.replace(block, "", 1) if remove else text
+        else:
+            require(
+                start.strip() not in text and end.strip() not in text,
+                "unowned managed markers",
+            )
+            block = ("\n" if text else "") + body
+            updated = text + block
+        parsed = tomllib.loads(updated)
+        expected = dict(document)
+        expected[root] = dict(servers)
+        if remove:
+            del expected[root]["garden"]
+            # TOML may drop the parent table when the managed child is removed.
+            if root not in parsed and not expected[root]:
+                del expected[root]
+        else:
+            expected[root]["garden"] = entry
+        require(parsed == expected, "cannot preserve TOML structure safely")
+        return updated.encode(), None if remove else {
+            "version": 1,
+            "host": host,
+            "entry": entry,
+            "block": block,
+        }
+    if existing is not None and not remove:
+        return original, ownership
+    document.setdefault(root, {})
+    if remove:
+        del document[root]["garden"]
+    else:
+        document[root]["garden"] = entry
+    return encode(document), None if remove else {
+        "version": 1,
+        "host": host,
+        "entry": entry,
+    }
+
+
+def atomic_write(fd, name, data):
+    temporary = ".garden-config-" + secrets.token_hex(12)
+    stream_fd = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=fd,
+    )
+    try:
+        with os.fdopen(stream_fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
+        os.fsync(fd)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=fd)
+        except FileNotFoundError:
+            pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--host", choices=("claude", "codex", "opencode"), required=True
+    )
+    for field in ("profile", "binary", "config"):
+        parser.add_argument("--" + field, required=True)
+    parser.add_argument("--remove", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    profile, binary, config = (
+        absolute(getattr(args, key)) for key in ("profile", "binary", "config")
+    )
+    require(
+        config not in (profile, binary),
+        "config must be separate from profile and binary",
+    )
+    validate_profile(profile, args.host)
+    read_path(binary, executable=True)
+    owner_name = config.name + ".garden-config.json"
+    backup_name = config.name + ".garden-config.backup"
+    require(
+        profile not in (config.with_name(owner_name), config.with_name(backup_name))
+        and binary not in (config.with_name(owner_name), config.with_name(backup_name)),
+        "input and generated paths must be distinct",
+    )
+    try:
+        fd = parent_fd(config)
+    except FileNotFoundError:
+        # Check the entire existing prefix, even when a later directory is missing.
+        if args.dry_run or args.remove:
+            print(
+                (
+                    "Would configure "
+                    if args.dry_run and not args.remove
+                    else "Already absent "
+                )
+                + str(config)
+            )
+            return
+        fd = parent_fd(config, create=True)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        original = read_at(fd, config.name)
+        owner_bytes = read_at(fd, owner_name)
+        backup = read_at(fd, backup_name)
+        ownership = json_load(owner_bytes) if owner_bytes is not None else None
+        updated, owner = plan(
+            args.host,
+            original,
+            ownership,
+            entry_for(args.host, binary, profile),
+            args.remove,
+        )
+        if original == updated and ownership == owner:
+            print("Unchanged " + str(config))
+            return
+        if args.dry_run:
+            print(
+                ("Would remove Garden from " if args.remove else "Would configure ")
+                + str(config)
+            )
+            return
+        # Backup only the pre-install configuration, never overwrite an older backup.
+        if (
+            original is not None
+            and ownership is None
+            and not args.remove
+            and backup is None
+        ):
+            atomic_write(fd, backup_name, original)
+        # Compare immediately before replacing; do not silently clobber normal host edits.
+        require(
+            read_at(fd, config.name) == original
+            and read_at(fd, owner_name) == owner_bytes,
+            "configuration changed during update",
+        )
+        if owner is not None:
+            atomic_write(fd, owner_name, encode(owner))
+        atomic_write(fd, config.name, updated)
+        if owner is None and owner_bytes is not None:
+            os.unlink(owner_name, dir_fd=fd)
+            os.fsync(fd)
+        print(("Removed Garden from " if args.remove else "Configured ") + str(config))
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (Refused, OSError, ValueError, TypeError, RecursionError) as error:
+        # Parser and OS exceptions can contain source text; never print their details.
+        message = (
+            str(error)
+            if isinstance(error, Refused)
+            else "invalid or inaccessible input; no credential details printed"
+        )
+        print("garden-config: " + message, file=sys.stderr)
+        sys.exit(1)

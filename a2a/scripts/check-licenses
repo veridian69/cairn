@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Verify the A2A licence inventory against the locked linked module graph."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BUNDLE = ROOT / "THIRD_PARTY_LICENSES"
+INVENTORY = ROOT / "THIRD_PARTY_NOTICES.md"
+APACHE_2_SHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+ROW = re.compile(r"^\| `([^`]+)` \| `([^`]+)` \|")
+GO_ROW_PREFIX = "| Go standard library and runtime reference texts | `go1.25.0` | "
+TOP_LEVEL_FILES = ("LICENSE", "LICENSE.txt", "NOTICE", "COPYING")
+SUPPLEMENTAL_FILES = {
+    "github.com/klauspost/compress@v1.18.5/LICENSE-s2": (
+        "github.com/klauspost/compress",
+        "s2/LICENSE",
+    ),
+    "modernc.org/libc@v1.70.0/LICENSE-3RD-PARTY.md": (
+        "modernc.org/libc",
+        "LICENSE-3RD-PARTY.md",
+    ),
+    "modernc.org/mathutil@v1.7.1/LICENSE-mersenne": (
+        "modernc.org/mathutil",
+        "mersenne/LICENSE",
+    ),
+    "modernc.org/memory@v1.11.0/LICENSE-GO": (
+        "modernc.org/memory",
+        "LICENSE-GO",
+    ),
+    "modernc.org/memory@v1.11.0/LICENSE-LOGO": (
+        "modernc.org/memory",
+        "LICENSE-LOGO",
+    ),
+    "modernc.org/memory@v1.11.0/LICENSE-MMAP-GO": (
+        "modernc.org/memory",
+        "LICENSE-MMAP-GO",
+    ),
+    "modernc.org/sqlite@v1.48.0/SQLITE-LICENSE": (
+        "modernc.org/sqlite",
+        "SQLITE-LICENSE",
+    ),
+}
+
+
+def linked_modules() -> dict[str, tuple[str, Path]]:
+    environment = os.environ.copy()
+    environment.setdefault("GOCACHE", str(ROOT / ".cache/go-build"))
+    environment.setdefault("GOMODCACHE", str(ROOT / ".cache/go-mod"))
+    environment.setdefault("GOFLAGS", "-modcacherw")
+    output = subprocess.run(
+        [
+            "go",
+            "list",
+            "-mod=readonly",
+            "-deps",
+            "-f",
+            "{{with .Module}}{{if .Version}}{{.Path}}|{{.Version}}|{{.Dir}}{{end}}{{end}}",
+            ".",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    modules: dict[str, tuple[str, Path]] = {}
+    for line in output.splitlines():
+        if not line:
+            continue
+        module, version, directory = line.split("|", 2)
+        modules[module] = (version, Path(directory))
+    return modules
+
+
+def inventory_modules() -> set[tuple[str, str]]:
+    return {
+        (match.group(1), match.group(2))
+        for line in INVENTORY.read_text(encoding="utf-8").splitlines()
+        if (match := ROW.match(line))
+    }
+
+
+def main() -> None:
+    modules = linked_modules()
+    linked = {(module, version) for module, (version, _) in modules.items()}
+    inventoried = inventory_modules()
+    if linked != inventoried:
+        missing = sorted(linked - inventoried)
+        stale = sorted(inventoried - linked)
+        raise SystemExit(
+            f"licence inventory drift: missing={missing!r} stale={stale!r}"
+        )
+    if not any(
+        line.startswith(GO_ROW_PREFIX)
+        for line in INVENTORY.read_text(encoding="utf-8").splitlines()
+    ):
+        raise SystemExit("Go standard-library licence is missing from the inventory")
+
+    expected: dict[Path, Path] = {}
+    for module, (version, source) in modules.items():
+        found = False
+        for name in TOP_LEVEL_FILES:
+            source_file = source / name
+            if source_file.is_file():
+                expected[Path(f"{module}@{version}") / name] = source_file
+                found = True
+        if not found:
+            raise SystemExit(f"no licence source found for {module}@{version}")
+
+    for destination, (module, source_name) in SUPPLEMENTAL_FILES.items():
+        _, source = modules[module]
+        expected[Path(destination)] = source / source_name
+
+    go_root = Path(
+        subprocess.run(
+            ["go", "env", "GOROOT"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    reference = Path("go.dev/toolchain@go1.25.0")
+    expected[reference / "LICENSE"] = go_root / "LICENSE"
+    expected[reference / "PATENTS"] = go_root / "PATENTS"
+
+    bundled = {path.relative_to(BUNDLE) for path in BUNDLE.rglob("*") if path.is_file()}
+    if bundled != set(expected):
+        missing = sorted(set(expected) - bundled)
+        stale = sorted(bundled - set(expected))
+        raise SystemExit(f"licence bundle drift: missing={missing!r} stale={stale!r}")
+
+    for relative, source in expected.items():
+        if (BUNDLE / relative).read_bytes() != source.read_bytes():
+            raise SystemExit(f"licence text differs from module cache: {relative}")
+
+    digest = hashlib.sha256((ROOT / "LICENSE").read_bytes()).hexdigest()
+    if digest != APACHE_2_SHA256:
+        raise SystemExit(f"unexpected A2A LICENSE digest: {digest}")
+
+
+if __name__ == "__main__":
+    main()

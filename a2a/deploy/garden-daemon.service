@@ -1,0 +1,22 @@
+[Unit]
+Description=Garden local message daemon
+After=network.target
+
+[Service]
+Type=simple
+User=garden
+Group=garden
+Environment=HOME=/var/lib/garden
+WorkingDirectory=/var/lib/garden
+ExecStart=/usr/local/bin/a2a start
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/garden
+
+[Install]
+WantedBy=multi-user.target

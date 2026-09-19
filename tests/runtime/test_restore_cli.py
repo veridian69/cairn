@@ -18,6 +18,7 @@ import json
 import os
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -263,7 +264,10 @@ async def test_round_trip_yields_a_verifiable_serveable_instance(
         CATALOGUE_FILENAME,
         ATTIC_FILENAME,
     ]
-    with sqlite3.connect(restored.paths.data / ATTIC_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(restored.paths.data / ATTIC_FILENAME)) as connection,
+        connection,
+    ):
         restored_payloads = {
             row[0] for row in connection.execute("SELECT payload FROM payloads")
         }

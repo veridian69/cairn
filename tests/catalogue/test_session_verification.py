@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -75,7 +75,7 @@ def _call(service: CairnSessions, method: str, command: Any) -> Any:
 
 def _seed(path: Path, *, empty: bool = False) -> tuple[CairnSessions, UUID, UUID]:
     f._seed_authority_catalogue(path)
-    with sqlite3.connect(path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(path / CATALOGUE_FILENAME)) as c, c:
         c.execute(
             "INSERT INTO grants VALUES (?, ?, 'local', '[]', '[\"ingest\",\"retrieve\"]', 'restricted', '[\"internal\"]', NULL, NULL, NULL, ?)",
             (str(uuid4()), str(f._MANAGER_ID), "2026-08-05T12:00:00.000000Z"),
@@ -108,7 +108,7 @@ def _seed(path: Path, *, empty: bool = False) -> tuple[CairnSessions, UUID, UUID
 def _edit(path: Path) -> Iterator[sqlite3.Connection]:
     # Deliberately bypass immutability, then restore the exact schema so the
     # semantic verifier, rather than the trigger inventory, must catch damage.
-    with sqlite3.connect(path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(path / CATALOGUE_FILENAME)) as c, c:
         triggers = c.execute(
             "SELECT name, sql FROM sqlite_schema WHERE type='trigger'"
         ).fetchall()
@@ -612,7 +612,7 @@ def test_session_replay_audit_must_bind_original_operation(
             idempotency_key=key,
             correlation_id=uuid4(),
         )
-    with sqlite3.connect(tmp_path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as c, c:
         events = {
             str(e.event_id): e
             for (raw,) in c.execute("SELECT canonical_event FROM audit_events")
@@ -674,7 +674,7 @@ def test_audit_action_and_scope_roles_match_the_actual_operation(
     monkeypatch.setattr(service._authority, "ingest", crash)
     with pytest.raises(RuntimeError, match="custody gap"):
         _call(service, "commit", api.CommitTurn(SCOPE, sid, tid))
-    with sqlite3.connect(tmp_path / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as c, c:
         events = {
             str(e.event_id): e
             for (raw,) in c.execute("SELECT canonical_event FROM audit_events")
@@ -770,7 +770,7 @@ def test_audited_custody_gap_cannot_lose_its_ingest_record(
         # This is the consumer's verify/restore-before-recovery boundary.
         # Before the fix both checks returned success and this made 2 more facts.
         _call(_service(target), "commit", api.CommitTurn(SCOPE, sid, tid))
-    with sqlite3.connect(target / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(target / CATALOGUE_FILENAME)) as c, c:
         assert c.execute("SELECT count(*) FROM facts").fetchone() == (2,)
 
 
@@ -875,7 +875,7 @@ def test_duplicate_custody_after_bypassed_verification_stays_invalid(
     # Deliberately bypass verification to reproduce the reviewer's second
     # stage. This task changes the offline gate, not authority corruption guards.
     _call(_service(source), "commit", api.CommitTurn(SCOPE, sid, tid))
-    with sqlite3.connect(source / CATALOGUE_FILENAME) as c:
+    with closing(sqlite3.connect(source / CATALOGUE_FILENAME)) as c, c:
         assert c.execute("SELECT count(*) FROM facts").fetchone() == (4,)
     with pytest.raises(VerificationError, match="session_integrity_invalid"):
         verify_catalogue(f._config(source))

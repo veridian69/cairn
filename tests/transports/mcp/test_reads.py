@@ -17,7 +17,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime
 from hashlib import sha256
 from itertools import count
@@ -247,7 +247,10 @@ def audit_arguments(
 
 
 def events(data_path: Path, chain_kind: str) -> list[dict[str, Any]]:
-    with sqlite3.connect(data_path / CATALOGUE_FILENAME) as connection:
+    with (
+        closing(sqlite3.connect(data_path / CATALOGUE_FILENAME)) as connection,
+        connection,
+    ):
         found = connection.execute(
             "SELECT canonical_event FROM audit_events "
             "WHERE chain_kind = ? ORDER BY sequence",

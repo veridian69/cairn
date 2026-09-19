@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable
+from contextlib import closing
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
@@ -172,7 +173,10 @@ async def test_concurrent_valid_payload_wins_over_observed_poison(
     provider = _Provider()
 
     def concurrent_write() -> None:
-        with sqlite3.connect(tmp_path / "catalogue.sqlite3") as connection:
+        with (
+            closing(sqlite3.connect(tmp_path / "catalogue.sqlite3")) as connection,
+            connection,
+        ):
             connection.execute(
                 "UPDATE projection_embedding_cache SET payload = ? WHERE cache_key = ?",
                 ("[6,8]", _key("fact")),
@@ -208,7 +212,10 @@ async def test_dropped_repair_returns_valid_vector_but_does_not_claim_recovery(
     store = ExtractionCacheStore(
         tmp_path, writer_gate=threading.Lock(), logger=configure_logging(stream)
     )
-    with sqlite3.connect(tmp_path / "catalogue.sqlite3") as connection:
+    with (
+        closing(sqlite3.connect(tmp_path / "catalogue.sqlite3")) as connection,
+        connection,
+    ):
         connection.execute(
             "CREATE TRIGGER fail_repair BEFORE UPDATE ON projection_embedding_cache "
             "BEGIN SELECT RAISE(ABORT, 'private failure text'); END"
@@ -262,7 +269,10 @@ async def test_legacy_noncacheable_input_keeps_first_result_semantics(
     wrapper = seam.build_caching_embedder(store, _inner(provider))
     assert await wrapper.create(input_data) == [3, 4]
     assert provider.calls[0][0] is input_data
-    with sqlite3.connect(tmp_path / "catalogue.sqlite3") as connection:
+    with (
+        closing(sqlite3.connect(tmp_path / "catalogue.sqlite3")) as connection,
+        connection,
+    ):
         assert connection.execute(
             "SELECT count(*) FROM projection_embedding_cache"
         ).fetchone() == (0,)

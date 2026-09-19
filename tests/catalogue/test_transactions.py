@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -181,20 +182,20 @@ def test_append_advances_instance_chain_with_canonical_events(tmp_path: Path) ->
 
     assert first.sequence == 1
     assert second.sequence == 2
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    rows = connection.execute(
-        "SELECT sequence, previous_hash, event_hash, canonical_event "
-        "FROM audit_events ORDER BY sequence"
-    ).fetchall()
-    assert rows[0][1] == bytes(32)
-    assert rows[1][1] == rows[0][2]
-    assert parse_canonical_audit_bytes(rows[0][3]).sequence == 1
-    assert parse_canonical_audit_bytes(rows[1][3]).sequence == 2
-    assert connection.execute(
-        "SELECT last_sequence, last_hash FROM audit_heads "
-        "WHERE chain_kind = 'instance' AND chain_identity = ?",
-        (str(INSTANCE_ID),),
-    ).fetchone() == (2, rows[1][2])
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        rows = connection.execute(
+            "SELECT sequence, previous_hash, event_hash, canonical_event "
+            "FROM audit_events ORDER BY sequence"
+        ).fetchall()
+        assert rows[0][1] == bytes(32)
+        assert rows[1][1] == rows[0][2]
+        assert parse_canonical_audit_bytes(rows[0][3]).sequence == 1
+        assert parse_canonical_audit_bytes(rows[1][3]).sequence == 2
+        assert connection.execute(
+            "SELECT last_sequence, last_hash FROM audit_heads "
+            "WHERE chain_kind = 'instance' AND chain_identity = ?",
+            (str(INSTANCE_ID),),
+        ).fetchone() == (2, rows[1][2])
 
 
 def test_realm_chains_advance_independently(tmp_path: Path) -> None:
@@ -286,14 +287,14 @@ def test_scope_projection_distinguishes_absent_root_and_segments(
     store.append_audit(realm_draft)
     store.append_audit(replace(realm_draft, source_scope=None, requested_scope=None))
 
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute(
-        "SELECT sequence, role, ordinal, segment_kind, segment_id "
-        "FROM audit_scope_index ORDER BY sequence, role, ordinal"
-    ).fetchall() == [
-        (1, "requested", 0, "job", "job/1"),
-        (1, "source", -1, None, None),
-    ]
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute(
+            "SELECT sequence, role, ordinal, segment_kind, segment_id "
+            "FROM audit_scope_index ORDER BY sequence, role, ordinal"
+        ).fetchall() == [
+            (1, "requested", 0, "job", "job/1"),
+            (1, "source", -1, None, None),
+        ]
 
 
 def test_stale_head_compare_and_set_rolls_back_event(
@@ -332,11 +333,13 @@ def test_stale_head_compare_and_set_rolls_back_event(
         store.append_audit(_draft("stale_head"))
 
     assert caught.value.code == "stale_audit_head"
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (0,)
-    assert connection.execute(
-        "SELECT last_sequence FROM audit_heads WHERE chain_kind = 'instance'"
-    ).fetchone() == (0,)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (
+            0,
+        )
+        assert connection.execute(
+            "SELECT last_sequence FROM audit_heads WHERE chain_kind = 'instance'"
+        ).fetchone() == (0,)
 
 
 def test_idempotent_mutation_commits_and_replays_exact_result(tmp_path: Path) -> None:
@@ -389,13 +392,13 @@ def test_idempotent_mutation_commits_and_replays_exact_result(tmp_path: Path) ->
     assert committed.audit_receipt.sequence == 1
     assert replayed.audit_receipt.sequence == 2
     assert calls == 1
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute(
-        "SELECT count(*) FROM idempotency_records"
-    ).fetchone() == (1,)
-    assert connection.execute(
-        "SELECT count(*) FROM realms WHERE realm_id = 'created'"
-    ).fetchone() == (1,)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM idempotency_records"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*) FROM realms WHERE realm_id = 'created'"
+        ).fetchone() == (1,)
 
 
 def test_changed_command_is_audited_idempotency_conflict(tmp_path: Path) -> None:
@@ -487,14 +490,16 @@ def test_mutation_failure_rolls_back_domain_audit_and_idempotency(
             decode=_decode_result,
         )
 
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute(
-        "SELECT count(*) FROM realms WHERE realm_id = 'residue'"
-    ).fetchone() == (0,)
-    assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (0,)
-    assert connection.execute(
-        "SELECT count(*) FROM idempotency_records"
-    ).fetchone() == (0,)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM realms WHERE realm_id = 'residue'"
+        ).fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (
+            0,
+        )
+        assert connection.execute(
+            "SELECT count(*) FROM idempotency_records"
+        ).fetchone() == (0,)
 
 
 def test_audit_only_rejection_is_durable(tmp_path: Path) -> None:
@@ -579,12 +584,11 @@ def test_audit_event_guard_rejects_update_and_delete(tmp_path: Path) -> None:
         uuid_factory=lambda: UUID("33333333-3333-4333-8333-333333333333"),
     )
     store.append_audit(_draft("guard_check"))
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-
-    with pytest.raises(sqlite3.IntegrityError):
-        connection.execute("UPDATE audit_events SET reason_code = 'changed'")
-    with pytest.raises(sqlite3.IntegrityError):
-        connection.execute("DELETE FROM audit_events")
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE audit_events SET reason_code = 'changed'")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("DELETE FROM audit_events")
 
 
 def test_matching_idempotency_state_resolves_ambiguous_commit(tmp_path: Path) -> None:
@@ -617,10 +621,10 @@ def test_matching_idempotency_state_resolves_ambiguous_commit(tmp_path: Path) ->
     outcome = _mutate(store, draft, lambda _transaction: "created")
 
     assert isinstance(outcome, Committed)
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute(
-        "SELECT count(*) FROM idempotency_records"
-    ).fetchone() == (1,)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM idempotency_records"
+        ).fetchone() == (1,)
 
 
 def test_absent_idempotency_state_records_error_after_ambiguous_commit(
@@ -657,13 +661,13 @@ def test_absent_idempotency_state_records_error_after_ambiguous_commit(
         _mutate(store, draft, lambda _transaction: "created")
 
     assert caught.value.code == "commit_outcome_unknown"
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute(
-        "SELECT count(*) FROM idempotency_records"
-    ).fetchone() == (0,)
-    assert connection.execute(
-        "SELECT outcome, reason_code FROM audit_events"
-    ).fetchall() == [("error", "commit_ambiguous")]
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM idempotency_records"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT outcome, reason_code FROM audit_events"
+        ).fetchall() == [("error", "commit_ambiguous")]
 
 
 _HOSTILE_REALM = "'; DROP TABLE audit_events; --‮EVIL"
@@ -759,12 +763,14 @@ def test_unknown_realm_append_fails_closed_without_creating_authority_state(
         store.append_audit(draft)
 
     assert caught.value.code == "audit_chain_unavailable"
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM realms").fetchone() == (0,)
-    assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (0,)
-    assert connection.execute(
-        "SELECT chain_kind, chain_identity, last_sequence FROM audit_heads"
-    ).fetchall() == [("instance", str(INSTANCE_ID), 0)]
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM realms").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (
+            0,
+        )
+        assert connection.execute(
+            "SELECT chain_kind, chain_identity, last_sequence FROM audit_heads"
+        ).fetchall() == [("instance", str(INSTANCE_ID), 0)]
 
 
 def _uuid_sequence() -> Callable[[], UUID]:
@@ -993,26 +999,28 @@ def test_mutation_rejection_rolls_back_and_records_durable_denial(
     assert isinstance(outcome, Rejected)
     assert outcome.failure == failure
     assert outcome.audit_receipt.sequence == 1
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute(
-        "SELECT count(*) FROM realms WHERE realm_id = 'residue'"
-    ).fetchone() == (0,)
-    assert connection.execute(
-        "SELECT count(*) FROM idempotency_records"
-    ).fetchone() == (0,)
-    assert connection.execute(
-        "SELECT outcome, reason_code FROM audit_events"
-    ).fetchall() == [("deny", "authorisation_denied")]
-    assert calls == 1
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM realms WHERE realm_id = 'residue'"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT count(*) FROM idempotency_records"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT outcome, reason_code FROM audit_events"
+        ).fetchall() == [("deny", "authorisation_denied")]
+        assert calls == 1
 
-    retried = _mutate(store, draft, reject)
+        retried = _mutate(store, draft, reject)
 
-    assert isinstance(retried, Rejected)
-    assert calls == 2, "a retried attempt with the same key must re-evaluate"
-    assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (2,)
-    assert connection.execute(
-        "SELECT count(*) FROM idempotency_records"
-    ).fetchone() == (0,)
+        assert isinstance(retried, Rejected)
+        assert calls == 2, "a retried attempt with the same key must re-evaluate"
+        assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (
+            2,
+        )
+        assert connection.execute(
+            "SELECT count(*) FROM idempotency_records"
+        ).fetchone() == (0,)
 
 
 def test_execute_compound_commits_two_chained_events_and_domain_rows(
@@ -1059,15 +1067,17 @@ def test_execute_compound_commits_two_chained_events_and_domain_rows(
 
     assert first.sequence == 1
     assert second.sequence == 2
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (2,)
-    assert connection.execute(
-        "SELECT count(*) FROM realms WHERE realm_id = 'created'"
-    ).fetchone() == (1,)
-    assert connection.execute(
-        "SELECT last_sequence FROM audit_heads WHERE chain_kind = 'realm' "
-        "AND chain_identity = 'local'"
-    ).fetchone() == (2,)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (
+            2,
+        )
+        assert connection.execute(
+            "SELECT count(*) FROM realms WHERE realm_id = 'created'"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT last_sequence FROM audit_heads WHERE chain_kind = 'realm' "
+            "AND chain_identity = 'local'"
+        ).fetchone() == (2,)
 
 
 def test_execute_compound_failure_after_first_append_rolls_back_everything(
@@ -1098,15 +1108,17 @@ def test_execute_compound_failure_after_first_append_rolls_back_everything(
     with pytest.raises(RuntimeError):
         store.execute_compound(work)
 
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (0,)
-    assert connection.execute(
-        "SELECT count(*) FROM realms WHERE realm_id = 'residue'"
-    ).fetchone() == (0,)
-    assert connection.execute(
-        "SELECT last_sequence FROM audit_heads WHERE chain_kind = 'realm' "
-        "AND chain_identity = 'local'"
-    ).fetchone() == (0,)
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        assert connection.execute("SELECT count(*) FROM audit_events").fetchone() == (
+            0,
+        )
+        assert connection.execute(
+            "SELECT count(*) FROM realms WHERE realm_id = 'residue'"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT last_sequence FROM audit_heads WHERE chain_kind = 'realm' "
+            "AND chain_identity = 'local'"
+        ).fetchone() == (0,)
 
 
 def test_execute_compound_transaction_expires_after_work_returns(
@@ -1284,12 +1296,12 @@ def test_writer_gate_serialises_compound_and_idempotent_mutations(
         for future in futures:
             future.result()
 
-    connection = sqlite3.connect(tmp_path / CATALOGUE_FILENAME)
-    sequences = [
-        row[0]
-        for row in connection.execute(
-            "SELECT sequence FROM audit_events WHERE chain_kind = 'instance' "
-            "ORDER BY sequence"
-        ).fetchall()
-    ]
-    assert sequences == list(range(1, 13))
+    with closing(sqlite3.connect(tmp_path / CATALOGUE_FILENAME)) as connection:
+        sequences = [
+            row[0]
+            for row in connection.execute(
+                "SELECT sequence FROM audit_events WHERE chain_kind = 'instance' "
+                "ORDER BY sequence"
+            ).fetchall()
+        ]
+        assert sequences == list(range(1, 13))

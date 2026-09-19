@@ -1,14 +1,22 @@
 # Guided Cairn installation and recovery
 
 `cairn-install` teaches and runs a new Cairn installation from a trusted source
-checkout. It supports disposable native, persistent native and Docker on Linux
-`x86_64`; macOS supports foreground and per-user launchd native catalogue/Attic
-installations. Each named installation has durable private state, so an
-interrupted run can reconcile what already happened before it continues.
+checkout. It supports disposable native, persistent native, Docker and an
+existing administrator-prepared Kubernetes cluster on Linux x86_64; macOS
+supports foreground and per-user launchd native catalogue/Attic installations.
+Each named installation has durable private state, so an interrupted run can
+reconcile what already happened before it continues.
 
-This installer does not upgrade or adopt an existing installation. It does not
-install Kubernetes or OpenShift. Use the [Kubernetes operator procedure](../install.md#kubernetes-installation)
-for an existing cluster.
+**Garden is not supported on macOS.** Run Garden on Linux.
+
+On Linux, persistent modes can also manage a shared Garden server. Add
+`--garden-config /absolute/path/garden.json` when creating the installation;
+the [managed Garden guide](managed-garden.md) covers TLS, participant credentials,
+remote adapters and the same preserving recovery/removal lifecycle.
+
+This installer does not upgrade or adopt an existing installation. Kubernetes
+mode installs one new instance; it never provisions or repairs a cluster, and
+it does not support OpenShift.
 
 ## Requirements
 
@@ -27,15 +35,31 @@ search needs outbound OpenAI access and an OpenAI API key; Attic needs no
 external key. Native semantic mode also needs Docker: its FalkorDB index runs
 in a dedicated container. The installer checks local prerequisites before
 preparing Cairn and proves provider access during semantic verification.
-For RC4, load the [maintained FalkorDB offline archive](../../deploy/falkordb/README.md#install-the-maintained-offline-image)
-before enabling semantic mode; the archive requires Docker's containerd image
-store. The candidate is not yet published to GHCR.
+Before enabling semantic mode, [build the FalkorDB runtime locally](../../deploy/falkordb/README.md).
+Docker/native installs require `--falkordb-runtime /absolute/path/runtime.json`.
+Kubernetes installs require node preparation followed by
+`--kube-falkordb-receipt /absolute/path/kubernetes-receipt.json`.
 
 Linux persistent native mode enables a systemd user service. Running before
 login and after logout also requires user lingering; follow the manual guide's
 [login and reboot behaviour](native-installation.md#login-and-reboot-behaviour).
 The installer does not change that account-wide policy. macOS native mode is
 login-scoped: it starts at user login and stops at logout.
+
+Kubernetes mode requires `uv 0.12.14` for the locked YAML helper runtime, an
+explicit kube context, and a dedicated namespace that an administrator has
+created and labelled `cairn.example.invalid/instance: <installation-name>`.
+See [namespace and render preparation](deployment.md#namespace-and-render-preparation)
+for the exact create, label and verification commands. It also requires Ready
+Linux/amd64 capacity, a CSI StorageClass
+that supports `ReadWriteOncePod`, an immutable Cairn image digest, and working
+CNI and DNS. It needs namespace-scoped mutation permissions for the documented
+resources and cluster-scoped read access to Namespace, Nodes, StorageClass and
+CSIDriver for preflight. Semantic mode also requires a healthy shared gateway
+for provider egress. The installer verifies these inputs but never creates or
+deletes the namespace, gateway, StorageClass, CNI, CSI, nodes, registry
+credentials or image cache; it never mutates cluster prerequisites. The cluster
+administrator remains responsible for those prerequisites and their lifecycle.
 
 For detailed host checks and operational trade-offs, see the
 [installation prerequisites](../install.md#get-missing-prerequisites),
@@ -78,8 +102,10 @@ for stdin. Port 8000 and **Attic only** are the defaults for optional values.
 Add `--semantic` for **Attic plus semantic search** in Linux native or Docker mode:
 
 ```sh
+falkordb_runtime="$PWD/build/falkordb-local/runtime.json"
+test -s "$falkordb_runtime"
 ./cairn-install --non-interactive --mode docker --name recall \
-  --port 8125 --semantic
+  --port 8125 --semantic --falkordb-runtime "$falkordb_runtime"
 ```
 
 The source launcher uses its own checkout. A packaged `cairn-install` command
@@ -92,6 +118,103 @@ cairn-install --non-interactive --mode native --name notes \
 
 Use `--state-root /absolute/linux/path` only when the default private state root
 is unsuitable. It is primarily useful for isolated tests.
+
+## Install to an existing Kubernetes namespace
+
+Kubernetes mode is non-interactive once every immutable input is stated. This
+semantic example uses a registry-published, digest-pinned Cairn image and the
+separate receipt created after [building FalkorDB locally and staging it on the
+eligible nodes](../../deploy/falkordb/README.md#prepare-kubernetes-nodes).
+Create the provider-key file outside installer state with mode `0600`; it
+contains the key on one line.
+
+```sh
+kube_image='REPLACE_WITH_TRUSTED_CAIRN_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST'
+case "$kube_image" in
+  *REPLACE_WITH_*|registry.example/*)
+    printf 'Replace kube_image with the distributor-supplied immutable image before running\n' >&2
+    exit 2
+    ;;
+esac
+kube_digest="${kube_image##*@sha256:}"
+test "${#kube_digest}" -eq 64
+case "$kube_digest" in *[!0123456789abcdefABCDEF]*) exit 2 ;; esac
+cairn-install --non-interactive --mode kubernetes --name cairn-v05 \
+  --port 8126 \
+  --kube-context reference --kube-namespace cairn-v05 \
+  --kube-storage-class cairn-local \
+  --kube-image "$kube_image" \
+  --kube-falkordb-receipt /home/operator/build/falkordb-local/kubernetes-receipt.json \
+  --semantic --provider-key-file /home/operator/.config/cairn/openai-api-key \
+  --state-root /home/operator/.local/state/cairn-install \
+  --source /home/operator/projects/cairn
+```
+
+The installer copies the provider key into protected installation state and
+records the external input by path only. The file supplied with
+`--provider-key-file` remains an operator-owned input: the installer does not
+modify or delete it, and `blitz` leaves it untouched. Retain it as a durable
+credential if that is your policy; if you deliberately created a one-time
+staging file, remove it yourself only after confirming the protected copy and
+that no later resume depends on the input path. Never place a provider key in
+flags or rendered YAML; it is also excluded from command logs and the rendered
+manifest.
+
+The receipt is mandatory for a new semantic Kubernetes installation. The
+installer retains its contents, checks the recorded node names and UIDs, and
+proves the exact local FalkorDB digest on every recorded node without pulling.
+It does not transfer the image or obtain host access; node staging remains a
+separate cluster-administrator operation.
+
+Cairn uses the normal registry path and the site's existing registry-credential policy.
+FalkorDB uses the separate local runtime receipt described above.
+
+`--kube-preloaded-image` is an explicit, narrow exception for the recorded
+single-node reference host. Add it only when the same digest is already in that
+node's runtime image cache; the installer then uses `IfNotPresent` and refuses
+any cluster without exactly one schedulable node. It is not a substitute for a
+registry path on a multi-node cluster.
+
+For that single-node exception, stage the locally built Cairn image with the
+same reviewed helper used for the FalkorDB runtime. This is a
+cluster-administrator operation: it requires explicit SSH host mapping and
+non-interactive sudo on the node. It does not create Kubernetes resources or
+give the installer host access. Run it from the trusted checkout. The first
+commands below read the release tag from `deploy/images.lock` and build it;
+do not copy a release number into this procedure. Docker must use its containerd image store,
+so `docker image save` preserves the OCI index; the staging helper verifies that
+property and refuses the archive before it transfers anything to a node.
+
+```sh
+set -eu
+source_image="$(awk -F= '$1 == "CAIRN_IMAGE" {print $2}' deploy/images.lock)"
+test -n "$source_image"
+make image IMAGE="$source_image"
+digest="$(docker image inspect "$source_image" --format '{{.Id}}')"
+case "$digest" in sha256:[0-9a-f][0-9a-f]*) ;; *) exit 1 ;; esac
+local_tag="cairn.local/cairn-runtime:build-${digest#sha256:}"
+cairn_image="cairn.local/cairn-runtime@$digest"
+mkdir build/cairn-image-stage
+docker image tag "$source_image" "$local_tag"
+docker image save --output build/cairn-image-stage/image.tar "$local_tag"
+python3 scripts/kubernetes_image_stage.py \
+  --context reference --archive build/cairn-image-stage/image.tar \
+  --image "$cairn_image" --node reference=reference \
+  --output build/cairn-image-stage/kubernetes-receipt.json
+```
+
+The receipt records staging evidence but is not passed to `cairn-install` for
+the Cairn image. The resulting image has the form
+`cairn.local/cairn-runtime@sha256:…`. Use
+`--kube-image "$cairn_image" --kube-preloaded-image` in
+the installation command. The installer proves the exact Cairn digest can
+execute with a disposable `IfNotPresent` Pod before it creates the instance.
+It does not use `Node.status.images`, because kubelet may cap or disable that
+inventory. Garden remains a normally pullable published image. If the exact
+probe cannot start, restage the Cairn archive and rerun
+`./cairn-install resume --name NAME`; it reuses the recorded installation
+inputs. Retain the archive for a later restage. The manual GitOps procedure
+remains registry-only; it does not cover this guided, single-node exception.
 
 ## Output and diagnostics
 
@@ -115,7 +238,9 @@ displayed directory. The log retains the complete working directory for every
 command; quiet mode does not repeatedly announce omitted diagnostics.
 
 Add `--verbose` to show those detailed diagnostics in the terminal and print
-the full result JSON after install, resume, rollback or blitz:
+the full result JSON after install, resume, rollback or blitz. A failed
+semantic Kubernetes probe reports the shared gateway by name and its documented
+installation procedure; probe output is never used to disclose credentials.
 
 ```sh
 ./cairn-install resume --name notes --verbose
@@ -154,6 +279,7 @@ run:
 install -m 600 /dev/null "$HOME/.local/state/cairn-openai-key"
 ${EDITOR:?Set EDITOR to your local editor} "$HOME/.local/state/cairn-openai-key"
 ./cairn-install --mode docker --name recall --semantic \
+  --falkordb-runtime "$PWD/build/falkordb-local/runtime.json" \
   --provider-key-file "$HOME/.local/state/cairn-openai-key"
 ```
 
@@ -172,6 +298,12 @@ checks the owned resource's real postcondition before another mutation.
 Checks the platform, runtime or Docker versions, port, source inputs and any
 recorded resource ownership. Existing unowned services, projects and files are
 refused rather than adopted or overwritten.
+
+### garden_files — Prepare Garden files and participant credentials
+
+When managed Garden is selected, validates the Garden configuration and writes
+the owner-only TLS, server and participant files needed by the selected mode.
+Installations without managed Garden skip this stage.
 
 ### prepare — Prepare runtime and configuration
 
@@ -215,6 +347,23 @@ Attic write, then checks the exact bytes read back. Semantic mode also proves a
 bounded candidate retrieval. Submission receipts and idempotency keys are
 saved so resume does not ingest a committed check twice.
 
+### garden_prepare — Prepare Garden runtime and configuration
+
+When Garden is selected, prepares the owned Garden runtime and configuration
+after Cairn has passed its own verification. It does not replace or adopt a
+pre-existing Garden service.
+
+### garden_start — Start Garden
+
+Starts the Garden service or process recorded for this installation and keeps
+its endpoint within the configured TLS and ownership boundary.
+
+### garden_verify — Verify Garden endpoint and participant bindings
+
+Checks the authenticated Garden endpoint and verifies every configured
+participant binding and adapter bundle. A Cairn verification does not imply
+Garden verification.
+
 ### restart — Restart and verify the same saved data
 
 Restarts the owned service and performs read-only checks against the same
@@ -226,6 +375,24 @@ one-shot [manual disposable procedure](manual-disposable-installation.md), it re
 credentials, state and evidence in the named private directory for inspection
 and later recovery.
 
+### stop — Stop the disposable Cairn process and retain its data
+
+After a successful disposable run, stops the owned Cairn process while
+retaining its catalogue, credentials, state and evidence for inspection or a
+later resume.
+
+### rollback — Stop Cairn and preserve its data
+
+Stops or disables only the proved-owned Cairn resources for an explicit
+rollback operation. It retains the catalogue, credentials, configuration,
+evidence and persistent storage so `resume` can restore the same instance.
+
+### garden_rollback — Stop Garden and preserve its data
+
+For an explicit rollback of a managed Garden installation, stops the proved-owned
+Garden resources and closes its endpoint while retaining Garden data,
+credentials and configuration for resume.
+
 ## Inspect and resume
 
 List recorded installations:
@@ -234,7 +401,9 @@ List recorded installations:
 ./cairn-install ls
 ```
 
-The table shows name, mode, recorded status, port and features. It does not
+The table shows name, mode, recorded status, port and features. Features are
+`Attic only` or `Attic plus semantic search`; managed Garden is appended as
+`; Garden` when the installation owns a Garden configuration. It does not
 start services or probe live health. An unfinished blitz remains listed even if
 only its recovery journal survives. Unreadable or malformed instance records
 appear as unavailable while other instances remain visible. A missing state
@@ -253,11 +422,27 @@ Inspect the durable record without probing or changing the service:
 ./cairn-install status --name notes
 ```
 
+For Kubernetes mode, `status` prints a temporary, explicit port-forward command
+instead of a permanent endpoint. For the example above it is:
+
+```sh
+kubectl --context reference --namespace cairn-v05 port-forward service/cairn 8126:8000
+```
+
+Run it only for a local check, then stop it when that check ends. The installer
+opens a loopback-only port-forward for its own verification and always closes
+it afterwards.
+
 Resume after correcting the reported problem:
 
 ```sh
 ./cairn-install resume --name notes
 ```
+
+Context and namespace are immutable on resume, along with the recorded storage
+class, image and preloaded-image policy. Kubernetes resume also refuses an API
+server or namespace UID change, and reuses its original resources, PVCs,
+credentials, UUID and verification receipt.
 
 Resume requires the recorded source path and installation-relevant source
 content to remain unchanged. It reuses the same run UUID, Cairn instance UUID,
@@ -291,6 +476,11 @@ Docker volumes. For persistent native mode it removes only the unchanged owned
 user-service unit; for Docker it stops the owned project without deleting its
 volumes. The command prints the retained paths. A later `resume` restores the
 same instance rather than creating a new UUID or token.
+
+For Kubernetes mode, rollback scales down the proved-owned StatefulSets and
+removes its lifecycle holder. It retains the namespace, resources, PVCs,
+credentials and state; it does not alter cluster prerequisites or the shared
+gateway.
 
 ## Permanently remove a named installation
 
@@ -328,6 +518,19 @@ Blitz leaves shared inputs and caches alone: the source checkout, installed
 toolchains and pulled images are not owned by one named installation. If
 `--provider-key-file` supplied an external key file, that original file is also
 untouched; only the installer-owned protected copy is deleted.
+
+Semantic Cairn disables Graphiti's optional third-party telemetry before it
+constructs the adapter, regardless of an inherited environment setting. Older
+Graphiti runs may already have left a telemetry identifier under
+`~/.cache/graphiti`; that user-level cache is not owned by an installation and
+`blitz` deliberately does not remove it. An operator who no longer needs that
+legacy artefact may inspect and remove it separately.
+
+Kubernetes blitz first proves every surviving namespaced object by its recorded
+UID and ownership labels, then deletes only those installer-owned namespaced
+resources and PVCs. It tolerates already-absent proved-owned objects on a
+retry. It never deletes the administrator-owned namespace, gateway or any
+cluster prerequisite.
 
 Deletion follows normal filesystem and provider semantics. It makes no claim
 of secure erasure from storage media, snapshots or backups.

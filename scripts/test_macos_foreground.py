@@ -219,20 +219,21 @@ def _http(
         method="GET" if data is None else "POST",
     )
     try:
-        response = build_opener(ProxyHandler({}), NoRedirect()).open(
+        with build_opener(ProxyHandler({}), NoRedirect()).open(
             request, timeout=10
-        )
-        status = response.status
-        response_headers = {
-            name.lower(): value for name, value in response.headers.items()
-        }
-        raw = response.read(MAX_RESPONSE + 1)
+        ) as response:
+            status = response.status
+            response_headers = {
+                name.lower(): value for name, value in response.headers.items()
+            }
+            raw = response.read(MAX_RESPONSE + 1)
     except HTTPError as error:
-        status = error.code
-        response_headers = {
-            name.lower(): value for name, value in error.headers.items()
-        }
-        raw = error.read(MAX_RESPONSE + 1)
+        with error:
+            status = error.code
+            response_headers = {
+                name.lower(): value for name, value in error.headers.items()
+            }
+            raw = error.read(MAX_RESPONSE + 1)
     except (URLError, TimeoutError, OSError) as error:
         raise AcceptanceFailure(f"HTTP request to {path} failed") from error
     if len(raw) > MAX_RESPONSE:
