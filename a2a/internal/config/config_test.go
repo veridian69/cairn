@@ -75,6 +75,7 @@ func TestContextWindowValidation(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "negative", value: -1, wantErr: true},
+		{name: "explicit zero", value: 0, wantErr: true},
 		{name: "minimum", value: 1},
 		{name: "maximum", value: 10000},
 		{name: "above maximum", value: 10001, wantErr: true},

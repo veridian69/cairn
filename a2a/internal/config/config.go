@@ -253,8 +253,8 @@ func (s StreamConfig) MaxAgeDuration() (time.Duration, error) {
 }
 
 func validate(cfg *Config) error {
-	if cfg.Defaults.ContextWindow < 1 || cfg.Defaults.ContextWindow > MaxContextWindow {
-		return fmt.Errorf("defaults.context_window must be between 1 and %d", MaxContextWindow)
+	if err := validateContextWindow(cfg.Defaults.ContextWindow); err != nil {
+		return err
 	}
 	m := cfg.Memory
 	if m.EffectiveMaxItemBytes() <= 0 {
@@ -297,6 +297,13 @@ func validate(cfg *Config) error {
 		if queryTimeout > timeout {
 			return fmt.Errorf("memory.embedding.query_timeout (%s) must be <= timeout (%s)", queryTimeout, timeout)
 		}
+	}
+	return nil
+}
+
+func validateContextWindow(value int) error {
+	if value < 1 || value > MaxContextWindow {
+		return fmt.Errorf("defaults.context_window must be between 1 and %d", MaxContextWindow)
 	}
 	return nil
 }

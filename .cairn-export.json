@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "1ddd290b79c4c679fc99ff5e47a7d89bf6689e7a",
+  "source_revision": "a7646e7d6e597c4b8a05e6495c45a4c1a069b7fe",
   "release_configuration": {
     "files.json": "bc44e4669f57fe26c77e6e55a41c3dde90f85cd43947a8da384c2856142102fe",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
@@ -714,15 +714,15 @@
       "mode": 420
     },
     "a2a/internal/config/config.go": {
-      "sha256": "1789c535822fac102060f0bac65a171ac355c071250f6a908bcac29da0c4b8aa",
+      "sha256": "42a8c6f91e954d2c2e6b160eb32eb293cb92a21de81bf4d71c21f025f7eaba34",
       "mode": 420
     },
     "a2a/internal/config/config_test.go": {
-      "sha256": "39f5ba9b22910fadb464aaef069bbcf818082e9a4178e36e82db16c8b4f34073",
+      "sha256": "5e27a4ad2fdeda481ee86f3d076442717528f087eb7cac7b36552c63321c3b9c",
       "mode": 420
     },
     "a2a/internal/config/parse.go": {
-      "sha256": "1614c56d17e40cafcb261d004a3e6cca1265ad470b72fb8fefa969f1af02e56f",
+      "sha256": "a93b1321fb3a709f028acc3e2ab318fef40252a48fc89379af3e3c1abc3500e8",
       "mode": 420
     },
     "a2a/internal/config/parse_test.go": {
