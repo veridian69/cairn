@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,33 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.DefaultResponsiveness() != 0.5 {
 		t.Errorf("default responsiveness = %f, want 0.5", cfg.DefaultResponsiveness())
+	}
+}
+
+func TestContextWindowValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{name: "negative", value: -1, wantErr: true},
+		{name: "minimum", value: 1},
+		{name: "maximum", value: 10000},
+		{name: "above maximum", value: 10001, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			yaml := []byte("agents: {}\ndefaults:\n  context_window: " +
+				fmt.Sprint(test.value) + "\n")
+			_, err := Parse(yaml)
+			if test.wantErr && err == nil {
+				t.Fatalf("Parse accepted context_window %d", test.value)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Parse rejected context_window %d: %v", test.value, err)
+			}
+		})
 	}
 }
 

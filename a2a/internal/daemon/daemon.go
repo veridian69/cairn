@@ -53,6 +53,7 @@ type Daemon struct {
 	workers               map[string]*agentWorker
 	workersMu             sync.RWMutex
 	verboseProviderErrors bool
+	publishWithDedup      func(context.Context, model.Message, string) error
 	cancel                context.CancelFunc
 	wg                    sync.WaitGroup
 }
@@ -78,6 +79,11 @@ type ActivityEvent struct {
 
 var newProvider = provider.NewProvider
 var newEmbedder = provider.NewEmbedder
+
+const (
+	publishRetryInitialDelay = 100 * time.Millisecond
+	publishRetryMaximumDelay = 5 * time.Second
+)
 
 // Option configures a Daemon.
 type Option func(*Daemon)
@@ -141,6 +147,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("stream: %w", err)
 	}
 	d.stream = stream
+	if d.publishWithDedup == nil {
+		d.publishWithDedup = stream.PublishWithDedup
+	}
 
 	agentCtx, cancel := context.WithCancel(ctx)
 	d.cancel = cancel
@@ -342,9 +351,9 @@ func (d *Daemon) runWorker(ctx context.Context, w *agentWorker) {
 			}
 
 			if outcome.Reply != nil {
-				if err := d.stream.PublishWithDedup(ctx, *outcome.Reply, w.runtime.Participant.ID); err != nil {
+				if err := d.publishReply(ctx, *outcome.Reply, w.runtime.Participant.ID); err != nil {
 					log.Printf("[%s] publish error: %v", w.runtime.Participant.Name, err)
-					continue
+					return
 				}
 				if outcome.Nomination != nil && d.memory != nil {
 					if _, err := d.memory.Insert(memory.Item{
@@ -384,6 +393,32 @@ func (d *Daemon) runWorker(ctx context.Context, w *agentWorker) {
 				continue
 			}
 			w.runtime.MarkCheckpointSaved(item.Seq)
+		}
+	}
+}
+
+func (d *Daemon) publishReply(ctx context.Context, reply model.Message, agentID string) error {
+	delay := publishRetryInitialDelay
+	for {
+		err := d.publishWithDedup(ctx, reply, agentID)
+		if err == nil {
+			return nil
+		}
+		log.Printf("[%s] reply publish failed; retrying in %s: %v",
+			model.ShortID(reply.ID), delay, err)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+		if delay < publishRetryMaximumDelay {
+			delay *= 2
+			if delay > publishRetryMaximumDelay {
+				delay = publishRetryMaximumDelay
+			}
 		}
 	}
 }
