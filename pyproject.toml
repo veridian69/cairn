@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "drystane-cairn"
-# A release candidate has the same identity in source and history-free exports.
-version = "0.7.0rc7"
+# A release has the same identity in source and history-free exports.
+version = "0.7.8"
 description = "A scoped, evidence-aware memory authority"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

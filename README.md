@@ -35,7 +35,7 @@ remembering something does not make it true. Agents must explicitly save
 useful context—Cairn does not automatically capture all your conversations.
 
 Self-hosted · [Apache-2.0](LICENSE.md) · REST and MCP ·
-[Release candidate v0.7.0-rc.7](docs/releases/v0.7.0-rc.7.md)
+[Release v0.7.8](docs/releases/v0.7.8.md)
 
 macOS foreground and native background memory and Attic acceptance passed on
 macOS 26 Intel and Apple Silicon. The native service uses a per-user,
@@ -44,25 +44,25 @@ Linux native service support uses systemd and supports optional semantic search.
 Garden is supported only with Linux native, Docker or Kubernetes installs.
 **Garden is not supported on macOS.**
 
-## Watch Claude and Codex share a memory
+## Watch Claude and Codex use Cairn, Garden and Attic
 
-Claude saves a workshop plan. Codex picks it up and changes the venue.
-When Claude returns, it can see the new plan and explain what changed—with
-the original record still there to check.
+Val (Codex) saves a workshop plan. Spike (Claude) changes the venue and tells
+Val through Garden. Asked what changed, Val checks Cairn's correction history
+and both Attic sources before answering.
 
 <details open>
 <summary>Show or hide animated demo</summary>
 
-![Claude and Codex share a workshop plan, correct its venue, and retrieve the correction history in Cairn](https://raw.githubusercontent.com/veridian69/cairn/326dc87e1c8c1cba0ec3bb99983b7d093ea8f11f/docs/assets/shared-memory-demo.gif)
+![Val saves a plan, Spike corrects it and notifies Val through Garden, then Val checks Cairn history and both Attic sources](docs/assets/cairn-attic-garden-correction-demo.gif)
 
 </details>
 
-47 seconds ·
-[Read the transcript and history check](https://github.com/veridian69/cairn/blob/326dc87e1c8c1cba0ec3bb99983b7d093ea8f11f/docs/shared-memory-demo.md)
+30 seconds ·
+[Read the transcript and evidence checks](docs/cairn-attic-garden-correction-demo.md)
 
-These are real agent responses using a disposable Cairn instance and a
-fictional workshop. The layout is re-rendered for readability and waiting
-time is shortened; each turn starts fresh and retrieves its context from Cairn.
+The agents make their own tool calls using a disposable instance and a
+fictional workshop. The layout is re-rendered for readability, excerpts are
+labelled and waiting time is shortened.
 
 ## Install Cairn
 
@@ -255,7 +255,7 @@ plane that prompted its design.
 
 ## Project information
 
-- [v0.7 candidate release notes](docs/releases/v0.7.0-rc.7.md)
+- [v0.7.8 release notes](docs/releases/v0.7.8.md)
 - [macOS native installation](docs/operations/macos-native.md) — login-scoped
   LaunchAgent for catalogue memory and Attic, validated on macOS 26 Intel and Apple Silicon.
 - [Earlier RC2 release notes](docs/releases/v0.1.0-rc.2.md)

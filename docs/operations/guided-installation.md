@@ -180,7 +180,7 @@ same reviewed helper used for the FalkorDB runtime. This is a
 cluster-administrator operation: it requires explicit SSH host mapping and
 non-interactive sudo on the node. It does not create Kubernetes resources or
 give the installer host access. Run it from the trusted checkout. The first
-commands below read the candidate tag from `deploy/images.lock` and build it;
+commands below read the release tag from `deploy/images.lock` and build it;
 do not copy a release number into this procedure. Docker must use its containerd image store,
 so `docker image save` preserves the OCI index; the staging helper verifies that
 property and refuses the archive before it transfers anything to a node.

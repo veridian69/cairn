@@ -8,12 +8,12 @@
 
 # The Cairn image the base renders. NOT yet digest-pinned, and
 # deliberately so: nothing is published to a registry, the package
-# version is 0.7.0rc7, and pinning a locally built digest
+# version is 0.7.8, and pinning a locally built digest
 # would rewrite every committed render on every rebuild — the render gate
 # would then fail for changes that have nothing to do with deployment.
-# The tag names the v0.7 candidate source build. Release publication owns the
-# signed digest; this local build tag is not a registry release claim.
-CAIRN_IMAGE=cairn:v0.7.0-rc.7
+# The tag names the v0.7.8 source build. This source release publishes no Cairn
+# image; the local build tag is not a registry release claim.
+CAIRN_IMAGE=cairn:v0.7.8
 
 # P-63: the per-instance FalkorDB workload, included by choice (I-91).
 # This deliberately impossible placeholder is never a published Cairn image.

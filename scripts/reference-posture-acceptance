@@ -1140,11 +1140,11 @@ PY'
 
   begin_step probe-apply
   sed -e "s/REPLACE_TASK11A_NAMESPACE/${namespace}/g" \
-    -e "s|image: cairn:v0.7.0-rc.7|image: ${cairn_image_reference}|" \
+    -e "s|image: cairn:v0.7.8|image: ${cairn_image_reference}|" \
     tests/acceptance/reference/task11a-listener-pod.yaml |
     bounded 30s "$kubectl" apply -f - >/dev/null
   bounded 120s "$kubectl" wait -n "$namespace" --for=condition=Ready pod/task11a-listener --timeout=100s >/dev/null
-  sed -e "s|image: cairn:v0.7.0-rc.7|image: ${cairn_image_reference}|" \
+  sed -e "s|image: cairn:v0.7.8|image: ${cairn_image_reference}|" \
     -e "s/REPLACE_TASK11A_NAMESPACE/${namespace}/" \
     tests/acceptance/reference/task11a-probe-pod.yaml |
     bounded 30s "$kubectl" apply -f - >/dev/null
