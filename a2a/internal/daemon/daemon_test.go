@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -112,6 +113,107 @@ func TestDaemonPublish(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("got %d msgs, want 1", len(msgs))
 	}
+}
+
+func TestDaemonRetriesReplyBeforeAdvancingCheckpoint(t *testing.T) {
+	oldFactory := newProvider
+	t.Cleanup(func() { newProvider = oldFactory })
+	newProvider = func(name, apiKey, baseURL string) (provider.Provider, error) {
+		return &provider.MockProvider{
+			Resp: provider.CompletionResponse{Content: "reply"},
+		}, nil
+	}
+
+	human := model.Participant{ID: "human", Name: "operator", Kind: model.KindHuman}
+	first := model.NewMessage(human, "first", nil)
+	second := model.NewMessage(human, "second", nil)
+	retryBlocked := make(chan struct{})
+	allowRetry := make(chan struct{})
+	published := make(chan string, 2)
+	firstAttempts := 0
+
+	dir := t.TempDir()
+	cfg := &config.Config{
+		Agents: map[string]config.AgentConfig{
+			"claude": {
+				Provider: "mock", Model: "model", System: "system",
+				Responsiveness: floatPtr(1),
+			},
+		},
+		Defaults: config.Defaults{ContextWindow: 10, Responsiveness: floatPtr(1)},
+		Limits:   config.Limits{PerAgentPerHour: 20},
+		Stream:   config.StreamConfig{DataDir: dir},
+	}
+	d, err := New(cfg, dir, func(d *Daemon) {
+		d.publishWithDedup = func(ctx context.Context, reply model.Message, agentID string) error {
+			if reply.ReplyTo == nil {
+				return errors.New("reply has no parent")
+			}
+			if *reply.ReplyTo == first.ID {
+				firstAttempts++
+				if firstAttempts == 1 {
+					return errors.New("transient publish failure")
+				}
+				close(retryBlocked)
+				select {
+				case <-allowRetry:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			published <- *reply.ReplyTo
+			return nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop()
+
+	if err := d.Publish(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Publish(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-retryBlocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed publication was not retried")
+	}
+	participantID := d.workers["claude"].runtime.Participant.ID
+	cp, err := d.state.GetCheckpoint(participantID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.LastSeenSeq != 0 {
+		t.Fatalf("checkpoint advanced to %d while first reply was unpublished", cp.LastSeenSeq)
+	}
+
+	close(allowRetry)
+	for _, want := range []string{first.ID, second.ID} {
+		select {
+		case got := <-published:
+			if got != want {
+				t.Fatalf("published reply order = %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for reply to %q", want)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		cp, err = d.state.GetCheckpoint(participantID, 1)
+		if err == nil && cp.LastSeenSeq >= 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("checkpoint did not advance after ordered publication: %+v", cp)
 }
 
 type blockingProvider struct {

@@ -116,7 +116,7 @@ The main sections are:
 
 The effective config behavior is:
 
-- `defaults.context_window` defaults to `50`
+- `defaults.context_window` defaults to `50` and must be between `1` and `10000`
 - `defaults.responsiveness` defaults to `0.5`
 - agent `temperature` defaults to `0.7`
 - agent `responsiveness` falls back to the default responsiveness

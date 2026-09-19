@@ -25,6 +25,8 @@ type Defaults struct {
 	ControlContract *bool    `yaml:"control_contract,omitempty"`
 }
 
+const MaxContextWindow = 10000
+
 type Limits struct {
 	PerAgentPerHour int `yaml:"per_agent_per_hour"`
 }
@@ -251,6 +253,9 @@ func (s StreamConfig) MaxAgeDuration() (time.Duration, error) {
 }
 
 func validate(cfg *Config) error {
+	if err := validateContextWindow(cfg.Defaults.ContextWindow); err != nil {
+		return err
+	}
 	m := cfg.Memory
 	if m.EffectiveMaxItemBytes() <= 0 {
 		return fmt.Errorf("memory.max_item_bytes must be > 0")
@@ -292,6 +297,13 @@ func validate(cfg *Config) error {
 		if queryTimeout > timeout {
 			return fmt.Errorf("memory.embedding.query_timeout (%s) must be <= timeout (%s)", queryTimeout, timeout)
 		}
+	}
+	return nil
+}
+
+func validateContextWindow(value int) error {
+	if value < 1 || value > MaxContextWindow {
+		return fmt.Errorf("defaults.context_window must be between 1 and %d", MaxContextWindow)
 	}
 	return nil
 }
