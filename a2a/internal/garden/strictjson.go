@@ -40,6 +40,9 @@ func checkValue(dec *json.Decoder, shape reflect.Type, depth int) error {
 			for i := 0; i < shape.NumField(); i++ {
 				f := shape.Field(i)
 				name := strings.Split(f.Tag.Get("json"), ",")[0]
+				if name == "-" {
+					continue
+				}
 				fields[name] = f.Type
 			}
 		}

@@ -12,8 +12,8 @@ _INSTANCE_LABEL = "app.kubernetes.io/instance"
 _INSTANCE_PLACEHOLDER = "REPLACE_WITH_PER_INSTANCE_UUID"
 _RETAIN_PVCS = {"whenDeleted": "Retain", "whenScaled": "Retain"}
 _SOURCE_DIGESTS = {
-    False: "1090478d2c7cf793d6d06fa9098cd991a3693a620bb20e863b081b0e05d270cc",
-    True: "71a7db9ce44e2339785995ff44a49439fee395b754af995d3d7dd2d165bf465b",
+    False: "42eb642326899af5c77e6dbea5195b8e65961fab288e5e6723603dc123b42158",
+    True: "cd004a496301aa48b22f4799a3fe310539bd02a593bcc7970c158ed3afd41a8b",
 }
 _INVENTORIES = {
     False: {
@@ -134,6 +134,9 @@ def render_holder(site: str, *, namespace: str, owner_labels: dict[str, str]) ->
     pod_spec["containers"] = [source_container]
     pod_spec.pop("initContainers", None)
     pod_spec["restartPolicy"] = "Never"
+    # sleep runs as PID 1 and ignores SIGTERM; the inherited 60 s grace period
+    # would stall every holder deletion and any resumed run behind it.
+    pod_spec["terminationGracePeriodSeconds"] = 1
     volumes = _list(pod_spec, "volumes")
     # A lifecycle holder never hosts Garden or receives its data/TLS material.
     required_mounts = {mount["name"] for mount in mounts}
@@ -229,6 +232,52 @@ def _container(containers: list[dict[str, Any]], name: str) -> dict[str, Any]:
     return matches[0]
 
 
+def _constrain_required_node_names(pod: dict[str, Any], nodes: list[str]) -> None:
+    requirement = {"key": "metadata.name", "operator": "In", "values": nodes}
+    affinity = pod.setdefault("affinity", {})
+    if not isinstance(affinity, dict):
+        raise ValueError("unexpected rendered Kubernetes shape")
+    node_affinity = affinity.setdefault("nodeAffinity", {})
+    if not isinstance(node_affinity, dict):
+        raise ValueError("unexpected rendered Kubernetes shape")
+    required = node_affinity.setdefault(
+        "requiredDuringSchedulingIgnoredDuringExecution", {}
+    )
+    if not isinstance(required, dict):
+        raise ValueError("unexpected rendered Kubernetes shape")
+    terms = required.setdefault("nodeSelectorTerms", [{}])
+    if (
+        not isinstance(terms, list)
+        or not terms
+        or not all(isinstance(term, dict) for term in terms)
+    ):
+        raise ValueError("unexpected rendered Kubernetes shape")
+    for term in terms:
+        fields = term.setdefault("matchFields", [])
+        if not isinstance(fields, list) or not all(
+            isinstance(field, dict) for field in fields
+        ):
+            raise ValueError("unexpected rendered Kubernetes shape")
+        fields.append(deepcopy(requirement))
+
+
+def _has_required_node_names(pod: dict[str, Any], nodes: list[str]) -> bool:
+    requirement = {"key": "metadata.name", "operator": "In", "values": nodes}
+    try:
+        terms = _list(
+            _mapping(
+                _mapping(_mapping(pod, "affinity"), "nodeAffinity"),
+                "requiredDuringSchedulingIgnoredDuringExecution",
+            ),
+            "nodeSelectorTerms",
+        )
+    except ValueError:
+        return False
+    return bool(terms) and all(
+        term.get("matchFields", []).count(requirement) == 1 for term in terms
+    )
+
+
 def _replace_instance_labels(value: Any, instance_name: str) -> None:
     if isinstance(value, dict):
         if _INSTANCE_LABEL in value:
@@ -272,6 +321,7 @@ def asset_envelope(
     owner_labels: dict[str, str],
     image_policy: str,
     falkordb_receipt: dict[str, Any] | None = None,
+    garden_receipt: dict[str, Any] | None = None,
     garden_enabled: bool = False,
     raw: str | None = None,
     site: str | None = None,
@@ -300,6 +350,21 @@ def asset_envelope(
         ):
             raise ValueError("invalid FalkorDB receipt")
         falkordb_nodes = [node["name"] for node in node_records]
+    garden_nodes: list[str] = []
+    if garden_receipt is not None:
+        node_records = garden_receipt.get("nodes")
+        if (
+            not garden_enabled
+            or not isinstance(garden_receipt.get("image"), str)
+            or not isinstance(node_records, list)
+            or not node_records
+            or not all(
+                isinstance(node, dict) and isinstance(node.get("name"), str)
+                for node in node_records
+            )
+        ):
+            raise ValueError("invalid Garden receipt")
+        garden_nodes = [node["name"] for node in node_records]
     if site is None:
         if raw is None:
             raise ValueError("source manifest is missing")
@@ -332,6 +397,8 @@ def asset_envelope(
                     )
                 for container in pod["containers"] + pod.get("initContainers", []):
                     container["imagePullPolicy"] = image_policy
+                if garden_nodes:
+                    _constrain_required_node_names(pod, garden_nodes)
             elif document["metadata"]["name"] == "falkordb":
                 if falkordb_image is not None:
                     container = _container(pod["containers"], "falkordb")
@@ -384,6 +451,11 @@ def asset_envelope(
             ]
         ):
             raise ValueError("retained FalkorDB placement differs")
+    if garden_nodes:
+        cairn = _named(documents, "StatefulSet", "cairn")
+        pod = _mapping(_mapping(_mapping(cairn, "spec"), "template"), "spec")
+        if not _has_required_node_names(pod, garden_nodes):
+            raise ValueError("retained Garden placement differs")
     for document in documents:
         metadata = _mapping(document, "metadata")
         if metadata.get("namespace") != namespace or any(

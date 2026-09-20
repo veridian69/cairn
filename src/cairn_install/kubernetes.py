@@ -27,7 +27,19 @@ from cairn_install.kubernetes_garden import GARDEN_OBJECTS, GardenDeployment
 from cairn_install.kubernetes_resources import RESOURCE_APIS, ResourceJournal
 
 _KUBERNETES_NODE = re.compile(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?\Z")
-_SAFE_CONTAINER_NAMES = frozenset({"cairn", "migrate", "falkordb", "garden"})
+_SAFE_CONTAINER_NAMES = frozenset(
+    {
+        "cairn",
+        "cairn-bootstrap",
+        "migrate",
+        "falkordb",
+        "garden",
+        "probe",
+        "garden-probe",
+        "garden-cache-probe",
+        "falkordb-cache-probe",
+    }
+)
 _SAFE_CONTAINER_REASONS = frozenset(
     {
         "Completed",
@@ -37,6 +49,7 @@ _SAFE_CONTAINER_REASONS = frozenset(
         "CreateContainerConfigError",
         "CreateContainerError",
         "DeadlineExceeded",
+        "ErrImageNeverPull",
         "ErrImagePull",
         "Error",
         "ImagePullBackOff",
@@ -65,6 +78,34 @@ _GATEWAY_DIAGNOSTICS = {
 
 def _falkordb_probe_name(node: str) -> str:
     return "falkordb-cache-" + hashlib.sha256(node.encode()).hexdigest()[:20]
+
+
+def _garden_probe_name(node: str) -> str:
+    return "garden-cache-" + hashlib.sha256(node.encode()).hexdigest()[:20]
+
+
+def _garden_node_eligible(node: dict[str, Any]) -> bool:
+    metadata = node.get("metadata", {})
+    labels = metadata.get("labels", {})
+    status = node.get("status", {})
+    node_info = status.get("nodeInfo", {})
+    ready = [
+        condition
+        for condition in status.get("conditions", [])
+        if condition.get("type") == "Ready"
+    ]
+    return (
+        labels.get("kubernetes.io/os") == "linux"
+        and labels.get("kubernetes.io/arch") == "amd64"
+        and node_info.get("operatingSystem") == "linux"
+        and node_info.get("architecture") == "amd64"
+        and len(ready) == 1
+        and ready[0].get("status") == "True"
+        and re.fullmatch(
+            r"containerd://[^\s]+", str(node_info.get("containerRuntimeVersion", ""))
+        )
+        is not None
+    )
 
 
 class Backend:
@@ -97,6 +138,17 @@ class Backend:
                 raise InstallError("FalkorDB receipt requires semantic search")
             self._validate_falkordb_receipt(receipt)
         self.falkordb_receipt = deepcopy(receipt)
+        garden_receipt = options.get("garden_receipt")
+        if garden_receipt is not None:
+            self._validate_receipt(garden_receipt, component="Garden")
+            garden_state = ctx.state.get("garden")
+            if not isinstance(garden_state, dict) or not isinstance(
+                garden_state.get("options"), dict
+            ):
+                raise InstallError("Garden receipt requires managed Garden")
+            if garden_receipt["image"] != garden_state["options"].get("image"):
+                raise InstallError("Garden receipt image differs from Garden options")
+        self.garden_receipt = deepcopy(garden_receipt)
         self.options = dict(options)
         self.namespace = options["namespace"]
         self.prefix = ["kubectl", "--context", options["context"]]
@@ -145,6 +197,11 @@ class Backend:
                 "pod/" + _falkordb_probe_name(node["name"])
                 for node in self.falkordb_receipt["nodes"]
             )
+        if isinstance(self.garden_receipt, dict):
+            self.expected.update(
+                "pod/" + _garden_probe_name(node["name"])
+                for node in self.garden_receipt["nodes"]
+            )
         if self.garden.options is not None:
             self.expected.update(GARDEN_OBJECTS)
         self.resources = ResourceJournal(
@@ -158,13 +215,18 @@ class Backend:
 
     @staticmethod
     def _validate_falkordb_receipt(value: object) -> None:
+        Backend._validate_receipt(value, component="FalkorDB")
+
+    @staticmethod
+    def _validate_receipt(value: object, *, component: str) -> None:
+        error = f"Invalid Kubernetes {component} receipt"
         if not isinstance(value, dict) or set(value) != {
             "schema_version",
             "image",
             "archive_sha256",
             "nodes",
         }:
-            raise InstallError("Invalid Kubernetes FalkorDB receipt")
+            raise InstallError(error)
         nodes = value.get("nodes")
         image = value.get("image")
         archive = value.get("archive_sha256")
@@ -178,7 +240,7 @@ class Backend:
             or not isinstance(nodes, list)
             or not nodes
         ):
-            raise InstallError("Invalid Kubernetes FalkorDB receipt")
+            raise InstallError(error)
         names: set[str] = set()
         uids: set[str] = set()
         for node in nodes:
@@ -197,7 +259,7 @@ class Backend:
                 or node["name"] in names
                 or node["uid"] in uids
             ):
-                raise InstallError("Invalid Kubernetes FalkorDB receipt")
+                raise InstallError(error)
             names.add(node["name"])
             uids.add(node["uid"])
 
@@ -228,6 +290,7 @@ class Backend:
             "image_policy": self.options["image_policy"],
             "garden_enabled": self.garden.options is not None,
             "falkordb_receipt": self.falkordb_receipt,
+            "garden_receipt": self.garden_receipt,
             **retained,
         }
         if "site" not in retained:
@@ -286,11 +349,22 @@ class Backend:
         cluster: bool = False,
         timeout: float = 120,
         stdin: dict[str, Any] | None = None,
+        allowed: tuple[int, ...] = (0,),
     ) -> str:
-        kwargs: dict[str, Any] = {"private": True, "timeout": timeout}
+        kwargs: dict[str, Any] = {
+            "private": True,
+            "timeout": timeout,
+            "allowed": allowed,
+        }
         if stdin is not None:
             kwargs["stdin_data"] = json.dumps(stdin).encode()
         return self.ctx.command(self._argv(*args, cluster=cluster), **kwargs)
+
+    def _cluster_object(self, kind: str, name: str) -> dict[str, Any] | None:
+        raw = self._run(
+            "get", kind, name, "--ignore-not-found", "-o", "json", cluster=True
+        )
+        return self._json(raw) if raw.strip() else None
 
     @staticmethod
     def _json(raw: str) -> dict[str, Any]:
@@ -306,7 +380,8 @@ class Backend:
     def _key(doc: dict[str, Any]) -> str:
         return str(doc["kind"]).lower() + "/" + str(doc["metadata"]["name"])
 
-    def _identity(self) -> None:
+    def _identity(self, *, allow_absent: bool = False) -> bool:
+        """Verify the API server and namespace; False means the namespace is gone."""
         value = self._json(
             self._run(
                 "config",
@@ -337,9 +412,15 @@ class Backend:
         ).hexdigest()
         if self.record.get("cluster_identity", identity) != identity:
             raise InstallError("Kubernetes API server TLS identity changed")
-        namespace = self._json(
-            self._run("get", "namespace", self.namespace, "-o", "json", cluster=True)
-        )
+        if self.record.get("api_server", server) != server:
+            raise InstallError("Kubernetes API server or namespace UID changed")
+        namespace = self._cluster_object("namespace", self.namespace)
+        if namespace is None:
+            if not allow_absent:
+                raise InstallError("Kubernetes namespace is missing: " + self.namespace)
+            self.record.update(api_server=server, cluster_identity=identity)
+            self.ctx.save()
+            return False
         meta = namespace.get("metadata", {})
         uid = meta.get("uid")
         if (
@@ -350,21 +431,25 @@ class Backend:
             raise InstallError(
                 "Namespace UID or administrator instance label is missing or changed"
             )
-        for key, observed in (("api_server", server), ("namespace_uid", uid)):
-            if self.record.get(key, observed) != observed:
-                raise InstallError("Kubernetes API server or namespace UID changed")
+        if self.record.get("namespace_uid", uid) != uid:
+            raise InstallError("Kubernetes API server or namespace UID changed")
         self.record.update(
             api_server=server, namespace_uid=uid, cluster_identity=identity
         )
         self.ctx.save()
+        return True
 
     def validate_ownership(self) -> None:
         self._inventory()
 
-    def _inventory(self, *, allow_absent: bool = False) -> None:
+    def _inventory(self, *, allow_absent: bool = False) -> bool:
         self._retained_assets()
-        self._identity()
+        if not self._identity(allow_absent=allow_absent):
+            # A deleted namespace took every recorded namespaced object with it.
+            self.resources.vanished()
+            return False
         self.resources.inventory(allow_absent=allow_absent)
+        return True
 
     def preflight(self) -> None:
         version = self.ctx.command(["uv", "--version"], cwd=self.ctx.directory).strip()
@@ -400,8 +485,6 @@ class Backend:
                 for c in n.get("status", {}).get("conditions", [])
             )
         ]
-        if not ready:
-            raise InstallError("A schedulable Ready linux/amd64 node is required")
         if isinstance(self.falkordb_receipt, dict):
             ready_by_name = {
                 node.get("metadata", {}).get("name"): node for node in ready
@@ -416,21 +499,34 @@ class Backend:
                         "FalkorDB receipt node UID or eligibility changed: "
                         + expected["name"]
                     )
+        if isinstance(self.garden_receipt, dict):
+            eligible_by_name = {
+                node.get("metadata", {}).get("name"): node
+                for node in schedulable
+                if _garden_node_eligible(node)
+            }
+            for expected in self.garden_receipt["nodes"]:
+                observed = eligible_by_name.get(expected["name"])
+                if (
+                    observed is None
+                    or observed.get("metadata", {}).get("uid") != expected["uid"]
+                ):
+                    raise InstallError(
+                        "Garden receipt node UID or eligibility changed: "
+                        + expected["name"]
+                    )
+        if not ready:
+            raise InstallError("A schedulable Ready linux/amd64 node is required")
         if self.options["preloaded_image"]:
             if len(schedulable) != 1:
                 raise InstallError(
                     "Preloaded image requires exactly one schedulable node"
                 )
-        storage = self._json(
-            self._run(
-                "get",
-                "storageclass",
-                self.options["storage_class"],
-                "-o",
-                "json",
-                cluster=True,
+        storage = self._cluster_object("storageclass", self.options["storage_class"])
+        if storage is None:
+            raise InstallError(
+                "StorageClass is missing: " + self.options["storage_class"]
             )
-        )
         driver = storage.get("provisioner")
         if (
             not isinstance(driver, str)
@@ -438,11 +534,26 @@ class Backend:
             or driver.startswith("kubernetes.io/")
         ):
             raise InstallError("A CSI StorageClass with RWOP support is required")
-        registered = self._json(
-            self._run("get", "csidriver", driver, "-o", "json", cluster=True)
-        )
-        if registered.get("metadata", {}).get("name") != driver:
-            raise InstallError("StorageClass CSI driver is not registered")
+        if storage.get("reclaimPolicy") == "Retain":
+            # Every preflight provisions and deletes a probe volume; the
+            # installer holds no cluster-scoped permission to clear a
+            # Released PersistentVolume left behind by Retain.
+            raise InstallError(
+                "StorageClass reclaimPolicy Retain is not supported; "
+                "the preflight probe volume would leave a Released PersistentVolume"
+            )
+        # Pre-created claims must bind where their pinned or shared Pod lands:
+        # Garden mounts two claims in one Pod and a FalkorDB receipt pins
+        # falkordb-0 to enrolled nodes, so both need topology-aware binding.
+        if (
+            self.garden.options is not None or isinstance(self.falkordb_receipt, dict)
+        ) and storage.get("volumeBindingMode") != "WaitForFirstConsumer":
+            raise InstallError(
+                "Garden or a FalkorDB receipt requires a WaitForFirstConsumer StorageClass"
+            )
+        registered = self._cluster_object("csidriver", driver)
+        if registered is None or registered.get("metadata", {}).get("name") != driver:
+            raise InstallError("StorageClass CSI driver is not registered: " + driver)
         permissions = [
             (verb, plural, "")
             for _, plural in RESOURCE_APIS.values()
@@ -464,7 +575,9 @@ class Backend:
         ]
         for verb, resource, subresource in permissions:
             flags = ["--subresource=" + subresource] if subresource else []
-            if self._run("auth", "can-i", verb, resource, *flags).strip() != "yes":
+            # kubectl exits 1 for a "no" answer; only the text is authoritative.
+            answer = self._run("auth", "can-i", verb, resource, *flags, allowed=(0, 1))
+            if answer.strip() != "yes":
                 raise InstallError(
                     "Kubernetes permission required: "
                     + verb
@@ -472,10 +585,11 @@ class Backend:
                     + resource
                     + ("/" + subresource if subresource else "")
                 )
-        self._probe()
         if self.garden.options is not None:
             require_listener_available(int(self.garden.options["port"]), wildcard=False)
         self._probe_falkordb_cache()
+        self._probe_garden_cache()
+        self._probe()
 
     def _probe(self) -> None:
         metadata = {
@@ -583,7 +697,9 @@ class Backend:
                 {
                     "name": "garden-probe",
                     "image": self.garden.options["image"],
-                    "imagePullPolicy": "Always",
+                    "imagePullPolicy": (
+                        "Never" if isinstance(self.garden_receipt, dict) else "Always"
+                    ),
                     "command": ["/usr/local/bin/a2a", "host", "--help"],
                     "securityContext": {
                         "allowPrivilegeEscalation": False,
@@ -593,6 +709,27 @@ class Backend:
                     "volumeMounts": [{"name": "probe", "mountPath": "/var/lib/garden"}],
                 }
             )
+        if isinstance(self.garden_receipt, dict):
+            pod["spec"]["affinity"] = {
+                "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                        "nodeSelectorTerms": [
+                            {
+                                "matchFields": [
+                                    {
+                                        "key": "metadata.name",
+                                        "operator": "In",
+                                        "values": [
+                                            node["name"]
+                                            for node in self.garden_receipt["nodes"]
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
         keys = ["pod/" + self.probe_name, "persistentvolumeclaim/" + self.probe_name]
         # Clean an interrupted, owned probe before attempting it again.
         for key in keys:
@@ -609,15 +746,36 @@ class Backend:
                 container["name"]: container["image"]
                 for container in pod["spec"]["containers"]
             }
+            observed_spec = observed.get("spec", {})
+            observed_containers = observed_spec.get("containers", [])
+            garden_attested = True
+            if isinstance(self.garden_receipt, dict):
+                allowed_nodes = {node["name"] for node in self.garden_receipt["nodes"]}
+                garden_containers = [
+                    container
+                    for container in observed_containers
+                    if container.get("name") == "garden-probe"
+                ]
+                garden_attested = (
+                    observed_spec.get("nodeName") in allowed_nodes
+                    and len(garden_containers) == 1
+                    and garden_containers[0].get("image")
+                    == self.garden_receipt["image"]
+                    and garden_containers[0].get("imagePullPolicy") == "Never"
+                    and garden_containers[0].get("command")
+                    == ["/usr/local/bin/a2a", "host", "--help"]
+                )
             if (
-                {status.get("name") for status in statuses} != set(expected_images)
+                not garden_attested
+                or {status.get("name") for status in statuses} != set(expected_images)
                 or len(statuses) != len(expected_images)
                 or any(
                     status.get("name") not in expected_images
                     or status.get("state", {}).get("terminated", {}).get("exitCode")
                     != 0
-                    or expected_images[status["name"]].split("@", 1)[1]
-                    not in status.get("imageID", "")
+                    or not str(status.get("imageID", "")).endswith(
+                        "@" + expected_images[status["name"]].split("@", 1)[1]
+                    )
                     for status in statuses
                 )
             ):
@@ -642,17 +800,34 @@ class Backend:
             if phase == "Succeeded":
                 return observed
             if phase == "Failed":
-                message = ""
-                for status in observed.get("status", {}).get("containerStatuses", []):
-                    terminated = status.get("state", {}).get("terminated", {})
-                    candidate = terminated.get("message")
-                    if isinstance(candidate, str) and candidate in _GATEWAY_DIAGNOSTICS:
-                        message = ": " + _GATEWAY_DIAGNOSTICS[candidate]
-                        break
-                raise InstallError(description + " failed" + message)
+                raise InstallError(
+                    description + " failed: " + self._probe_failure_detail(observed)
+                )
             if time.monotonic() >= deadline:
-                raise InstallError(description + f" did not finish within {timeout}s")
+                raise InstallError(
+                    description
+                    + f" did not finish within {timeout}s: "
+                    + self._probe_failure_detail(observed)
+                )
             time.sleep(1)
+
+    def _probe_failure_detail(self, pod: dict[str, Any]) -> str:
+        details: list[str] = []
+        statuses = pod.get("status", {}).get("containerStatuses", [])
+        if isinstance(statuses, list):
+            for status in statuses:
+                if not isinstance(status, dict):
+                    continue
+                terminated = status.get("state", {}).get("terminated", {})
+                if not isinstance(terminated, dict):
+                    continue
+                candidate = terminated.get("message")
+                if isinstance(candidate, str):
+                    diagnostic = _GATEWAY_DIAGNOSTICS.get(candidate)
+                    if diagnostic is not None and diagnostic not in details:
+                        details.append(diagnostic)
+        details.append(self._pod_failure_detail(pod))
+        return "; ".join(details)[:1800]
 
     def _probe_falkordb_cache(self) -> None:
         if not isinstance(self.falkordb_receipt, dict):
@@ -748,6 +923,110 @@ class Backend:
                     != 0
                 ):
                     raise InstallError("FalkorDB exact-image cache probe failed")
+            finally:
+                self.resources.delete(key)
+
+    def _probe_garden_cache(self) -> None:
+        if not isinstance(self.garden_receipt, dict):
+            return
+        image = self.garden_receipt["image"]
+        for node in self.garden_receipt["nodes"]:
+            name = _garden_probe_name(node["name"])
+            key = "pod/" + name
+            pod = {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {
+                    "name": name,
+                    "namespace": self.namespace,
+                    "labels": self.owner_labels
+                    | {
+                        "app.kubernetes.io/name": "garden-cache-probe",
+                        "app.kubernetes.io/instance": self.ctx.name,
+                    },
+                },
+                "spec": {
+                    "restartPolicy": "Never",
+                    "activeDeadlineSeconds": 60,
+                    "automountServiceAccountToken": False,
+                    "nodeSelector": {
+                        "kubernetes.io/os": "linux",
+                        "kubernetes.io/arch": "amd64",
+                    },
+                    "affinity": {
+                        "nodeAffinity": {
+                            "requiredDuringSchedulingIgnoredDuringExecution": {
+                                "nodeSelectorTerms": [
+                                    {
+                                        "matchFields": [
+                                            {
+                                                "key": "metadata.name",
+                                                "operator": "In",
+                                                "values": [node["name"]],
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 65532,
+                        "runAsGroup": 65532,
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "containers": [
+                        {
+                            "name": "garden-cache-probe",
+                            "image": image,
+                            "imagePullPolicy": "Never",
+                            "command": ["/usr/local/bin/a2a", "--version"],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "readOnlyRootFilesystem": True,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                        }
+                    ],
+                },
+            }
+            self.resources.delete(key)
+            try:
+                self.resources.create(pod)
+                observed = self._wait_for_probe(
+                    key, timeout=90, description="Garden exact-image cache probe"
+                )
+                self.resources.owned(key, observed)
+                observed_spec = observed.get("spec", {})
+                containers = observed_spec.get("containers", [])
+                statuses = observed.get("status", {}).get("containerStatuses", [])
+                if (
+                    observed_spec.get("nodeName") != node["name"]
+                    or len(containers) != 1
+                    or containers[0].get("name") != "garden-cache-probe"
+                    or containers[0].get("image") != image
+                    or containers[0].get("imagePullPolicy") != "Never"
+                    or containers[0].get("command")
+                    != ["/usr/local/bin/a2a", "--version"]
+                    or len(statuses) != 1
+                    or statuses[0].get("name") != "garden-cache-probe"
+                    or not str(statuses[0].get("imageID", "")).endswith(
+                        "@" + image.rsplit("@", 1)[1]
+                    )
+                    or statuses[0]
+                    .get("state", {})
+                    .get("terminated", {})
+                    .get("exitCode")
+                    != 0
+                ):
+                    raise InstallError("Garden exact-image cache probe failed")
+            except InstallError as error:
+                raise InstallError(
+                    str(error)
+                    + "; re-stage the Garden image on every receipt node and retry",
+                    error.code,
+                ) from error
             finally:
                 self.resources.delete(key)
 
@@ -849,16 +1128,18 @@ class Backend:
             )
         except InstallError as error:
             pod_name = name + "-0"
-            try:
-                pod = self.resources.get("pod/" + pod_name, timeout=20)
-            except InstallError:
-                pod = None
-            detail = self._pod_failure_detail(pod) if pod else "pod status unavailable"
             raise InstallError(
                 f"Kubernetes rollout failed for statefulset/{name}; "
-                f"pod/{pod_name}: {detail}",
+                f"pod/{pod_name}: {self._pod_detail(pod_name)}",
                 error.code,
             ) from error
+
+    def _pod_detail(self, pod_name: str) -> str:
+        try:
+            pod = self.resources.get("pod/" + pod_name, timeout=20)
+        except InstallError:
+            pod = None
+        return self._pod_failure_detail(pod) if pod else "pod status unavailable"
 
     def _pod_failure_detail(self, pod: dict[str, Any]) -> str:
         status = pod.get("status")
@@ -944,13 +1225,20 @@ class Backend:
         self.resources.wait_deleted("pod/cairn-0")
         self._load_assets()
         self.resources.create(self.holder_document)
-        self._run(
-            "wait",
-            "--for=condition=Ready",
-            "pod/cairn-bootstrap",
-            "--timeout=180s",
-            timeout=190,
-        )
+        try:
+            self._run(
+                "wait",
+                "--for=condition=Ready",
+                "pod/cairn-bootstrap",
+                "--timeout=180s",
+                timeout=190,
+            )
+        except InstallError as error:
+            raise InstallError(
+                "Kubernetes lifecycle holder did not become Ready; "
+                f"pod/cairn-bootstrap: {self._pod_detail('cairn-bootstrap')}",
+                error.code,
+            ) from error
 
     def lifecycle_argv(self, operation: str) -> list[str]:
         self.validate_ownership()
@@ -1016,7 +1304,8 @@ class Backend:
         self.garden_close_endpoint()
         self.close_endpoint()
         # Full inventory validation precedes even the first destructive command.
-        self._inventory(allow_absent=True)
+        if not self._inventory(allow_absent=True):
+            return  # Nothing namespaced survives a deleted namespace.
         keys = list(self.record["objects"])
         keys.sort(
             key=lambda key: (

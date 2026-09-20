@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -45,6 +46,7 @@ def test_generates_verified_ca_server_certificate_and_config(tmp_path: Path) -> 
     )
 
     assert result.returncode == 0, result.stderr
+    assert re.search(r"^[.+*]+$", result.stderr, re.MULTILINE) is None
     assert set(path.name for path in output.iterdir()) == {
         "garden-cert.pem",
         "garden-chain.pem",
@@ -101,6 +103,76 @@ def test_generates_verified_ca_server_certificate_and_config(tmp_path: Path) -> 
     assert options["expires_at"]
 
 
+@pytest.mark.parametrize("port", [1024, 65535])
+def test_custom_port_is_consistent_in_endpoint_and_config(
+    tmp_path: Path, port: int
+) -> None:
+    output = tmp_path / "tls"
+
+    result = subprocess.run(
+        [str(SCRIPT), "garden.example.test", str(output), str(port)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    generated = json.loads((output / "garden.json").read_text())
+    assert generated["port"] == port
+    assert generated["endpoint"] == f"https://garden.example.test:{port}/mcp"
+
+
+@pytest.mark.parametrize(
+    "port", ["1023", "65536", "0", "18446744073709552640", "eight-four-four-three"]
+)
+def test_rejects_invalid_ports_before_creating_outputs(
+    tmp_path: Path, port: str
+) -> None:
+    output = tmp_path / "tls"
+
+    result = subprocess.run(
+        [str(SCRIPT), "garden.example.test", str(output), port],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "PORT must be an integer from 1024 to 65535" in result.stderr
+    assert not output.exists()
+
+
+def test_key_generation_errors_remain_visible(tmp_path: Path) -> None:
+    real_openssl = shutil.which("openssl")
+    assert real_openssl is not None
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "openssl"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ $1 == genpkey ]]; then echo 'synthetic key generation failure' >&2; exit 41; fi\n"
+        'exec "$REAL_OPENSSL" "$@"\n'
+    )
+    shim.chmod(0o755)
+    output = tmp_path / "tls"
+
+    result = subprocess.run(
+        [str(SCRIPT), "garden.example.test", str(output)],
+        env=os.environ
+        | {
+            "PATH": f"{shim_dir}:{os.environ['PATH']}",
+            "REAL_OPENSSL": real_openssl,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 41
+    assert "synthetic key generation failure" in result.stderr
+    assert list(output.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     "dns_name",
     [
@@ -122,6 +194,34 @@ def test_rejects_invalid_dns_names(tmp_path: Path, dns_name: str) -> None:
 
     assert result.returncode == 2
     assert "DNS_NAME is invalid" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "dns_name",
+    [
+        "localhost",
+        "garden.localhost",
+        "GARDEN.LOCALHOST",
+        "localhost.",
+        "garden.localhost.",
+        "GARDEN.LOCALHOST.",
+    ],
+)
+def test_rejects_loopback_dns_names_before_creating_outputs(
+    tmp_path: Path, dns_name: str
+) -> None:
+    output = tmp_path / "tls"
+
+    result = subprocess.run(
+        [str(SCRIPT), dns_name, str(output)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "public endpoint must not be loopback" in result.stderr
+    assert not output.exists()
 
 
 def test_failed_generation_leaves_no_outputs_and_can_be_retried(tmp_path: Path) -> None:

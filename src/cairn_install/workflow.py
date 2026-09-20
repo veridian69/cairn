@@ -11,6 +11,7 @@ from typing import Any, Protocol, cast
 
 from cairn_install.bootstrap import bootstrap
 from cairn_install.core import Context, InstallError
+from cairn_install.output import features_label
 from cairn_install.verification import ingest, ready, validate_ingest, verify_reads
 
 STAGES = (
@@ -147,7 +148,7 @@ def status_install(ctx: Context) -> dict[str, Any]:
         "mode": ctx.mode,
         "status": ctx.state["status"],
         "instance_id": ctx.instance_id,
-        "features": "Attic plus semantic search" if ctx.semantic else "Attic only",
+        "features": features_label(ctx.semantic, "garden" in ctx.state),
         "endpoint": endpoint,
         "steps": ctx.state["steps"],
         "state": str(ctx.directory / "state.json"),

@@ -338,6 +338,10 @@ fact claim. Unknown, inaccessible and external-reference evidence all return
 corruption returns `evidence_corrupt` (500, `never`). Infrastructure failure or
 missing stored bytes without queued delivery returns `dependency_unavailable`.
 
+The first read after ingest commonly returns `503 evidence_pending` while the
+payload is being delivered. This is expected: retry after the indicated delay
+(`Retry-After`), rather than treating that first response as a failed write.
+
 Follow the [Attic payload round-trip](operations/evidence-verification.md) for
 literal ingest, bounded byte/hash comparison and restart verification commands.
 

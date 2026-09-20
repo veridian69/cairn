@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from .core import Context, InstallError, read_owned, secure_directory
+from .garden import source_version
 from .native import Backend, _systemd_quote, _unit_directory
 
 
@@ -45,6 +46,9 @@ class GardenBackend(Backend):
     def _service_name(self) -> str:
         return f"cairn-install-{self.ctx.name}-garden.service"
 
+    def _rollback_notice(self) -> str:
+        return f"Rollback retained Garden configuration and data under {self.parent.root / 'garden'}."
+
     def preflight(self) -> None:
         from .garden import require_listener_available
 
@@ -56,7 +60,9 @@ class GardenBackend(Backend):
         if self.binary.exists() or self.binary.is_symlink():
             self._check_binary()
         else:
-            self.parent.command(["go", "version"], cwd=self.parent.source / "a2a")
+            self.parent.command(
+                ["go", "version"], cwd=self.parent.source / "a2a", env=self._go_env()
+            )
         if not self.is_running():
             require_listener_available(
                 int(self.parent.state["garden"]["options"]["port"]), wildcard=True
@@ -99,6 +105,22 @@ class GardenBackend(Backend):
         )
         write_json_config(self.parent, self.config_path, {"gateway": config})
 
+    def _go_env(self) -> dict[str, str]:
+        """Keep every Go side effect inside the instance tree blitz removes.
+
+        Build and module caches are relocated so a 0555 module cache cannot
+        block deletion; XDG_CONFIG_HOME keeps Go's own telemetry counters and
+        configuration out of the operator's home directory.
+        """
+        garden_root = self.binary.parents[1]
+        return {
+            "CGO_ENABLED": "0",
+            "GOCACHE": str(garden_root / "go-build"),
+            "GOMODCACHE": str(garden_root / "go-mod"),
+            "GOFLAGS": "-modcacherw",
+            "XDG_CONFIG_HOME": str(garden_root / "go-config"),
+        }
+
     def _prepare_binary(self) -> None:
         key = str(self.binary)
         owned = self.parent.state["owned_files"]
@@ -124,9 +146,24 @@ class GardenBackend(Backend):
             prefix=".build-", dir=self.binary.parent
         ) as temporary:
             output = Path(temporary) / "a2a"
+            version = source_version(self.parent.source)
+            # Same flags as a2a/Dockerfile and a2a/Makefile, so the binary
+            # reports the release version. Go's caches stay inside the
+            # instance tree, writable, so blitz's rmtree removes them.
             self.parent.command(
-                ["go", "build", "-trimpath", "-mod=readonly", "-o", str(output), "."],
+                [
+                    "go",
+                    "build",
+                    "-trimpath",
+                    "-mod=readonly",
+                    "-ldflags",
+                    f"-s -w -X github.com/veridian69/cairn/a2a/cmd.version={version}",
+                    "-o",
+                    str(output),
+                    ".",
+                ],
                 cwd=self.parent.source / "a2a",
+                env=self._go_env(),
                 timeout=900,
             )
             digest = hashlib.sha256(read_owned(output, 128 * 1024 * 1024)).hexdigest()

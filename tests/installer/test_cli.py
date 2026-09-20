@@ -49,6 +49,7 @@ def test_configuration_is_flushed_before_later_errors(
         mode="docker",
         port=8123,
         semantic=True,
+        garden=False,
         source=tmp_path,
         state_root=tmp_path / "state",
     )
@@ -104,7 +105,49 @@ def falkordb_runtime(tmp_path: Path) -> Path:
     return descriptor
 
 
-@pytest.mark.parametrize("loader", ["receipt", "runtime-descriptor", "runtime-archive"])
+def garden_receipt(
+    tmp_path: Path, *, archive: str = "c"
+) -> tuple[Path, dict[str, object]]:
+    receipt = {
+        "schema_version": 1,
+        "image": "registry.example/garden@sha256:" + "b" * 64,
+        "archive_sha256": archive * 64,
+        "nodes": [
+            {"name": "worker-a", "uid": "11111111-1111-4111-8111-111111111111"},
+            {"name": "worker-b", "uid": "22222222-2222-4222-8222-222222222222"},
+        ],
+    }
+    path = tmp_path / "garden-receipt.json"
+    path.write_text(json.dumps(receipt))
+    path.chmod(0o600)
+    return path, receipt
+
+
+def kubernetes_garden_arguments(tmp_path: Path, receipt: Path) -> list[str]:
+    return [
+        "--non-interactive",
+        "--mode",
+        "kubernetes",
+        "--name",
+        "demo",
+        "--kube-context",
+        "reference",
+        "--kube-storage-class",
+        "cairn-rwop",
+        "--kube-image",
+        "registry.example/cairn@sha256:" + "a" * 64,
+        "--garden-config",
+        str(tmp_path / "garden.json"),
+        "--kube-garden-receipt",
+        str(receipt),
+        "--state-root",
+        str(tmp_path / "state"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "loader", ["receipt", "garden-receipt", "runtime-descriptor", "runtime-archive"]
+)
 def test_falkordb_metadata_loaders_reject_fifos_without_blocking(
     tmp_path: Path, loader: str
 ) -> None:
@@ -112,7 +155,9 @@ def test_falkordb_metadata_loaders_reject_fifos_without_blocking(
     os.mkfifo(fifo)
     source = fifo
     function = "_load_falkordb_receipt"
-    if loader == "runtime-descriptor":
+    if loader == "garden-receipt":
+        function = "_load_garden_receipt"
+    elif loader == "runtime-descriptor":
         function = "_load_falkordb_runtime"
     elif loader == "runtime-archive":
         source = tmp_path / "runtime.json"
@@ -161,6 +206,47 @@ def test_falkordb_receipt_rejects_boolean_schema_version(tmp_path: Path) -> None
 
     with pytest.raises(InstallError, match="invalid schema"):
         cli._load_falkordb_receipt(receipt)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        b"not json",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "image": "registry.example/garden:latest",
+                "archive_sha256": "c" * 64,
+                "nodes": [{"name": "node1", "uid": "uid-node1"}],
+            }
+        ).encode(),
+    ],
+)
+def test_garden_receipt_rejects_malformed_input(
+    tmp_path: Path, document: bytes
+) -> None:
+    receipt = tmp_path / "receipt.json"
+    receipt.write_bytes(document)
+
+    with pytest.raises(InstallError, match="Garden receipt"):
+        cli._load_garden_receipt(receipt)  # noqa: SLF001
+
+
+def test_garden_receipt_rejects_group_writable_file(tmp_path: Path) -> None:
+    receipt, _document = garden_receipt(tmp_path)
+    receipt.chmod(0o660)
+
+    with pytest.raises(InstallError, match="must not be group/world-writable"):
+        cli._load_garden_receipt(receipt)  # noqa: SLF001
+
+
+def test_falkordb_receipt_preserves_legacy_group_writable_acceptance(
+    tmp_path: Path,
+) -> None:
+    receipt, document = garden_receipt(tmp_path)
+    receipt.chmod(0o660)
+
+    assert cli._load_falkordb_receipt(receipt) == document  # noqa: SLF001
 
 
 def test_garden_options_are_immutable_but_runtime_receipts_can_accumulate(
@@ -503,6 +589,162 @@ def test_semantic_kubernetes_persists_falkordb_receipt_contents(
     receipt_path.write_text("{}")
     assert cli.main(["resume", "--name", "demo", "--state-root", str(state_root)]) == 0
     assert seen["falkordb_receipt"] == receipt
+
+
+def test_kubernetes_garden_persists_receipt_and_resume_reuses_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn_install import garden
+
+    source = source_tree(tmp_path)
+    receipt_path, receipt = garden_receipt(tmp_path)
+    options = {
+        "endpoint": "https://garden.example:8443/mcp",
+        "port": 8443,
+        "image": receipt["image"],
+    }
+    monkeypatch.setattr(garden, "load_options", lambda path, mode: dict(options))
+    seen: dict[str, object] = {}
+    install_workflow(
+        monkeypatch,
+        run_install=lambda ctx: seen.update(ctx.state["kubernetes"]),
+    )
+
+    assert (
+        cli.main(
+            kubernetes_garden_arguments(tmp_path, receipt_path), default_source=source
+        )
+        == 0
+    )
+    assert seen["garden_receipt"] == receipt
+
+    receipt_path.write_text("{}")
+    assert (
+        cli.main(["resume", "--name", "demo", "--state-root", str(tmp_path / "state")])
+        == 0
+    )
+    assert seen["garden_receipt"] == receipt
+
+
+def test_resume_refuses_a_changed_kubernetes_garden_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from cairn_install import garden
+
+    source = source_tree(tmp_path)
+    receipt_path, receipt = garden_receipt(tmp_path)
+    monkeypatch.setattr(
+        garden,
+        "load_options",
+        lambda path, mode: {
+            "endpoint": "https://garden.example:8443/mcp",
+            "port": 8443,
+            "image": receipt["image"],
+        },
+    )
+    install_workflow(monkeypatch)
+    state_root = tmp_path / "state"
+    assert (
+        cli.main(
+            kubernetes_garden_arguments(tmp_path, receipt_path), default_source=source
+        )
+        == 0
+    )
+
+    changed_path, _changed = garden_receipt(tmp_path, archive="d")
+    assert (
+        cli.main(
+            [
+                "resume",
+                "--name",
+                "demo",
+                "--state-root",
+                str(state_root),
+                "--kube-garden-receipt",
+                str(changed_path),
+            ]
+        )
+        == 2
+    )
+    assert "Recorded Kubernetes options differ" in capsys.readouterr().err
+
+
+def test_kubernetes_garden_receipt_image_must_match_options_before_state_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from cairn_install import garden
+
+    source = source_tree(tmp_path)
+    receipt_path, _receipt = garden_receipt(tmp_path)
+    monkeypatch.setattr(
+        garden,
+        "load_options",
+        lambda path, mode: {
+            "endpoint": "https://garden.example:8443/mcp",
+            "port": 8443,
+            "image": "registry.example/garden@sha256:" + "d" * 64,
+        },
+    )
+    install_workflow(monkeypatch)
+
+    assert (
+        cli.main(
+            kubernetes_garden_arguments(tmp_path, receipt_path), default_source=source
+        )
+        == 2
+    )
+    assert "Garden receipt image differs" in capsys.readouterr().err
+    assert not (tmp_path / "state" / "demo" / "state.json").exists()
+
+
+def test_kubernetes_garden_receipt_requires_garden_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = source_tree(tmp_path)
+    receipt_path, _receipt = garden_receipt(tmp_path)
+    install_workflow(monkeypatch)
+    arguments = kubernetes_garden_arguments(tmp_path, receipt_path)
+    index = arguments.index("--garden-config")
+    del arguments[index : index + 2]
+
+    assert cli.main(arguments, default_source=source) == 2
+    assert "--kube-garden-receipt requires --garden-config" in capsys.readouterr().err
+    assert not (tmp_path / "state" / "demo" / "state.json").exists()
+
+
+def test_kubernetes_garden_receipt_rejects_non_kubernetes_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = source_tree(tmp_path)
+    receipt_path, _receipt = garden_receipt(tmp_path)
+    install_workflow(monkeypatch)
+
+    assert (
+        cli.main(
+            [
+                "--non-interactive",
+                "--mode",
+                "native",
+                "--name",
+                "demo",
+                "--kube-garden-receipt",
+                str(receipt_path),
+                "--state-root",
+                str(tmp_path / "state"),
+            ],
+            default_source=source,
+        )
+        == 2
+    )
+    assert "--kube-* options require --mode kubernetes" in capsys.readouterr().err
 
 
 def test_semantic_native_persists_verified_falkordb_runtime(
@@ -1215,6 +1457,27 @@ def test_keep_running_rejects_non_install_operations(
     assert "only valid with install or resume" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("operation", ["status", "rollback", "blitz", "ls"])
+def test_kubernetes_garden_receipt_rejects_non_install_operations(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+) -> None:
+    assert (
+        cli.main(
+            [
+                operation,
+                "--kube-garden-receipt",
+                str(tmp_path / "receipt.json"),
+                "--state-root",
+                str(tmp_path / "state"),
+            ]
+        )
+        == 2
+    )
+    assert "only valid with install or resume" in capsys.readouterr().err
+
+
 def test_keep_running_install_passes_foreground_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1274,3 +1537,87 @@ def test_incompatible_keep_running_does_not_create_state_or_request_keys(
     )
     assert "--keep-running requires disposable mode" in capsys.readouterr().err
     assert not state.exists()
+
+
+def test_resume_reports_expired_garden_authority_before_rechecking_the_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unchanged file whose expires_at has passed needs recovery, not editing."""
+    from cairn_install import garden
+
+    monkeypatch.setattr(cli, "platform", SimpleNamespace(system=lambda: "Linux"))
+    source = source_tree(tmp_path)
+    options = {
+        "endpoint": "https://garden.example:8443/mcp",
+        "port": 8443,
+        "expires_at": "2000-01-01T00:00:00.000000Z",
+    }
+    calls: list[int] = []
+
+    def load_options(path: object, mode: object) -> dict[str, object]:
+        calls.append(1)
+        if len(calls) > 1:
+            raise InstallError(
+                "Invalid Garden options: expires_at must be in the future"
+            )
+        return dict(options)
+
+    monkeypatch.setattr(garden, "load_options", load_options)
+    install_workflow(monkeypatch)
+    arguments = [
+        "--non-interactive",
+        "--mode",
+        "native",
+        "--name",
+        "demo",
+        "--garden-config",
+        str(tmp_path / "garden.json"),
+        "--state-root",
+        str(tmp_path / "state"),
+    ]
+    assert cli.main(arguments, default_source=source) == 0
+    resume = [
+        "resume",
+        "--non-interactive",
+        "--name",
+        "demo",
+        "--garden-config",
+        str(tmp_path / "garden.json"),
+        "--state-root",
+        str(tmp_path / "state"),
+    ]
+    assert cli.main(resume, default_source=source) == 2
+    error = capsys.readouterr().err
+    assert "Garden authority has expired; explicit recovery is required" in error
+    assert "expires_at must be in the future" not in error
+
+
+def test_kube_image_digest_must_be_lowercase_hex(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The planner must not record a digest the Kubernetes backend later refuses."""
+    source = source_tree(tmp_path)
+    install_workflow(monkeypatch)
+    arguments = [
+        "--non-interactive",
+        "--mode",
+        "kubernetes",
+        "--name",
+        "demo",
+        "--kube-context",
+        "reference",
+        "--kube-storage-class",
+        "cairn-rwop",
+        "--kube-image",
+        "registry.example/cairn@sha256:" + "A" * 64,
+        "--state-root",
+        str(tmp_path / "state"),
+    ]
+
+    assert cli.main(arguments, default_source=source) == 2
+    assert "--kube-image must use a sha256 digest" in capsys.readouterr().err
+    assert not (tmp_path / "state" / "demo").exists()

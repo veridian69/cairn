@@ -640,3 +640,21 @@ func TestSelfAddressedMessagesStayInHistoryWithoutWakingSender(t *testing.T) {
 		t.Fatal("self suppression removed room history")
 	}
 }
+
+func TestServerReportsTheBuildVersion(t *testing.T) {
+	f := fixtureBeforeStart(t, func(f *fixture) { f.cfg.Version = "9.9.9" })
+	if got := f.client("alice").session.InitializeResult().ServerInfo.Version; got != "9.9.9" {
+		t.Fatalf("server version %q, want the configured build version", got)
+	}
+	if got := newFixture(t).client("bob").session.InitializeResult().ServerInfo.Version; got != "dev" {
+		t.Fatalf("server version %q, want dev when no build version is set", got)
+	}
+	raw, _ := json.Marshal(f.cfg)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(strings.TrimSuffix(string(raw), "}")+`,"-":"x"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("a JSON key for the unmarshalled version field was admitted")
+	}
+}

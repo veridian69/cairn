@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cairn_install import cli
-from cairn_install.output import paint
+from cairn_install.output import features_label, paint
 
 
 def _source_tree(tmp_path: Path) -> Path:
@@ -105,6 +105,28 @@ def test_install_default_prints_a_concise_operational_summary(
     assert f"Credential: {result['credential_file']}" in output
     assert '"instance_id"' not in output
     assert '"steps"' not in output
+
+
+def test_kubernetes_summary_labels_port_forward_command(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = _result(tmp_path) | {
+        "mode": "kubernetes",
+        "endpoint": (
+            "kubectl --context reference --namespace demo "
+            "port-forward service/cairn 8000:8000"
+        ),
+    }
+
+    cli._render_result(  # noqa: SLF001
+        result,
+        operation="install",
+        verbose=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Port-forward: kubectl --context reference" in output
+    assert "Endpoint:" not in output
 
 
 def test_verbose_prints_the_full_result_and_reaches_the_context(
@@ -354,3 +376,92 @@ def test_unexpected_failure_sends_transcript_footer_to_stderr(
     assert captured.err.rstrip().endswith(
         f"Transcript: {root / 'demo' / 'commands.log'}"
     )
+
+
+@pytest.mark.parametrize("mode", ["disposable", "native", "docker", "kubernetes"])
+@pytest.mark.parametrize("garden", [False, True])
+@pytest.mark.parametrize("operation", ["install", "resume", "rollback"])
+def test_summary_shape_is_identical_across_modes_and_features(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    garden: bool,
+    operation: str,
+) -> None:
+    """One summary table for every mode: same labels, same order, one label per line.
+
+    Blind acceptance found the Kubernetes summary printing a command under
+    ``Endpoint:``; the label set is now pinned for every mode and feature so a
+    later mode-specific branch cannot drift the shape again.
+    """
+    endpoint = (
+        "kubectl --context reference --namespace demo port-forward service/cairn 8000:8000"
+        if mode == "kubernetes"
+        else "http://127.0.0.1:8000"
+    )
+    result = _result(tmp_path) | {"mode": mode, "endpoint": endpoint}
+    if garden:
+        result |= {
+            "garden_endpoint": "https://garden.example.test:8443/mcp",
+            "garden_profiles": str(
+                tmp_path / "demo" / "instance" / "garden" / "profiles"
+            ),
+        }
+
+    cli._render_result(result, operation=operation, verbose=False)  # noqa: SLF001
+
+    lines = capsys.readouterr().out.splitlines()
+    heading = {
+        "install": "Installation complete",
+        "resume": "Resume complete",
+        "rollback": "Rollback complete",
+    }[operation]
+    expected = [
+        heading,
+        "  Status: verified",
+        f"  {'Port-forward' if mode == 'kubernetes' else 'Endpoint'}: {endpoint}",
+        f"  State: {result['state']}",
+        f"  Credential: {result['credential_file']}",
+    ]
+    if garden:
+        expected += [
+            f"  Garden: {result['garden_endpoint']}",
+            f"  Garden adapters: {result['garden_profiles']}",
+        ]
+    assert lines == expected
+    if mode == "kubernetes":
+        assert not any(line.startswith("  Endpoint:") for line in lines)
+    else:
+        assert all(line.split(":")[0].strip() != "Port-forward" for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("semantic", "garden", "expected"),
+    [
+        (False, False, "Attic only"),
+        (True, False, "Attic plus semantic search"),
+        (False, True, "Attic only; Garden"),
+        (True, True, "Attic plus semantic search; Garden"),
+    ],
+)
+def test_features_label_is_shared_by_every_summary(
+    semantic: bool, garden: bool, expected: str
+) -> None:
+    assert features_label(semantic, garden) == expected
+
+
+def test_configuration_block_names_managed_garden(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli._show_configuration(
+        operation="resume",
+        name="demo",
+        mode="native",
+        port=8000,
+        semantic=False,
+        garden=True,
+        source=None,
+        state_root=tmp_path,
+    )
+
+    assert "  Features: Attic only; Garden\n" in capsys.readouterr().out

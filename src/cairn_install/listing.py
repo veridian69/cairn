@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 from .core import MAX_OUTPUT, NAME, InstallError
+from .output import features_label
 
 _MODES = frozenset({"disposable", "native", "docker", "kubernetes"})
 _IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-fA-F]{64}\Z")
@@ -196,9 +197,7 @@ def _row(value: dict[str, Any], name: str) -> dict[str, object]:
     ):
         raise _Unavailable
     instance_id = _uuid(value.get("instance_id"))
-    features = "Attic plus semantic search" if semantic else "Attic only"
-    if "garden" in value:
-        features += "; Garden"
+    features = features_label(semantic, "garden" in value)
     return {
         "name": name,
         "mode": mode,

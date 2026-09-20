@@ -1,0 +1,701 @@
+#!/usr/bin/env bash
+# Pre-blind rehearsal: replay the blind acceptance matrix on a real host before
+# a release goes to an independent blind tester.
+#
+# It drives `cairn-install` through every documented mode and feature, runs
+# the documented prerequisite and removal procedures by extracting their
+# fenced blocks from the guides (scripts/doc_blocks.py), and proves each
+# instance through the same independent REST checks the blind tester uses
+# (tests/acceptance/installer/*.sh). Anything the documentation does not say
+# is an intervention, and interventions are recorded as findings.
+#
+# Run as the ordinary owning user from the root of the trusted checkout on the
+# target host (the recorded reference host is reference). It needs Docker, uv,
+# kubectl access to the target context, an SSH self-alias for node staging,
+# non-interactive sudo for the temporary /etc/hosts line, and a protected
+# provider key file. It creates real instances; run it on a host you own.
+#
+# Environment (defaults suit reference):
+#   PRE_BLIND_STAGES     preflight prereqs matrix isolation removal
+#   PRE_BLIND_CONFIGS    disp-attic nat-attic nat-sem nat-garden dock-attic
+#                        dock-sem dock-garden kube-attic kube-sem kube-garden
+#   PRE_BLIND_REUSE_BUILDS=1  keep retained FalkorDB/Cairn/Garden builds
+#   PRE_BLIND_KEEP=1     leave instances in place after the matrix
+#   KUBE_CONTEXT KUBE_NODE NODE_SSH KUBE_STORAGE_CLASS GATEWAY_PROFILE
+#   PROVIDER_KEY_FILE GARDEN_DOMAIN GARDEN_ADDRESS CAIRN_BUILD_JOBS
+set -euo pipefail
+set -E  # the ERR trap below must fire inside functions too
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+: "${PRE_BLIND_STAGES:=preflight prereqs matrix isolation removal}"
+: "${PRE_BLIND_CONFIGS:=disp-attic nat-attic nat-sem nat-garden dock-attic dock-sem dock-garden kube-attic kube-sem kube-garden}"
+: "${PRE_BLIND_REUSE_BUILDS:=0}"
+: "${PRE_BLIND_KEEP:=0}"
+: "${KUBE_CONTEXT:=kubernetes-admin@kubernetes}"
+: "${KUBE_NODE:=reference}"
+: "${NODE_SSH:=reference}"
+: "${KUBE_STORAGE_CLASS:=cairn-local}"
+# The Cilium profile name differs between the private tree and the public
+# export; take whichever the guide in this checkout documents.
+: "${GATEWAY_PROFILE:=$(grep -oE 'cilium-(reference|reference)' docs/operations/kubernetes-gateway.md | head -1)}"
+: "${PROVIDER_KEY_FILE:=$HOME/.local/state/cairn-installer-tests/provider-input}"
+: "${GARDEN_DOMAIN:=reference.test}"
+: "${GARDEN_ADDRESS:=}"
+: "${CAIRN_BUILD_JOBS:=10}"
+export CAIRN_BUILD_JOBS
+# The managed-garden guide has the operator add the adapter prefix to PATH.
+export PATH="$HOME/.local/bin:$PATH"
+
+revision=$(git rev-parse --short HEAD)
+run_id=${PRE_BLIND_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
+run_dir="build/pre-blind/${revision}-${run_id}"
+mkdir -p "$run_dir/logs"
+run_dir=$(cd "$run_dir" && pwd -P)
+checks="$run_dir/checks.jsonl"
+findings="$run_dir/findings.md"
+touch "$checks" "$findings"
+state_root="$HOME/.local/state/cairn-install"
+installer_dir="$PWD"
+check_dir="$PWD/tests/acceptance/installer"
+doc_blocks="$PWD/scripts/doc_blocks.py"
+GATEWAY_GUIDE=docs/operations/kubernetes-gateway.md
+GUIDED=docs/operations/guided-installation.md
+GARDEN_GUIDE=docs/operations/managed-garden.md
+FALKORDB_GUIDE=deploy/falkordb/README.md
+DEPLOYMENT_GUIDE=docs/operations/deployment.md
+INSTALL_GUIDE=docs/install.md
+CLIENT_GUIDE=docs/clients.md
+HOSTS_MARKER="# cairn-pre-blind"
+failed=0
+
+# --- configuration table -----------------------------------------------------
+# name -> mode port feature namespace garden-port
+config_mode()      { case $1 in disp-*) echo disposable;; nat-*) echo native;; dock-*) echo docker;; kube-*) echo kubernetes;; esac; }
+config_port()      { case $1 in disp-attic) echo 8201;; nat-attic) echo 8211;; nat-sem) echo 8212;; nat-garden) echo 8213;; dock-attic) echo 8221;; dock-sem) echo 8222;; dock-garden) echo 8223;; kube-attic) echo 8231;; kube-sem) echo 8232;; kube-garden) echo 8233;; esac; }
+config_feature()   { case $1 in *-sem) echo semantic;; *-garden) echo garden;; *) echo attic;; esac; }
+config_namespace() { echo "cairn-$1"; }
+config_garden_port() { case $1 in nat-garden) echo 8413;; dock-garden) echo 8423;; kube-garden) echo 8433;; esac; }
+config_garden_host() { case $1 in nat-garden) echo "garden-nat.$GARDEN_DOMAIN";; dock-garden) echo "garden-dock.$GARDEN_DOMAIN";; kube-garden) echo "garden-k8s.$GARDEN_DOMAIN";; esac; }
+config_garden_dir()  { echo "$HOME/garden-tls-${1%-garden}"; }
+has_config() { case " $PRE_BLIND_CONFIGS " in *" $1 "*) return 0;; *) return 1;; esac; }
+has_stage()  { case " $PRE_BLIND_STAGES " in *" $1 "*) return 0;; *) return 1;; esac; }
+# shellcheck disable=SC2254  # $1 is a glob pattern by design
+any_config_matching() { local c; for c in $PRE_BLIND_CONFIGS; do case $c in $1) return 0;; esac; done; return 1; }
+
+# --- recording ---------------------------------------------------------------
+log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+record() {
+  # record NAME EXPECTED OBSERVED — a predicted and an observed outcome.
+  local name=$1 expected=$2 observed=$3 outcome=passed
+  [[ "$expected" == "$observed" ]] || { outcome=failed; failed=1; }
+  jq -nc --arg name "$name" --arg expected "$expected" --arg observed "$observed" \
+    --arg outcome "$outcome" \
+    '{name:$name,expected:$expected,observed:$observed,outcome:$outcome}' >>"$checks"
+  printf '  %-58s %s\n' "$name" "$outcome"
+  [[ "$outcome" == passed ]] || printf '    expected: %s\n    observed: %s\n' "$expected" "$observed"
+  return 0  # a failed check is recorded, never fatal; callers decide
+}
+finding() {
+  # finding TITLE BODY — a defect or undocumented intervention for the report.
+  printf -- '- **%s** — %s\n' "$1" "$2" >>"$findings"
+  log "FINDING: $1"
+  failed=1
+}
+run_step() {
+  # run_step NAME COMMAND... — run, capture to logs/NAME.log, record exit status.
+  local name=$1; shift
+  local logfile="$run_dir/logs/$name.log" status=0
+  log "step $name: $*"
+  { printf '$ %s\n' "$*"; "$@"; } >"$logfile" 2>&1 || status=$?
+  record "step $name exit status" 0 "$status"
+  [[ $status == 0 ]] || { tail -n 25 "$logfile" | sed 's/^/    | /'; return 1; }
+}
+run_script() {
+  # run_script NAME — run a documented procedure supplied on stdin.
+  local name=$1 script="$run_dir/logs/$1.sh"
+  cat >"$script"
+  [[ -s $script ]] || { record "documented block extracted for $name" yes no; return 1; }
+  run_step "$name" bash "$script"
+}
+block() {
+  # block GUIDE SECTION [INDEX] [OLD NEW]... — one documented block, verbatim.
+  local guide=$1 section=$2 index=$3; shift 3
+  local args=()
+  while (( $# >= 2 )); do args+=(--replace "$1" "$2"); shift 2; done
+  python3 "$doc_blocks" "$guide" --section "$section" --index "$index" \
+    --require-complete "${args[@]}"
+}
+installer() { ( cd "$installer_dir" && ./cairn-install "$@" ); }
+log_has() { grep -qF -- "$2" "$run_dir/logs/$1.log"; }
+log_line() { grep -F -m1 -- "$2" "$run_dir/logs/$1.log" | sed 's/^ *//'; }
+
+# --- preflight ---------------------------------------------------------------
+preflight() {
+  log "preflight on $(hostname) for revision $revision, run $run_id"
+  record "checkout on native filesystem" 0 "$(case $PWD in /mnt/*) echo 1;; *) echo 0;; esac)"
+  record "running as ordinary user" 0 "$([[ $EUID -eq 0 ]] && echo 1 || echo 0)"
+  for tool in docker uv kubectl jq curl openssl python3 git make go ssh; do
+    record "tool $tool present" yes "$(command -v "$tool" >/dev/null && echo yes || echo no)"
+  done
+  record "provider key file protected" 600 "$(stat -c '%a' "$PROVIDER_KEY_FILE" 2>/dev/null || echo missing)"
+  record "no recorded installer state" "" "$(ls -A "$state_root" 2>/dev/null | tr '\n' ' ' || true)"
+  record "no cairn-install user units" "" "$(systemctl --user list-unit-files 'cairn-install-*' --no-legend 2>/dev/null | awk '{print $1}' | tr '\n' ' ' || true)"
+  record "no cairn containers" "" "$(docker ps -a --format '{{.Names}}' | grep -E '^cairn' | tr '\n' ' ' || true)"
+  record "kube context reachable" yes "$(kubectl --context "$KUBE_CONTEXT" get --raw /readyz >/dev/null 2>&1 && echo yes || echo no)"
+  record "no cairn namespaces" "" "$(kubectl --context "$KUBE_CONTEXT" get namespaces -o name | grep -E 'cairn' | tr '\n' ' ' || true)"
+  record "storage class present" yes "$(kubectl --context "$KUBE_CONTEXT" get storageclass "$KUBE_STORAGE_CLASS" >/dev/null 2>&1 && echo yes || echo no)"
+  record "ssh self-alias non-interactive" yes "$(ssh -o BatchMode=yes "$NODE_SSH" true 2>/dev/null && echo yes || echo no)"
+  record "node containerd sudo" yes "$(ssh -o BatchMode=yes "$NODE_SSH" sudo -n ctr -n k8s.io version >/dev/null 2>&1 && echo yes || echo no)"
+  record "local sudo for /etc/hosts" yes "$(sudo -n true 2>/dev/null && echo yes || echo no)"
+  record "garden address resolved" nonempty "$([[ -n $GARDEN_ADDRESS ]] && echo nonempty || echo empty)"
+  record "clean checkout for image provenance" "" "$(git status --porcelain --untracked-files=all | head -3 | tr '\n' ' ')"
+  block "$CLIENT_GUIDE" "Pin the contract" 1 | run_script doc-pin-contract || true
+  block "$DEPLOYMENT_GUIDE" "Image and contract boundary" 1 | run_script doc-release-image-boundary || true
+  block "$INSTALL_GUIDE" "Disposable native quickstart prerequisites" 1 | run_script doc-disposable-prerequisites || true
+  if any_config_matching 'kube-*'; then
+    block "$INSTALL_GUIDE" "Prerequisites and access" 1 | run_script doc-kubernetes-prerequisites || true
+    block "$FALKORDB_GUIDE" "Prepare Kubernetes nodes" 1 "ssh reference" "ssh $NODE_SSH" | run_script doc-node-ssh-prerequisites || true
+  fi
+}
+
+# --- prerequisites -----------------------------------------------------------
+prereqs() {
+  run_step fetch-kubectl ./scripts/fetch-kubectl
+
+  if any_config_matching '*-sem'; then
+    if [[ $PRE_BLIND_REUSE_BUILDS == 1 && -s build/falkordb-local/runtime.json ]]; then
+      log "reusing retained FalkorDB runtime"
+    else
+      rm -rf build/falkordb-local
+      block "$FALKORDB_GUIDE" "Build and retain the runtime" 1 | run_script falkordb-build
+      record "falkordb build printed final line" yes \
+        "$(log_has falkordb-build 'Built cairn-local/falkordb-server:rebuild' && echo yes || echo no)"
+    fi
+  fi
+
+  if any_config_matching 'kube-*'; then
+    # A gateway left by an earlier rehearsal run is removed through its own
+    # documented procedure first, so every run installs from a clean slate and
+    # the removal procedure is exercised at least once even on partial runs.
+    if kubectl --context "$KUBE_CONTEXT" get namespace cairn-egress >/dev/null 2>&1 \
+      && [[ -d $HOME/cairn-site-gitops/cairn-egress ]]; then
+      gateway_remove gateway-remove-previous || finding "gateway removal of an earlier run failed" "see logs/gateway-remove-previous.log"
+    fi
+    rm -rf "$HOME/cairn-site-gitops"  # the rehearsal's own record from an earlier run
+    { block "$GATEWAY_GUIDE" "Choose the gateway profile" 1
+      printf 'git -C "$HOME/cairn-site-gitops" config user.email pre-blind@example.invalid\n'
+      printf 'git -C "$HOME/cairn-site-gitops" config user.name pre-blind\n'
+    } | run_script gateway-site-record
+    block "$GATEWAY_GUIDE" "Render and validate locally" 1 \
+      "gateway_profile=portable" "gateway_profile=$GATEWAY_PROFILE" | run_script gateway-render
+    { printf 'gateway_gitops_root=%q\n' "$HOME/cairn-site-gitops"
+      block "$GATEWAY_GUIDE" "Render and validate locally" 2
+    } | run_script gateway-commit
+    { block "$GATEWAY_GUIDE" "Check access and prepare the namespace" 1
+      block "$GATEWAY_GUIDE" "Create the namespace, validate and apply" 1
+      block "$GATEWAY_GUIDE" "Readiness and installed-state checks" 1
+      block "$GATEWAY_GUIDE" "Allow-list changes" 1
+      block "$GATEWAY_GUIDE" "Readiness and installed-state checks" 1
+    } | run_script gateway-apply
+    block "$GUIDED" "Check the shared gateway before building images" 1 \
+      "YOUR_KUBE_CONTEXT" "$KUBE_CONTEXT" | run_script gateway-early-check
+    record "early gateway check printed success" yes \
+      "$(log_has gateway-early-check 'Gateway Service and ready backend found' && echo yes || echo no)"
+
+    if any_config_matching 'kube-sem'; then
+      if [[ $PRE_BLIND_REUSE_BUILDS == 1 && -s build/falkordb-local/kubernetes-receipt.json ]]; then
+        log "reusing retained FalkorDB node receipt"
+      else
+        rm -f build/falkordb-local/kubernetes-receipt.json
+        block "$FALKORDB_GUIDE" "Prepare Kubernetes nodes" 2 \
+          "'REPLACE_WITH_KUBE_CONTEXT'" "'$KUBE_CONTEXT'" \
+          "--node reference=reference" "--node $KUBE_NODE=$NODE_SSH" | run_script falkordb-stage
+      fi
+    fi
+
+    if [[ $PRE_BLIND_REUSE_BUILDS == 1 && -s build/cairn-image-stage/kubernetes-receipt.json ]]; then
+      log "reusing retained Cairn image stage"
+    else
+      rm -rf build/cairn-image-stage
+      block "$GUIDED" "Install to an existing Kubernetes namespace" 2 \
+        "--context reference" "--context $KUBE_CONTEXT" \
+        "--node reference=reference" "--node $KUBE_NODE=$NODE_SSH" | run_script cairn-image-stage
+    fi
+    cairn_image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' \
+      build/cairn-image-stage/kubernetes-receipt.json)
+    record "staged cairn image is digest pinned" yes "$([[ $cairn_image == cairn.local/cairn-runtime@sha256:* ]] && echo yes || echo no)"
+
+    local name
+    for name in $PRE_BLIND_CONFIGS; do
+      [[ $(config_mode "$name") == kubernetes ]] || continue
+      # A namespace left by an earlier rehearsal run is ours to clear.
+      kubectl --context "$KUBE_CONTEXT" delete namespace "$(config_namespace "$name")" --ignore-not-found --wait=true --timeout=300s >/dev/null
+      { block "$DEPLOYMENT_GUIDE" "Namespace and render preparation" 1 \
+          "namespace=cairn-example" "namespace=$(config_namespace "$name")" \
+          "instance=cairn-example" "instance=$name"
+        block "$DEPLOYMENT_GUIDE" "Namespace and render preparation" 2 \
+          "namespace=cairn-example" "namespace=$(config_namespace "$name")" \
+          "instance=cairn-example" "instance=$name"
+      } | run_script "namespace-$name"
+    done
+  fi
+
+  if any_config_matching '*-garden'; then
+    for name in $PRE_BLIND_CONFIGS; do
+      [[ $(config_feature "$name") == garden ]] || continue
+      local dir host port
+      dir=$(config_garden_dir "$name"); host=$(config_garden_host "$name"); port=$(config_garden_port "$name")
+      rm -rf "$dir"
+      run_step "garden-tls-$name" scripts/generate-garden-tls "$host" "$dir" "$port"
+      record "garden config endpoint for $name" "https://$host:$port/mcp" \
+        "$(jq -r .endpoint "$dir/garden.json")"
+    done
+    # Route the configured DNS names to the listener: the guide requires it,
+    # the mechanism is the operator's. One temporary /etc/hosts line, removed
+    # during removal.
+    local hosts_line="$GARDEN_ADDRESS"
+    for name in $PRE_BLIND_CONFIGS; do
+      [[ $(config_feature "$name") == garden ]] && hosts_line+=" $(config_garden_host "$name")"
+    done
+    sudo -n sed -i "/ ${HOSTS_MARKER}\$/d" /etc/hosts  # a line left by an interrupted run
+    printf '%s %s\n' "$hosts_line" "$HOSTS_MARKER" | sudo -n tee -a /etc/hosts >/dev/null
+    local first_host; first_host=${hosts_line#* }; first_host=${first_host%% *}
+    record "garden names resolve" "$GARDEN_ADDRESS" "$(getent hosts "$first_host" | awk '{print $1}')"
+
+    # Adapter binary for participant verification (managed-garden guide).
+    run_step a2a-build make -C a2a build
+    run_step a2a-install ./a2a/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/a2a/a2a"
+    record "a2a reports release version" "a2a version $(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" \
+      "$("$HOME/.local/bin/a2a" --version)"
+
+    if has_config kube-garden; then
+      if [[ $PRE_BLIND_REUSE_BUILDS == 1 && -n $(ls -d build/garden-image-stage.* 2>/dev/null | head -1) ]]; then
+        log "reusing retained Garden image stage"
+      else
+        rm -rf build/garden-image-stage.*
+        block "$GARDEN_GUIDE" "Build and stage Garden without a registry" 1 \
+          "kube_context=kubernetes-admin@kubernetes" "kube_context=$KUBE_CONTEXT" \
+          "kube_node=reference" "kube_node=$KUBE_NODE" "node_ssh=reference" "node_ssh=$NODE_SSH" \
+          | run_script garden-image-stage
+      fi
+      local stage_dir
+      stage_dir=$(ls -d "$PWD"/build/garden-image-stage.* | head -1)
+      local gdir; gdir=$(config_garden_dir kube-garden)
+      block "$GARDEN_GUIDE" "Complete the configuration and install" 1 \
+        'garden_config="$HOME/garden-tls/garden.json"' "garden_config=$gdir/garden.json" \
+        "garden_stage_dir='REPLACE_WITH_PRINTED_STAGING_DIRECTORY'" "garden_stage_dir=$stage_dir" \
+        "garden_allowed_cidrs='192.0.2.0/24'" "garden_allowed_cidrs='$GARDEN_ADDRESS/32,10.0.0.0/8,127.0.0.0/8'" \
+        | run_script garden-config-kube
+      record "kube garden config image matches receipt" \
+        "$(jq -r .image "$stage_dir/kubernetes-receipt.json")" "$(jq -r .image "$gdir/garden.json")"
+    fi
+  fi
+}
+
+# --- per-configuration -------------------------------------------------------
+install_args() {
+  local name=$1 mode port feature
+  mode=$(config_mode "$name"); port=$(config_port "$name"); feature=$(config_feature "$name")
+  printf -- '--non-interactive --mode %s --name %s --port %s' "$mode" "$name" "$port"
+  case $mode in
+    kubernetes)
+      printf -- ' --kube-context %s --kube-namespace %s --kube-storage-class %s --kube-image %s --kube-preloaded-image' \
+        "$KUBE_CONTEXT" "$(config_namespace "$name")" "$KUBE_STORAGE_CLASS" "$cairn_image"
+      ;;
+  esac
+  case $feature in
+    semantic)
+      printf -- ' --semantic --provider-key-file %s' "$PROVIDER_KEY_FILE"
+      if [[ $mode == kubernetes ]]; then
+        printf -- ' --kube-falkordb-receipt %s/build/falkordb-local/kubernetes-receipt.json' "$PWD"
+      else
+        printf -- ' --falkordb-runtime %s/build/falkordb-local/runtime.json' "$PWD"
+      fi
+      ;;
+    garden)
+      printf -- ' --garden-config %s/garden.json' "$(config_garden_dir "$name")"
+      if [[ $mode == kubernetes ]]; then
+        printf -- ' --kube-garden-receipt %s/kubernetes-receipt.json' "$(ls -d "$PWD"/build/garden-image-stage.* | head -1)"
+      fi
+      ;;
+  esac
+}
+forward_pid=""
+forward_start() {
+  # forward_start NAME — run the exact port-forward command the installer printed.
+  local name=$1 command
+  command=$(log_line "$name-install" "Port-forward: " | sed 's/^Port-forward: //')
+  [[ -n $command ]] || { record "port-forward command printed for $name" yes no; return 1; }
+  # shellcheck disable=SC2086
+  $command >"$run_dir/logs/$name-port-forward.log" 2>&1 &
+  forward_pid=$!
+  for _ in $(seq 1 30); do
+    curl --disable --silent --noproxy '*' --max-time 2 "http://127.0.0.1:$(config_port "$name")/health/ready" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
+forward_stop() { [[ -n $forward_pid ]] && { kill "$forward_pid" 2>/dev/null || true; wait "$forward_pid" 2>/dev/null || true; }; forward_pid=""; }
+with_endpoint() {
+  # with_endpoint NAME COMMAND... — run with the instance reachable on its port.
+  local name=$1; shift
+  if [[ $(config_mode "$name") == kubernetes ]]; then
+    forward_start "$name" || return 1
+    "$@"; local status=$?
+    forward_stop
+    return $status
+  fi
+  "$@"
+}
+credential_file() { echo "$state_root/$1/instance/credentials/admin.token"; }
+base_url() { echo "http://127.0.0.1:$(config_port "$1")"; }
+wait_ready() {
+  local name=$1
+  for _ in $(seq 1 60); do
+    [[ $(curl --disable --silent --noproxy '*' --max-time 3 --output /dev/null --write-out '%{http_code}' "$(base_url "$name")/health/ready" 2>/dev/null) == 200 ]] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+install_config() {
+  local name=$1 mode port feature
+  mode=$(config_mode "$name"); port=$(config_port "$name"); feature=$(config_feature "$name")
+  if [[ $mode == disposable ]]; then
+    # Disposable mode stops its process after verification; --keep-running
+    # holds it in the foreground until interrupted, which is how a tester
+    # checks it independently. Run it in the background and interrupt later.
+    local logfile="$run_dir/logs/$name-install.log"
+    log "step $name-install: installer $(install_args "$name") --keep-running (background)"
+    # shellcheck disable=SC2046
+    # exec so the recorded PID is the installer itself, which receives Ctrl-C.
+    ( cd "$installer_dir" && exec ./cairn-install $(install_args "$name") --keep-running ) >"$logfile" 2>&1 </dev/null &
+    keep_running_pid=$!
+    local waited=0 ready_line="Cairn is ready at http://127.0.0.1:$port. Press Ctrl-C to stop"
+    until log_has "$name-install" "$ready_line" || (( waited >= 600 )); do
+      kill -0 "$keep_running_pid" 2>/dev/null || break
+      sleep 2; waited=$((waited + 2))
+    done
+    record "step $name-install announced readiness while kept running" yes "$(log_has "$name-install" "$ready_line" && echo yes || echo no)"
+    log_has "$name-install" "$ready_line" || return 1
+    wait_ready "$name" || record "$name ready while kept running" yes no
+    # The summary is printed after Ctrl-C; summary_checks runs in stop_keep_running.
+    keep_running_name=$name
+    return 0
+  fi
+  # shellcheck disable=SC2046
+  run_step "$name-install" installer $(install_args "$name") || return 1
+  summary_checks "$name"
+}
+summary_checks() {
+  local name=$1 mode port feature
+  mode=$(config_mode "$name"); port=$(config_port "$name"); feature=$(config_feature "$name")
+  record "$name summary status" yes "$(log_has "$name-install" 'Status: verified' && echo yes || echo no)"
+  if [[ $mode == kubernetes ]]; then
+    record "$name summary names port-forward" yes "$(log_has "$name-install" "Port-forward: kubectl --context $KUBE_CONTEXT --namespace $(config_namespace "$name") port-forward service/cairn $port:8000" && echo yes || echo no)"
+  else
+    record "$name summary endpoint" yes "$(log_has "$name-install" "Endpoint: http://127.0.0.1:$port" && echo yes || echo no)"
+  fi
+  record "$name summary state path" yes "$(log_has "$name-install" "State: $state_root/$name/state.json" && echo yes || echo no)"
+  record "$name summary credential path" yes "$(log_has "$name-install" "Credential: $(credential_file "$name")" && echo yes || echo no)"
+  record "$name summary transcript line" yes "$(log_has "$name-install" "Transcript: $state_root/$name/commands.log" && echo yes || echo no)"
+  record "$name credential file mode" 600 "$(stat -c '%a' "$(credential_file "$name")" 2>/dev/null || echo missing)"
+  if [[ $feature == garden ]]; then
+    record "$name summary garden endpoint" yes "$(log_has "$name-install" "Garden: https://$(config_garden_host "$name"):$(config_garden_port "$name")/mcp" && echo yes || echo no)"
+    record "$name summary garden adapters" yes "$(log_has "$name-install" "Garden adapters: $state_root/$name/instance/garden/profiles" && echo yes || echo no)"
+  fi
+  # Stage headings must be identical across modes (rc4 F8).
+  grep -E '^=== .* ===$' "$run_dir/logs/$name-install.log" | sort -u >"$run_dir/logs/$name-stages.txt"
+}
+
+record_checks() {
+  # status and ls are read-only; the installer refuses them while another
+  # installer process (a kept-running disposable instance) holds the lock.
+  local name=$1 feature; feature=$(config_feature "$name")
+  run_step "$name-status" installer status --name "$name" || true
+  record "$name status shows verified" yes "$(log_has "$name-status" '"status": "verified"' && echo yes || echo no)"
+  run_step "$name-ls" installer ls || true
+  local expected_features="Attic only"
+  [[ $feature == semantic ]] && expected_features="Attic plus semantic search"
+  [[ $feature == garden ]] && expected_features="Attic only; Garden"
+  record "$name listed with features" yes "$(grep -F "$name" "$run_dir/logs/$name-ls.log" | grep -qF "$expected_features" && echo yes || echo no)"
+}
+verify_config() {
+  local name=$1 mode feature
+  mode=$(config_mode "$name"); feature=$(config_feature "$name")
+  [[ $mode == disposable ]] || record_checks "$name"
+  with_endpoint "$name" run_step "$name-attic" "$check_dir/attic-check.sh" "$(base_url "$name")" "$(credential_file "$name")" "$name" || return 1
+  log_line "$name-attic" "RESULT label=" >"$run_dir/logs/$name-attic.result"
+  with_endpoint "$name" documented_checks "$name" || true
+  if [[ $feature == semantic ]]; then
+    with_endpoint "$name" run_step "$name-semantic" "$check_dir/semantic-check.sh" "$(base_url "$name")" "$(credential_file "$name")" "$name" || true
+  fi
+  if [[ $feature == garden ]]; then
+    verify_garden "$name"
+  fi
+}
+
+documented_checks() {
+  # The client guide's credential, identity and Attic blocks, then the
+  # semantic verification blocks where the feature is enabled. They read
+  # base_url and credential_file from the environment, as the guide says.
+  local name=$1 status=0
+  export base_url credential_file
+  base_url=$(base_url "$name"); credential_file=$(credential_file "$name")
+  { block "$CLIENT_GUIDE" "Credentials" 1
+    block "$CLIENT_GUIDE" "Check the instance" 1
+    block "$INSTALL_GUIDE" "Quick Attic write/read test" 1
+  } | run_script "$name-doc-attic" || status=1
+  if [[ $(config_feature "$name") == semantic ]]; then
+    { block "$CLIENT_GUIDE" "Credentials" 1
+      block "$CLIENT_GUIDE" "Bounded ingest and retrieval verification" 1
+      block "$CLIENT_GUIDE" "Ingest" 1
+      block "$CLIENT_GUIDE" "Retrieve and trust filters" 1
+    } | run_script "$name-doc-semantic" || status=1
+  fi
+  unset base_url credential_file
+  return $status
+}
+garden_forward_pid=""
+garden_reachable() {
+  # garden_reachable NAME — for Kubernetes, forward the Garden Service on the
+  # host address so the configured public name resolves to a listener.
+  local name=$1
+  [[ $(config_mode "$name") == kubernetes ]] || return 0
+  local port; port=$(config_garden_port "$name")
+  kubectl --context "$KUBE_CONTEXT" --namespace "$(config_namespace "$name")" port-forward service/garden \
+    "$port:$port" --address "$GARDEN_ADDRESS" >"$run_dir/logs/$name-garden-forward.log" 2>&1 &
+  garden_forward_pid=$!
+  sleep 3
+}
+garden_unreachable() { [[ -n $garden_forward_pid ]] && { kill "$garden_forward_pid" 2>/dev/null || true; wait "$garden_forward_pid" 2>/dev/null || true; }; garden_forward_pid=""; }
+verify_garden() {
+  local name=$1 host port dir
+  host=$(config_garden_host "$name"); port=$(config_garden_port "$name"); dir=$(config_garden_dir "$name")
+  garden_reachable "$name"
+  local verify
+  verify=$(openssl s_client -connect "$host:$port" -servername "$host" -CAfile "$dir/internal-ca.pem" </dev/null 2>/dev/null | grep -oE '^Verify return code: [0-9]+' || echo none)
+  record "$name garden chain verifies against generated CA" "Verify return code: 0" "$verify"
+  verify=$(openssl s_client -connect "$host:$port" -servername "$host" </dev/null 2>/dev/null | grep -oE '^Verify return code: [0-9]+' || echo none)
+  record "$name garden rejects unknown CA" "Verify return code: 19" "$verify"
+  record "$name garden unauthenticated request" 401 \
+    "$(curl --disable --silent --noproxy '*' --max-time 10 --cacert "$dir/internal-ca.pem" --output /dev/null --write-out '%{http_code}' "https://$host:$port/mcp" || echo curl-failed)"
+  local example bundle profile
+  for example in $(find "$state_root/$name/instance/garden/profiles" -name '*.profile.example.json' | sort); do
+    bundle=$(dirname "$example"); profile=$(basename "$example")
+    block "$GARDEN_GUIDE" "Remote adapters and verification" 1 \
+      "cd /absolute/path/to/participant-bundle" "cd $bundle" \
+      "claude.profile.example.json" "$profile" | run_script "$name-doctor-${profile%%.*}" || true
+    record "$name doctor ${profile%%.*} binding verified" yes \
+      "$(log_has "$name-doctor-${profile%%.*}" authenticated_binding_verified && echo yes || echo no)"
+    rm -f "$bundle/profile.json"
+  done
+  garden_unreachable
+}
+
+restart_config() {
+  # Documented restart per mode, then the same evidence must read back.
+  local name=$1 mode; mode=$(config_mode "$name")
+  case $mode in
+    disposable) return 0 ;;
+    native) run_step "$name-restart" systemctl --user restart "cairn-install-$name.service" || return 1 ;;
+    docker)
+      local container
+      container=$(docker ps --filter "label=com.docker.compose.project=cairn-install-$name" --filter "label=com.docker.compose.service=cairn" --format '{{.Names}}' | head -1)
+      record "$name owned container found" nonempty "$([[ -n $container ]] && echo nonempty || echo empty)"
+      run_step "$name-restart" docker restart "$container" || return 1 ;;
+    kubernetes)
+      # A Pod restart by the StatefulSet controller; it leaves the owned
+      # specification untouched, unlike rollout restart's template patch.
+      run_step "$name-restart" kubectl --context "$KUBE_CONTEXT" --namespace "$(config_namespace "$name")" \
+        delete pod cairn-0 --wait=true --timeout=120s || return 1
+      run_step "$name-restart-wait" kubectl --context "$KUBE_CONTEXT" --namespace "$(config_namespace "$name")" \
+        rollout status statefulset/cairn --timeout=300s || return 1 ;;
+  esac
+  [[ $mode == kubernetes ]] || { wait_ready "$name" || record "$name ready after restart" yes no; }
+  persisted_check "$name" after-restart
+}
+persisted_check() {
+  local name=$1 label=$2 evidence sha instance
+  evidence=$(sed -n 's/.*evidence_id=\([^ ]*\).*/\1/p' "$run_dir/logs/$name-attic.result")
+  sha=$(sed -n 's/.*sha256=\([^ ]*\).*/\1/p' "$run_dir/logs/$name-attic.result")
+  instance=$(sed -n 's/.*instance_id=\([^ ]*\).*/\1/p' "$run_dir/logs/$name-attic.result")
+  with_endpoint "$name" run_step "$name-$label" "$check_dir/persisted-check.sh" "$(base_url "$name")" "$(credential_file "$name")" "$name-$label" "$evidence" "$sha" || return 1
+  record "$name same instance id $label" "$instance" "$(sed -n 's/.*instance_id=\([^ ]*\).*/\1/p' "$run_dir/logs/$name-$label.log" | head -1)"
+}
+keep_running_pid=""
+keep_running_name=""
+stop_keep_running() {
+  # The documented way to end --keep-running is Ctrl-C. A background job
+  # starts with SIGINT ignored (POSIX shell rule) and Python keeps it so;
+  # the installer maps SIGTERM to the same interrupt, which is also what a
+  # service manager sends.
+  [[ -n $keep_running_pid ]] || return 0
+  kill -TERM "$keep_running_pid" 2>/dev/null || true
+  local waited=0
+  while kill -0 "$keep_running_pid" 2>/dev/null && (( waited < 120 )); do sleep 1; waited=$((waited + 1)); done
+  record "disposable keep-running stopped on interrupt" stopped "$(kill -0 "$keep_running_pid" 2>/dev/null && echo running || echo stopped)"
+  keep_running_pid=""
+  [[ -z $keep_running_name ]] || summary_checks "$keep_running_name"
+  keep_running_name=""
+}
+lifecycle_config() {
+  local name=$1 mode; mode=$(config_mode "$name")
+  if [[ $mode == disposable ]]; then
+    stop_keep_running
+    record_checks "$name"
+  fi
+  run_step "$name-rollback" installer rollback --name "$name" --non-interactive || return 1
+  if [[ $mode != disposable ]]; then
+    record "$name endpoint closed after rollback" closed \
+      "$(curl --disable --silent --noproxy '*' --max-time 3 --output /dev/null "$(base_url "$name")/health/ready" 2>/dev/null && echo open || echo closed)"
+  fi
+  run_step "$name-resume" installer resume --name "$name" --non-interactive || return 1
+  record "$name resume reports verified" yes "$(log_has "$name-resume" 'Status: verified' && echo yes || echo no)"
+  if [[ $mode == disposable ]]; then
+    # A verified disposable instance stays stopped; its data is retained.
+    record "$name disposable stays stopped" closed \
+      "$(curl --disable --silent --noproxy '*' --max-time 3 --output /dev/null "$(base_url "$name")/health/ready" 2>/dev/null && echo open || echo closed)"
+    return 0
+  fi
+  [[ $mode == kubernetes ]] || wait_ready "$name" || true
+  persisted_check "$name" after-resume
+}
+
+matrix() {
+  local name
+  for name in $PRE_BLIND_CONFIGS; do
+    log "=== install $name ==="
+    install_config "$name" || { finding "$name install failed" "see logs/$name-install.log"; continue; }
+  done
+  # Headings must agree across modes.
+  local reference="" stages
+  for name in $PRE_BLIND_CONFIGS; do
+    [[ -s $run_dir/logs/$name-stages.txt ]] || continue
+    stages=$(grep -vE 'Garden|garden|semantic|disposable|Stop the' "$run_dir/logs/$name-stages.txt" | sort | tr '\n' '|')
+    [[ -n $reference ]] || reference=$stages
+    record "$name shared stage headings match first configuration" "$reference" "$stages"
+  done
+  for name in $PRE_BLIND_CONFIGS; do
+    log "=== verify $name ==="
+    verify_config "$name" || { finding "$name verification failed" "see logs/$name-*.log"; continue; }
+    restart_config "$name" || finding "$name restart retention failed" "see logs/$name-restart*.log"
+    lifecycle_config "$name" || finding "$name rollback/resume failed" "see logs/$name-rollback.log and $name-resume.log"
+  done
+}
+
+# --- isolation and removal ---------------------------------------------------
+gateway_remove() {
+  # gateway_remove STEP — the guide's removal procedure, all five blocks in one shell.
+  { block "$GATEWAY_GUIDE" "Remove the shared gateway safely" 1
+    block "$GATEWAY_GUIDE" "Remove the shared gateway safely" 2
+    block "$GATEWAY_GUIDE" "Remove the shared gateway safely" 3
+    block "$GATEWAY_GUIDE" "Remove the shared gateway safely" 4
+    block "$GATEWAY_GUIDE" "Remove the shared gateway safely" 5
+  } | run_script "$1"
+}
+isolation() {
+  local victim name blitzed=" "
+  for victim in dock-attic kube-attic; do
+    has_config "$victim" || continue
+    run_step "isolation-blitz-$victim" installer blitz --non-interactive --yes --name "$victim" || continue
+    blitzed+="$victim "
+    for name in $PRE_BLIND_CONFIGS; do
+      [[ $blitzed != *" $name "* ]] || continue
+      case $(config_mode "$name") in
+        native|docker)
+          record "isolation: $name still ready after $victim blitz" 200 \
+            "$(curl --disable --silent --noproxy '*' --max-time 5 --output /dev/null --write-out '%{http_code}' "$(base_url "$name")/health/ready" || true)" ;;
+        kubernetes)
+          record "isolation: $name pods still running after $victim blitz" Running \
+            "$(kubectl --context "$KUBE_CONTEXT" --namespace "$(config_namespace "$name")" get pod cairn-0 -o jsonpath='{.status.phase}' 2>/dev/null || echo missing)" ;;
+      esac
+    done
+    if [[ $victim == kube-attic ]]; then
+      record "isolation: namespace retained after blitz" cairn-kube-attic \
+        "$(kubectl --context "$KUBE_CONTEXT" get namespace cairn-kube-attic -o jsonpath='{.metadata.name}' 2>/dev/null || echo missing)"
+      record "isolation: namespace emptied by blitz" "" \
+        "$(kubectl --context "$KUBE_CONTEXT" --namespace cairn-kube-attic get pods,pvc,statefulsets,services,secrets -o name 2>/dev/null | tr '\n' ' ')"
+      record "isolation: gateway still ready after blitz" 1 \
+        "$(kubectl --context "$KUBE_CONTEXT" --namespace cairn-egress get deployment cairn-egress-gateway -o jsonpath='{.status.readyReplicas}')"
+    fi
+  done
+}
+removal() {
+  local name
+  for name in $PRE_BLIND_CONFIGS; do
+    [[ -d $state_root/$name ]] || continue
+    run_step "blitz-$name" installer blitz --non-interactive --yes --name "$name" || true
+  done
+  run_step ls-after-blitz installer ls || true
+  record "ls reports no installations" yes "$(log_has ls-after-blitz 'No recorded installations.' && echo yes || echo no)"
+  record "no installer instance directories remain" "" "$(ls -A "$state_root" 2>/dev/null | tr '\n' ' ' || true)"
+  record "no cairn-install user units remain" "" "$(systemctl --user list-unit-files 'cairn-install-*' --no-legend 2>/dev/null | awk '{print $1}' | tr '\n' ' ' || true)"
+  record "no cairn containers remain" "" "$(docker ps -a --format '{{.Names}}' | grep -E 'cairn' | tr '\n' ' ' || true)"
+  record "no cairn volumes remain" "" "$(docker volume ls --format '{{.Name}}' | grep -E 'cairn-install' | tr '\n' ' ' || true)"
+  record "nothing listening on instance ports" "" \
+    "$(ss -Hltn 2>/dev/null | awk '{print $4}' | grep -E ':(82[0-9]{2}|84[0-9]{2})$' | tr '\n' ' ' || true)"
+
+  if any_config_matching 'kube-*'; then
+    for name in $PRE_BLIND_CONFIGS; do
+      [[ $(config_mode "$name") == kubernetes ]] || continue
+      # Namespaces are administrator-owned; blitz leaves them. Delete them
+      # before the gateway removal, which refuses while any labelled namespace remains.
+      run_step "namespace-delete-$name" kubectl --context "$KUBE_CONTEXT" delete namespace "$(config_namespace "$name")" --wait=true --timeout=300s || true
+    done
+    gateway_remove gateway-remove || finding "gateway removal procedure failed" "see logs/gateway-remove.log"
+    record "only system namespaces remain" "cilium-secrets default kube-node-lease kube-public kube-system" \
+      "$(kubectl --context "$KUBE_CONTEXT" get namespaces -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')"
+    record "no persistent volumes remain" "" "$(kubectl --context "$KUBE_CONTEXT" get pv -o name 2>/dev/null | tr '\n' ' ' || true)"
+    rm -rf "$HOME/cairn-site-gitops"
+  fi
+  if any_config_matching '*-garden'; then
+    sudo -n sed -i "/ ${HOSTS_MARKER}\$/d" /etc/hosts
+    record "hosts line removed" "" "$(grep -F "$HOSTS_MARKER" /etc/hosts || true)"
+    for name in $PRE_BLIND_CONFIGS; do
+      [[ $(config_feature "$name") == garden ]] && rm -rf "$(config_garden_dir "$name")"
+    done
+    rm -f "$HOME/.local/bin/a2a" "$HOME/.local/bin/garden-config" "$HOME/.local/bin/garden-session"
+    rm -rf "$HOME/.local/share/garden"
+  fi
+  record "provider key file untouched" "0600 regular" "$(stat -c '%a' "$PROVIDER_KEY_FILE" | sed 's/^600$/0600/') regular"
+}
+
+# --- report ------------------------------------------------------------------
+report() {
+  local passed failed_count
+  passed=$(jq -s 'map(select(.outcome=="passed")) | length' "$checks")
+  failed_count=$(jq -s 'map(select(.outcome=="failed")) | length' "$checks")
+  jq -n --arg revision "$(git rev-parse HEAD)" --arg run_id "$run_id" --arg host "$(hostname)" \
+    --arg status "$([[ $failed == 0 ]] && echo passed || echo failed)" \
+    --arg configs "$PRE_BLIND_CONFIGS" --arg stages "$PRE_BLIND_STAGES" \
+    --slurpfile checks "$checks" \
+    '{status:$status,revision:$revision,run_id:$run_id,host:$host,configurations:($configs|split(" ")),stages:($stages|split(" ")),checks:$checks}' \
+    >"$run_dir/report.json"
+  {
+    printf '# Pre-blind rehearsal %s\n\nRevision `%s` on `%s`, run `%s`: **%s** (%s passed, %s failed).\n\n' \
+      "$run_id" "$(git rev-parse HEAD)" "$(hostname)" "$run_id" "$([[ $failed == 0 ]] && echo PASSED || echo FAILED)" "$passed" "$failed_count"
+    printf '## Failed checks\n\n'
+    jq -r 'select(.outcome=="failed") | "- `\(.name)`: expected `\(.expected)`, observed `\(.observed)`"' "$checks"
+    printf '\n## Findings\n\n'; cat "$findings"
+  } >"$run_dir/report.md"
+  log "report: $run_dir/report.md ($passed passed, $failed_count failed)"
+}
+trap 'forward_stop; garden_unreachable; stop_keep_running; report' EXIT
+trap 'finding "rehearsal aborted" "stage ${stage:-setup} stopped at line $LINENO: $BASH_COMMAND"' ERR
+
+cairn_image=${CAIRN_IMAGE_REFERENCE:-}
+if [[ -z $GARDEN_ADDRESS ]] && any_config_matching '*-garden'; then
+  GARDEN_ADDRESS=$(kubectl --context "$KUBE_CONTEXT" get node "$KUBE_NODE" \
+    -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+fi
+for stage in preflight prereqs matrix isolation removal; do
+  has_stage "$stage" || continue
+  if [[ $stage == matrix && -z $cairn_image ]] && any_config_matching 'kube-*'; then
+    cairn_image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' build/cairn-image-stage/kubernetes-receipt.json)
+  fi
+  if [[ $stage == removal && $PRE_BLIND_KEEP == 1 ]]; then log "keeping instances (PRE_BLIND_KEEP=1)"; continue; fi
+  log "##### stage $stage #####"
+  "$stage"
+done
+exit "$failed"

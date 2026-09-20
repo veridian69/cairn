@@ -26,6 +26,13 @@ such as `/mnt/c`; on macOS, use a trusted local checkout and local state. The
 source launcher needs Python 3.12–3.14. All modes need an unused numeric
 loopback port and access to the locked dependencies.
 
+The tools the installer runs (`uv`, `docker`, `go`, `kubectl`) inherit your
+proxy and package-index configuration, so a proxied or mirrored host works as
+it does for you; loopback is always exempt from proxies, and the variables
+that would relocate the installer's own runtime (`CAIRN_*`, `COMPOSE_*`,
+`UV_PROJECT_ENVIRONMENT`, `UV_PYTHON`, `UV_SYSTEM_PYTHON`, `UV_NO_SYNC`) are
+not passed on.
+
 Native modes require `uv 0.12.14`. Linux persistent native mode also requires a
 working systemd user manager. macOS native mode uses the ordinary user's
 launchd session and supports catalogue memory and Attic only. Native acceptance
@@ -35,6 +42,8 @@ search needs outbound OpenAI access and an OpenAI API key; Attic needs no
 external key. Native semantic mode also needs Docker: its FalkorDB index runs
 in a dedicated container. The installer checks local prerequisites before
 preparing Cairn and proves provider access during semantic verification.
+For semantic Kubernetes, complete the [early gateway prerequisite check](#check-the-shared-gateway-before-building-images)
+before building or staging any runtime images.
 Before enabling semantic mode, [build the FalkorDB runtime locally](../../deploy/falkordb/README.md).
 Docker/native installs require `--falkordb-runtime /absolute/path/runtime.json`.
 Kubernetes installs require node preparation followed by
@@ -52,7 +61,9 @@ created and labelled `cairn.example.invalid/instance: <installation-name>`.
 See [namespace and render preparation](deployment.md#namespace-and-render-preparation)
 for the exact create, label and verification commands. It also requires Ready
 Linux/amd64 capacity, a CSI StorageClass
-that supports `ReadWriteOncePod`, an immutable Cairn image digest, and working
+that supports `ReadWriteOncePod` (with `WaitForFirstConsumer` binding whenever
+managed Garden or a FalkorDB node receipt is used, because their volumes must
+bind where the pod is scheduled), an immutable Cairn image digest, and working
 CNI and DNS. It needs namespace-scoped mutation permissions for the documented
 resources and cluster-scoped read access to Namespace, Nodes, StorageClass and
 CSIDriver for preflight. Semantic mode also requires a healthy shared gateway
@@ -66,6 +77,41 @@ For detailed host checks and operational trade-offs, see the
 [manual native procedure](native-installation.md),
 [disposable quickstart](../quickstart.md) and
 [manual Compose procedure](../../deploy/compose/README.md).
+
+## Check the shared gateway before building images
+
+For semantic Kubernetes, have the cluster administrator run these read-only
+checks with an explicit context **before** building FalkorDB, Cairn or Garden,
+staging images, or preparing the installation namespace. This administrator
+check needs `get` on the named Service and `list` on EndpointSlices in
+`cairn-egress`; it is
+not an additional permission required by the instance installer.
+
+```sh
+check_cairn_gateway() {
+    test "$#" -eq 1 || { printf 'Usage: check_cairn_gateway KUBE_CONTEXT\n' >&2; return 2; }
+    kubectl --context "$1" -n cairn-egress get service cairn-egress-gateway -o json |
+        jq -e 'any(.spec.ports[]; .port == 3128 and .protocol == "TCP")' >/dev/null || return 1
+    kubectl --context "$1" -n cairn-egress get endpointslices \
+        -l kubernetes.io/service-name=cairn-egress-gateway -o json |
+        jq -e 'any(.items[]; any(.ports[]?; .port == 3128 and .protocol == "TCP")
+            and any(.endpoints[]?; .conditions.ready != false
+                and (.addresses | length > 0)))' >/dev/null || return 1
+    printf 'Gateway Service and ready backend found; workload connectivity is checked by the installer.\n'
+}
+check_cairn_gateway YOUR_KUBE_CONTEXT
+```
+
+Replace `YOUR_KUBE_CONTEXT` with the administrator-reviewed context. Stop if
+this check fails. An absent Service or ready backend requires completing the
+[shared gateway procedure](kubernetes-gateway.md) before continuing. An RBAC
+refusal means the administrator must perform the check; do not grant the
+instance installer broader access to bypass it.
+
+This confirms the declared Service and ready backend, not DNS resolution or
+provider CONNECT from an instance Pod. The installer's exact-image probe still
+checks those properties inside the cluster during `preflight`, before instance
+preparation. Host DNS cannot substitute for that workload check.
 
 ## Start the interactive wizard
 
@@ -99,6 +145,10 @@ for stdin. Port 8000 and **Attic only** are the defaults for optional values.
 ./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
 ```
 
+Add `--keep-running` to a disposable install to keep the verified instance in
+the foreground for your own checks; Ctrl-C stops it, prints the summary, and
+retains its data and credentials as an ordinary disposable run does.
+
 Add `--semantic` for **Attic plus semantic search** in Linux native or Docker mode:
 
 ```sh
@@ -126,7 +176,7 @@ semantic example uses a registry-published, digest-pinned Cairn image and the
 separate receipt created after [building FalkorDB locally and staging it on the
 eligible nodes](../../deploy/falkordb/README.md#prepare-kubernetes-nodes).
 Create the provider-key file outside installer state with mode `0600`; it
-contains the key on one line.
+contains the key on one line. Run from the root of the trusted checkout.
 
 ```sh
 kube_image='REPLACE_WITH_TRUSTED_CAIRN_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST'
@@ -139,16 +189,20 @@ esac
 kube_digest="${kube_image##*@sha256:}"
 test "${#kube_digest}" -eq 64
 case "$kube_digest" in *[!0123456789abcdefABCDEF]*) exit 2 ;; esac
-cairn-install --non-interactive --mode kubernetes --name cairn-v05 \
+test -s "$PWD/build/falkordb-local/kubernetes-receipt.json"
+test -f "$HOME/.local/state/cairn-openai-key"
+./cairn-install --non-interactive --mode kubernetes --name cairn-v05 \
   --port 8126 \
   --kube-context reference --kube-namespace cairn-v05 \
   --kube-storage-class cairn-local \
   --kube-image "$kube_image" \
-  --kube-falkordb-receipt /home/operator/build/falkordb-local/kubernetes-receipt.json \
-  --semantic --provider-key-file /home/operator/.config/cairn/openai-api-key \
-  --state-root /home/operator/.local/state/cairn-install \
-  --source /home/operator/projects/cairn
+  --kube-falkordb-receipt "$PWD/build/falkordb-local/kubernetes-receipt.json" \
+  --semantic --provider-key-file "$HOME/.local/state/cairn-openai-key"
 ```
+
+The receipt path is where [preparing the nodes](../../deploy/falkordb/README.md#prepare-kubernetes-nodes)
+writes it; the key file is the one the
+[key-file procedure](#supply-the-openai-key-without-exposing-it) creates.
 
 The installer copies the provider key into protected installation state and
 records the external input by path only. The file supplied with
@@ -194,7 +248,7 @@ digest="$(docker image inspect "$source_image" --format '{{.Id}}')"
 case "$digest" in sha256:[0-9a-f][0-9a-f]*) ;; *) exit 1 ;; esac
 local_tag="cairn.local/cairn-runtime:build-${digest#sha256:}"
 cairn_image="cairn.local/cairn-runtime@$digest"
-mkdir build/cairn-image-stage
+mkdir -p build/cairn-image-stage
 docker image tag "$source_image" "$local_tag"
 docker image save --output build/cairn-image-stage/image.tar "$local_tag"
 python3 scripts/kubernetes_image_stage.py \
@@ -210,7 +264,7 @@ the Cairn image. The resulting image has the form
 the installation command. The installer proves the exact Cairn digest can
 execute with a disposable `IfNotPresent` Pod before it creates the instance.
 It does not use `Node.status.images`, because kubelet may cap or disable that
-inventory. Garden remains a normally pullable published image. If the exact
+inventory. For Garden, follow its separate [local staging and receipt procedure](managed-garden.md#build-and-stage-garden-without-a-registry); the Cairn preloaded flag does not cover it. If the exact
 probe cannot start, restage the Cairn archive and rerun
 `./cairn-install resume --name NAME`; it reuses the recorded installation
 inputs. Retain the archive for a later restage. The manual GitOps procedure
@@ -219,8 +273,8 @@ remains registry-only; it does not cover this guided, single-node exception.
 ## Output and diagnostics
 
 The default display is deliberately quiet: it shows the chosen configuration,
-stage progress, failures and a final summary with the endpoint, state and
-credential paths. A successful `blitz` instead prints only the deleted
+stage progress, failures and a final summary with the endpoint (for
+Kubernetes, a port-forward command), state and credential paths. A successful `blitz` instead prints only the deleted
 installation's name and status, because its former paths and endpoint are no
 longer usable. Detailed prerequisite probes, commands and command output still
 go to the owner-only `commands.log`, with credentials redacted.
@@ -433,6 +487,13 @@ Run it only for a local check, then stop it when that check ends. The installer
 opens a loopback-only port-forward for its own verification and always closes
 it afterwards.
 
+`status` takes a shared lock on the instance record so it never reads a
+half-written state. While another installer process holds that record, which
+means an install, resume, rollback or blitz still running, or a disposable
+instance kept in the foreground with `--keep-running`, it stops immediately
+with `another installer is using this instance; wait for it to finish` rather
+than waiting. `ls` reads the records without locking and stays available.
+
 Resume after correcting the reported problem:
 
 ```sh
@@ -440,7 +501,7 @@ Resume after correcting the reported problem:
 ```
 
 Context and namespace are immutable on resume, along with the recorded storage
-class, image and preloaded-image policy. Kubernetes resume also refuses an API
+class, image, preloaded-image policy and any Garden/FalkorDB staging receipts. Kubernetes resume also refuses an API
 server or namespace UID change, and reuses its original resources, PVCs,
 credentials, UUID and verification receipt.
 

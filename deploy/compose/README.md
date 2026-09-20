@@ -37,7 +37,7 @@ recovery procedure.
 
 ## Image and contract boundary
 
-`CAIRN_IMAGE=cairn:v0.7.9` in `../images.lock` is a local build tag, not a
+`CAIRN_IMAGE=cairn:v0.7.10` in `../images.lock` is a local build tag, not a
 published image. Use the reviewed local build produced below or a separately
 reviewed registry digest and record its exact identity.
 
@@ -149,8 +149,8 @@ repository root, verify the contracts, build the image named by
 ```sh
 (cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-make image IMAGE=cairn:v0.7.9
-docker image inspect --format '{{.Id}}' cairn:v0.7.9
+make image IMAGE=cairn:v0.7.10
+docker image inspect --format '{{.Id}}' cairn:v0.7.10
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
@@ -174,7 +174,7 @@ removes an object only when both still match.
 set -eu
 set -o pipefail
 
-preflight_image='cairn:v0.7.9'
+preflight_image='cairn:v0.7.10'
 preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 preflight_label_key='io.cairn.compose-preflight'
 preflight_network="cairn-preflight-$preflight_id"

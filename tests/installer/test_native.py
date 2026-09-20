@@ -432,6 +432,37 @@ def test_preflight_records_safe_vendor_user_service_dropin_policy(
     backend._validate_loaded_unit(require_expected=True)  # noqa: SLF001
 
 
+def test_vendor_dropin_acceptance_is_reported_once_but_rechecked_by_each_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = FakeContext(tmp_path, mode="native")
+    vendor_dir = tmp_path / "usr" / "lib" / "systemd" / "user" / "service.d"
+    dropin = vendor_dir / "10-timeout-abort.conf"
+    checks = 0
+
+    def inventory(_directory: Path) -> list[dict[str, str]]:
+        nonlocal checks
+        checks += 1
+        return [{"path": str(dropin), "sha256": "a" * 64}]
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(native, "_vendor_dropin_directory", lambda: vendor_dir)
+    monkeypatch.setattr(native, "_vendor_dropin_inventory", inventory)
+
+    Backend(ctx).preflight()  # type: ignore[arg-type]
+    Backend(ctx).preflight()  # type: ignore[arg-type]
+
+    accepted = [
+        note
+        for note in ctx.notes
+        if note.startswith("Accepted system vendor user-service drop-in")
+    ]
+    assert checks == 2
+    assert accepted == [
+        f"Accepted system vendor user-service drop-in {dropin} with SHA256 {'a' * 64}."
+    ]
+
+
 def test_vendor_dropin_policy_change_and_nonvendor_override_are_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

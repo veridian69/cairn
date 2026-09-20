@@ -35,6 +35,7 @@ func TestAgentListShowsDaemonStateWhenAvailable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeConfigFile(t, home, &config.Config{
+		Defaults: config.Defaults{ContextWindow: 50},
 		Agents: map[string]config.AgentConfig{
 			"claude": {Provider: "anthropic", Model: "claude-4"},
 			"gpt":    {Provider: "openai", Model: "gpt-5.4"},

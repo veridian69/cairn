@@ -7,12 +7,23 @@ GOFLAGS := -modcacherw
 GO := env GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOFLAGS=$(GOFLAGS) go
 PYTHON ?= python3
 PREFIX ?= $(HOME)/.local
+# The default is the release version shared with Cairn's source distribution,
+# so `make -C a2a build` and `a2a --version` agree with the package. A blind
+# acceptance run found the documented path reporting `dev`; only an explicit
+# VERSION= on the command line may override it.
+ifndef VERSION
+VERSION := $(shell $(PYTHON) -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' $(CURDIR)/../pyproject.toml)
+endif
+ifeq ($(strip $(VERSION)),)
+$(error cannot read the release version from ../pyproject.toml; pass VERSION= explicitly)
+endif
+VERSION_PACKAGE := github.com/veridian69/cairn/a2a/cmd.version
 
 $(CACHE_DIR):
 	mkdir -p $(GOCACHE) $(GOMODCACHE)
 
 build: $(CACHE_DIR)
-	$(GO) build -o a2a .
+	$(GO) build -trimpath -ldflags="-s -w -X $(VERSION_PACKAGE)=$(VERSION)" -o a2a .
 
 install: build
 	./scripts/install-user --binary "$(CURDIR)/a2a" --prefix "$(PREFIX)"
@@ -31,7 +42,7 @@ tidy: $(CACHE_DIR)
 
 check: $(CACHE_DIR) tooling-check license-check
 	$(GO) vet ./...
-	$(GO) test ./... -timeout 60s
+	$(GO) test ./... -cover -timeout 60s
 	$(GO) test -race ./... -timeout 120s
 
 tooling-check:

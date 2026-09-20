@@ -17,6 +17,9 @@ class InstallationTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.module = self.base / "source"
         (self.module / "scripts").mkdir(parents=True)
+        (self.base / "pyproject.toml").write_text(
+            '[project]\nname = "drystane-cairn"\nversion = "7.8.9"\n'
+        )
         shutil.copytree(MODULE / "deploy", self.module / "deploy")
         for name in ("install-user", "install-server"):
             shutil.copy2(MODULE / "scripts" / name, self.module / "scripts" / name)
@@ -196,7 +199,10 @@ class InstallationTests(unittest.TestCase):
         fakebin.mkdir()
         make = fakebin / "make"
         make.write_text(
-            '#!/bin/sh\n[ "$1" = "-C" ] && [ "$3" = "build" ] || exit 91\ncp "$INSTALL_TEST_BINARY" "$2/a2a"\n'
+            "#!/bin/sh\n"
+            '[ "$1" = "-C" ] && [ "$3" = "VERSION=7.8.9" ] && '
+            '[ "$4" = "build" ] || exit 91\n'
+            'cp "$INSTALL_TEST_BINARY" "$2/a2a"\n'
         )
         make.chmod(0o755)
         self.env["PATH"] = str(fakebin) + os.pathsep + self.env["PATH"]

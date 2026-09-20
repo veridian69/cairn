@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "a7646e7d6e597c4b8a05e6495c45a4c1a069b7fe",
+  "source_revision": "1171a62f9543e40fbb8aaa84303a64a15be3e7c0",
   "release_configuration": {
-    "files.json": "bc44e4669f57fe26c77e6e55a41c3dde90f85cd43947a8da384c2856142102fe",
+    "files.json": "23d9d611f53637c87d2bc53e8d0f024dce5b2910d748215fbedd441cfc3b2c81",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "3b63ea91b5ba334e1a27d98cd8dbcc661e3e791e86c2f6e7eedd672f76d49dcc",
-    "overlay_set_sha256": "026b52639ce8160c6707f0438670cf1d38cbcd3f912dd98ab6b740d2edc6614a"
+    "overlay_set_sha256": "10161d7af3d535703b7e7e9d0a5ab58e032ba58e16e377c14d0bd5e3052e8b30"
   },
   "files": {
     ".dockerignore": {
@@ -66,7 +66,7 @@
       "mode": 420
     },
     "Dockerfile": {
-      "sha256": "26a98d908395dd96a83840f5aa6005c3fe90dd8e2cb12fe1ed08392cf1433678",
+      "sha256": "378a1354eab056adf3360cc234bdfd314154c35bda2ff4d0018239a4388203a0",
       "mode": 420
     },
     "LICENSE-Apache-2.0.txt": {
@@ -78,7 +78,7 @@
       "mode": 420
     },
     "Makefile": {
-      "sha256": "8b11b5326eb984b5943afb98410789c5059c7eaec9b02f73412b79b1d12d8de9",
+      "sha256": "b4fc7d8e298e9e351919f6951b8f6f2530327a68f7dfc46be7e1332c6e26fddc",
       "mode": 420
     },
     "NOTICE.md": {
@@ -86,11 +86,11 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "3d78c3a9527b6872c7af2d06e09e440e62c04bf143c1bd3596a06b64e8eabd3d",
+      "sha256": "77aed743758696c72e239cc66e7443a04286f74eccc87efcf0b050a76a007428",
       "mode": 420
     },
     "SECURITY.md": {
-      "sha256": "55de9642a3c84a73dc7ab5ae98fa66e46255d33bfe039862f5368fd5eb200b0e",
+      "sha256": "de284d4e1079a1a80bf59e3ae846b77b99b54075e757ddb91da6ccd244f705d9",
       "mode": 420
     },
     "a2a/.gitignore": {
@@ -98,7 +98,7 @@
       "mode": 420
     },
     "a2a/Dockerfile": {
-      "sha256": "bec128b99b9117fd08d67e860f5601bde9d57c743fbaefdcbb929d9317dbf64e",
+      "sha256": "d72e11643f30c2f5b2212c2684926e2b669814e47ae7e44bd10c10c00076feb7",
       "mode": 420
     },
     "a2a/Dockerfile.dockerignore": {
@@ -110,7 +110,7 @@
       "mode": 420
     },
     "a2a/Makefile": {
-      "sha256": "ab0ec229f07663bc6e0ef4e13cc35e57967700757740a557b800431f2b9b15cb",
+      "sha256": "3b21a800ca7741dc7247032e5153b262dee5e51ccc90fb14938a034673e46fca",
       "mode": 420
     },
     "a2a/README.md": {
@@ -362,7 +362,7 @@
       "mode": 420
     },
     "a2a/cmd/agent_test.go": {
-      "sha256": "d0a5482bbb037c0f234ef66c8f0ecf9b6d9dfc63d378e66e153a0810ab80cb0d",
+      "sha256": "8b1c0a03a61f94f108644df5190e94880a7f095c8dc733b27ac4ae0bda2fd9ed",
       "mode": 420
     },
     "a2a/cmd/attention.go": {
@@ -406,7 +406,7 @@
       "mode": 420
     },
     "a2a/cmd/host.go": {
-      "sha256": "4332cea5c57647eabe3a111712bbabc7e74e1151e7dd7916a296ed0b691b5ef4",
+      "sha256": "6dca69239b5a56c222ddb951ee0dd116dc4eb7168c5178a75926d61715c7c71f",
       "mode": 420
     },
     "a2a/cmd/host_test.go": {
@@ -490,7 +490,7 @@
       "mode": 420
     },
     "a2a/cmd/serve.go": {
-      "sha256": "1495d5c7ca859647ad25affc9599c7fd535ef63043cb53dab4d8dfc033aeb5d9",
+      "sha256": "209b0619975df0b270e040f635e97127f439abc0f59516dda5b2c7b3b101c450",
       "mode": 420
     },
     "a2a/cmd/snapshot.go": {
@@ -506,7 +506,7 @@
       "mode": 420
     },
     "a2a/cmd/status_test.go": {
-      "sha256": "56e9cede4556f7d09f058680a868a3fe627c1d9ed1410d796d087e4399060c88",
+      "sha256": "8e0536a27f5122dc6b64d0fadb9b658de69074fb8f71abfbcb2a6af7bb747a39",
       "mode": 420
     },
     "a2a/cmd/watch.go": {
@@ -565,8 +565,12 @@
       "sha256": "f2166e340d89d1fca3f8ed3d581e4511560990d4e3d817d55d70bbbd787ad4f1",
       "mode": 420
     },
+    "a2a/integration/test_build.py": {
+      "sha256": "a6cbb67a6c209df384a44dbfd84e3a4c18a7a5d2fd7d32aee30ab9d70477c9c6",
+      "mode": 420
+    },
     "a2a/integration/test_installation.py": {
-      "sha256": "ce6188d18c935fc73944b3b5492f59fc48fa475b3c3aeb99115a88f9da464604",
+      "sha256": "c7c3703a172d220bc56b4ed8b8b59e6e98f7d9552782a85710dd299dd403177c",
       "mode": 420
     },
     "a2a/integration/test_mcp_config.py": {
@@ -766,11 +770,11 @@
       "mode": 420
     },
     "a2a/internal/garden/config.go": {
-      "sha256": "dd52fc0bc2d36a0c066a50e0f5aba14c0659bf4fb6a0172cf6ab30212b367c75",
+      "sha256": "2eec1ffdea0a33e51ed7609aa0ee0a9358755ecfcfe0aee4851b0d1ab99ece7a",
       "mode": 420
     },
     "a2a/internal/garden/garden_test.go": {
-      "sha256": "fbc9e0cb6ffa4d63fe8c0a6996652cd8487ca861343f48165922e06ef2b793d9",
+      "sha256": "25394b70bfbe67a134997a45c17de9e57a32b1e4743b8575da1290ca1c9e2ee9",
       "mode": 420
     },
     "a2a/internal/garden/host.go": {
@@ -785,8 +789,16 @@
       "sha256": "6aeed7be3609029c066c1b874b87e685b8ba551e075059f66d5151ae97bcdec6",
       "mode": 420
     },
+    "a2a/internal/garden/public_endpoint.go": {
+      "sha256": "5b2cc16f0dd7f0ddebfa71f72b74f6acd3cef4e92e4f2c3f51a9e713b3c3207b",
+      "mode": 420
+    },
+    "a2a/internal/garden/public_endpoint_test.go": {
+      "sha256": "ed6f94ee289a8c3768bdee87913300392de4560ca66cecf003809499769b7bc0",
+      "mode": 420
+    },
     "a2a/internal/garden/server.go": {
-      "sha256": "7d219e5e5eba18cdc9c5191c5cbb752821905f3ddd920c8a86d0d768929b3cf6",
+      "sha256": "e0d8ab5828fe93bc2684493e92b8f85f494d7945a2f73bee66f5ca5a1d28efd8",
       "mode": 420
     },
     "a2a/internal/garden/store.go": {
@@ -794,7 +806,7 @@
       "mode": 420
     },
     "a2a/internal/garden/strictjson.go": {
-      "sha256": "da6edfaad702caaefdc198b6fe8f85380a05adb803806916efcbf0106e85cffc",
+      "sha256": "36832a160c63b0157aa4b634869af70954f55082e47e116bd2f6a56339ce816c",
       "mode": 420
     },
     "a2a/internal/garden/types.go": {
@@ -1054,7 +1066,7 @@
       "mode": 493
     },
     "a2a/scripts/install-user": {
-      "sha256": "49cabe94a8d71849c2d4a276f0dfbbf72cab6c58d8f5c1c6e15a937484ff614f",
+      "sha256": "76c08cd2d82c1bb7f39216dff526756e435e5e3026926dbde5231eaceea222bd",
       "mode": 493
     },
     "cairn-install": {
@@ -1262,7 +1274,7 @@
       "mode": 420
     },
     "deploy/compose/README.md": {
-      "sha256": "00b888ab8768262abe2d6bfce36aba9f2b7cfeed746a8828e0ab55bb8807453e",
+      "sha256": "9ce73c10abd00415e6e6d165b9ea1621cec838af66778a324d19dbca7cebc22e",
       "mode": 420
     },
     "deploy/compose/compose.graphiti.yaml": {
@@ -1334,7 +1346,7 @@
       "mode": 493
     },
     "deploy/images.lock": {
-      "sha256": "b7279c0896a9bf2f772483c5522963ebd234b8e22e94c1cdeed446fd2084e523",
+      "sha256": "8d97aac9693af58068a7ebcb386b6c50cb9529e215493ea9f754746559a6bf85",
       "mode": 420
     },
     "deploy/kustomize/base/README.md": {
@@ -1362,7 +1374,7 @@
       "mode": 420
     },
     "deploy/kustomize/base/statefulset.yaml": {
-      "sha256": "a8eba4d9527e99845e3c7301d1bd657c81191689d7716976c770819185d4707b",
+      "sha256": "9de21be916a2974860ee0f2a5a89a0ffca52c4d445ee9b5ec018f3db4c4b136d",
       "mode": 420
     },
     "deploy/kustomize/components/falkordb/README.md": {
@@ -1482,11 +1494,11 @@
       "mode": 420
     },
     "deploy/kustomize/rendered/base.yaml": {
-      "sha256": "34d18d6f57fb837d90919df378ec25dcea2aa525ca4c4e97e04e01e3d78cf437",
+      "sha256": "6acf2a31dd2302a3c87bd56ab3b8ae2b325d5e0e4d2d6f9ca96c0b3ddc155a0a",
       "mode": 420
     },
     "deploy/kustomize/rendered/base.yaml.sha256": {
-      "sha256": "0cba576aa34db126c9f3f22335e850ed4e8633f324ee23c98e51b826cb58cfe0",
+      "sha256": "3a54e0c1188cbb3e8b3d3e5986203570105e8a1e4e2a7d3c009d4e2dd8ecda71",
       "mode": 420
     },
     "deploy/kustomize/rendered/egress-gateway-reference.yaml": {
@@ -1506,35 +1518,35 @@
       "mode": 420
     },
     "deploy/kustomize/rendered/kind.yaml": {
-      "sha256": "a92d5eed244197b47df860f379c6d35b37b9dba6a4832916e4d44abcb9ca4ac5",
+      "sha256": "d6320fd563f5bb61a53ad8440c08ebfbd449547b025d40fb653d00436cf2440b",
       "mode": 420
     },
     "deploy/kustomize/rendered/kind.yaml.sha256": {
-      "sha256": "e4fdc2a2d619468f2c627af9fc6e331b0525a86008bf9e12abfbb936631f0579",
+      "sha256": "fb78ac1009f274f79a2ed5c8a870a9264dd510f9ecbec0ee0e4e5665a623b0f3",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes-retrieval.yaml": {
-      "sha256": "71a7db9ce44e2339785995ff44a49439fee395b754af995d3d7dd2d165bf465b",
+      "sha256": "cd004a496301aa48b22f4799a3fe310539bd02a593bcc7970c158ed3afd41a8b",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes-retrieval.yaml.sha256": {
-      "sha256": "69b21e6fb04f92db3ba595f87ff21de6739cea43c85b97a7178a94c143b242a1",
+      "sha256": "54d79f723f871f94fe6511ed0b8830e9bafebd57eec25daf2660b58a978e1cfb",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes.yaml": {
-      "sha256": "1090478d2c7cf793d6d06fa9098cd991a3693a620bb20e863b081b0e05d270cc",
+      "sha256": "42eb642326899af5c77e6dbea5195b8e65961fab288e5e6723603dc123b42158",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes.yaml.sha256": {
-      "sha256": "cec3b88f8d8f2728d0aadd5c545e3911990519c4f66bf079d926b0ab18053046",
+      "sha256": "785feb23c66c02f642032222ab8924ddc2e3bfe33c1f6164977a2a78240a741c",
       "mode": 420
     },
     "deploy/kustomize/rendered/openshift.yaml": {
-      "sha256": "34d18d6f57fb837d90919df378ec25dcea2aa525ca4c4e97e04e01e3d78cf437",
+      "sha256": "6acf2a31dd2302a3c87bd56ab3b8ae2b325d5e0e4d2d6f9ca96c0b3ddc155a0a",
       "mode": 420
     },
     "deploy/kustomize/rendered/openshift.yaml.sha256": {
-      "sha256": "3409a51177be7907be3f222a63c5ed11029dad7d98e4c0b863bca5059cd56fc5",
+      "sha256": "239efd1cbbcf4a43384ed9197649ecb6fadc03186cb978252c3b5ffa1400e988",
       "mode": 420
     },
     "docs/a2a.md": {
@@ -1606,7 +1618,7 @@
       "mode": 420
     },
     "docs/clients.md": {
-      "sha256": "5940ac83d8d5c66a8d294c00df6418047f801108252a7754e76f32bb3673b7ad",
+      "sha256": "adf1dbeb06f3e90f4a43b64c71495186bfc3ba293ed1da5f82014f5cd89c6f53",
       "mode": 420
     },
     "docs/durable-sessions.md": {
@@ -1622,7 +1634,7 @@
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-inventory.md": {
-      "sha256": "573050d98ff206731fe2a2e0479b6fb52f29ce11c3bb59dbf6622ce6f472d23c",
+      "sha256": "ac72ea67079d92fcbcd6e8c1a2cba7cc4c484e589762a9f1d66b0ec4ab43b981",
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-security.md": {
@@ -1638,7 +1650,7 @@
       "mode": 420
     },
     "docs/install.md": {
-      "sha256": "e8e045314c3d8120bf44ea18548279af72f32c6fdbb76e93c77ac5ae1b800f11",
+      "sha256": "bde4776b4f30177d9a46634e5daabc45aec69312cd247711a1835ed083d5229d",
       "mode": 420
     },
     "docs/memory-connection-profiles.md": {
@@ -1658,7 +1670,7 @@
       "mode": 420
     },
     "docs/operations/deployment.md": {
-      "sha256": "b5b1fd6cae2befc71cd6041584bc53076c995442be333bb38dac94366af55119",
+      "sha256": "9a34342f5f49756753abe4a0379b29ea438b9020d3913e6f9d4e29248495fc2d",
       "mode": 420
     },
     "docs/operations/docker-firewalld.md": {
@@ -1670,11 +1682,11 @@
       "mode": 420
     },
     "docs/operations/guided-installation.md": {
-      "sha256": "a38e95d365f584ef29953b175153f471a74b85893ed80fdd82a7bb7ba58ca90e",
+      "sha256": "7173b39ed7af31a56d9d514c84be2e831eba127834d066b76eb2d6c9fc8dcedb",
       "mode": 420
     },
     "docs/operations/kubernetes-gateway.md": {
-      "sha256": "4bf9ef57315212869a8d1be8846409494f68458e6f3b51fc9911b989d108d5ec",
+      "sha256": "3a4453875045ccbae5c4cb7f73a849a348f685aa074ced6ab1199f3a5bb35701",
       "mode": 420
     },
     "docs/operations/kubernetes-preflight.md": {
@@ -1682,7 +1694,7 @@
       "mode": 420
     },
     "docs/operations/kubernetes-site.md": {
-      "sha256": "10cb9b7cfdb128999a4dee9a453c43562e38cc7d45c08cfbd442cdadf7f69a55",
+      "sha256": "de50e52c9a71e6aba49623cea429b4ff87d2df46d649edad6965410a724f51ca",
       "mode": 420
     },
     "docs/operations/macos-foreground.md": {
@@ -1694,7 +1706,7 @@
       "mode": 420
     },
     "docs/operations/managed-garden.md": {
-      "sha256": "d120c96dddcba7dfa007fbb805777dd82a27cfb275ef89a18d17d026d49d4cd4",
+      "sha256": "8c68a34a4920a80b18388f32a1427c597bdfb46513cd6d0ac510e0a6f50d4610",
       "mode": 420
     },
     "docs/operations/manual-disposable-installation.md": {
@@ -1702,7 +1714,7 @@
       "mode": 420
     },
     "docs/operations/migration.md": {
-      "sha256": "ea851103b23a8701913764cf431a8ca8a61cc7fceb0ffa8efb6acf03f11cf374",
+      "sha256": "c1e0f836324617c545cb9c42d529fb57f7d9fa4f5697a4465a092dee38b1f718",
       "mode": 420
     },
     "docs/operations/native-installation.md": {
@@ -1761,6 +1773,10 @@
       "sha256": "3899255162c652806f00da4a1d00aa06f1fc1e185761e1812472876e035275ba",
       "mode": 420
     },
+    "docs/releases/v0.7.10.md": {
+      "sha256": "72781ca8ccd5365d122dbd1d04e1a5a627dcf5b68129f46fe509e21539d1bed4",
+      "mode": 420
+    },
     "docs/releases/v0.7.8.md": {
       "sha256": "166fd7158ec4bf6874ab0d5ff28d2bbd222a04a8275765663b36edfa40d28624",
       "mode": 420
@@ -1798,7 +1814,7 @@
       "mode": 420
     },
     "pyproject.toml": {
-      "sha256": "c0bb0ebc86a8310dee4019c3f7465da76662f45e6c6133164fcb7e9c04bdd1cc",
+      "sha256": "7c81236f6d8483c4d2d14d794f7d9ab946234d838e4d26ffb6aa0d59e71d8f42",
       "mode": 420
     },
     "scripts/check-image-pins": {
@@ -1820,6 +1836,10 @@
     "scripts/demo_shared_memory.py": {
       "sha256": "95d8110d4117b41381756f0ade7e15bf1fe4164f3148abd904981cd3e690b7a1",
       "mode": 420
+    },
+    "scripts/doc_blocks.py": {
+      "sha256": "188354903e2ff95da71bda49c73db0d02ea5d1dc884c61a8c53c95a3129a0ac0",
+      "mode": 493
     },
     "scripts/evaluate_memory_recall.py": {
       "sha256": "15764f69a14ffc040f481d29b8cf95b4633378b09374570a45eab340ac3967bb",
@@ -1846,7 +1866,7 @@
       "mode": 493
     },
     "scripts/generate-garden-tls": {
-      "sha256": "63e678acd346cfdf346a0ed94d5248151748a724fbb3570271a34fcf3d48a9cf",
+      "sha256": "fe87236eef6510cfbf4ee230ebeee87b29672c4bcf6bf219894a169edc761559",
       "mode": 493
     },
     "scripts/graphiti-smoke": {
@@ -1881,6 +1901,10 @@
       "sha256": "393abfc614a1256b44f8e0fe65b1fd50c80051972a4a11f47c77b607366becc5",
       "mode": 493
     },
+    "scripts/pre-blind": {
+      "sha256": "0c292481482b5dbe838526e65d0f32abd710736c69f72f46c9248a7a415ef2ba",
+      "mode": 493
+    },
     "scripts/reference-acceptance": {
       "sha256": "bd71e1e68739ee72cac28e149ea9e81afc918aadebcf87a1c8c139f5aad5dad1",
       "mode": 493
@@ -1890,7 +1914,7 @@
       "mode": 493
     },
     "scripts/reference-posture-acceptance": {
-      "sha256": "f878ab91d8fe7fe13679f9464356211bc79d3292f4a7ed9de2ddfe6d6fbe5e0c",
+      "sha256": "ac32558e0708b59957282e490e35edab18eb751b4a4c1d2f70572fff4b9ca659",
       "mode": 493
     },
     "scripts/reference-posture-launch": {
@@ -2614,11 +2638,11 @@
       "mode": 420
     },
     "src/cairn_install/cli.py": {
-      "sha256": "f8b36fd089630bf2a7108841500414fc404428ed4d00aa228a64b96dafe4e348",
+      "sha256": "a50d00c5d2d13a7f45eac2b61f9ee90a71c89692b3339df03ff02b365c6dfa31",
       "mode": 420
     },
     "src/cairn_install/core.py": {
-      "sha256": "40bdd7d02019ff3add54d50c870490dada3e087d66f75bb32ceeee027d015b33",
+      "sha256": "ab238e3b1b706558dbc90448fb5042a1c4590013651aafb2a0d3e9eefc6733d2",
       "mode": 420
     },
     "src/cairn_install/destruction.py": {
@@ -2626,7 +2650,7 @@
       "mode": 420
     },
     "src/cairn_install/docker.py": {
-      "sha256": "18d10691c5abed56db502416922315837c7c1339e6c4185e82421ccb959acae9",
+      "sha256": "b33cc7b1dfb0795ec60e70bd06b867341b3e04f04c054adc2d046d4143237f41",
       "mode": 420
     },
     "src/cairn_install/docker_assets.py": {
@@ -2638,31 +2662,31 @@
       "mode": 420
     },
     "src/cairn_install/garden.py": {
-      "sha256": "a66172feaaf5aae92a61ab93a2c161003bb9e0169b2f979d912adb9595d8bdec",
+      "sha256": "4b7dbdc43de2b56035ef49cf55be668f47a7093e11c26a9dc9185c3f3a1be634",
       "mode": 420
     },
     "src/cairn_install/garden_native.py": {
-      "sha256": "c677fc8fe49bc363637ebabe7609f3a8135ae5ccef49c88f23787c11495c1f6e",
+      "sha256": "a39476f2305cee69c11ce6c6e4b5e33bbdb884d73710972605275fd245e13f8f",
       "mode": 420
     },
     "src/cairn_install/kubernetes.py": {
-      "sha256": "afd2da51a00ced2247f2b61e6b7ec34605105b1b680e437e4212269cfd7395df",
+      "sha256": "b87fc0c1e3b11c78dabdd811d093737beabc31ba150f43b7e0e29ad426ab31c9",
       "mode": 420
     },
     "src/cairn_install/kubernetes_assets.py": {
-      "sha256": "9489fc733f44abee1e55dccd4670b939335934a8e47bb8232a1fa2a25502a797",
+      "sha256": "51de72bf5c09d1f7893f318eb2af679db0d54539e77bb6a9e85deab3449610bb",
       "mode": 420
     },
     "src/cairn_install/kubernetes_endpoint.py": {
-      "sha256": "f0d9fd7c3838412a2226043351558d9d657b1f51ec69be59e4391eed8506ee10",
+      "sha256": "f322877318bbfdda2c60cfb31ccafa8467fab975aa0e66635f7fb207a1fc88ef",
       "mode": 420
     },
     "src/cairn_install/kubernetes_garden.py": {
-      "sha256": "e3b285195794fc90be956df664719a8e22a923bf5e5278094686d4ac90e105ae",
+      "sha256": "3933a7d04b07637143ea74da85540b425ec9c16c5a9a001d3e76902546116dca",
       "mode": 420
     },
     "src/cairn_install/kubernetes_resources.py": {
-      "sha256": "ee01eb0477401f813db2b4b1e2f80170b67d2396b7a7cb9e1ecfd527f9c49b0f",
+      "sha256": "ba8494d51988d03dc98c03553b92f4075540d62160725b17033e35e6acc1a950",
       "mode": 420
     },
     "src/cairn_install/launchd.py": {
@@ -2670,11 +2694,11 @@
       "mode": 420
     },
     "src/cairn_install/listing.py": {
-      "sha256": "d2971ade1553162c6182451320ebc0c659474251dbcfed5394036af585717544",
+      "sha256": "96740062a2ab5eb6c8250cacd629ee9db425d686846645ef475308b0413150fa",
       "mode": 420
     },
     "src/cairn_install/native.py": {
-      "sha256": "5c99a30982785e8ac2cc689ce7cd59aac5a5007cd319df1ba6f5539f637dce3a",
+      "sha256": "4d5dc01d7eba223bc1d846d7304bb0057859e3b404fd71be491c7fbd16baa11a",
       "mode": 420
     },
     "src/cairn_install/native_index.py": {
@@ -2682,7 +2706,7 @@
       "mode": 420
     },
     "src/cairn_install/output.py": {
-      "sha256": "2ec2bc9bf63f9d9b989c221cc2237eedbaba878fbf6a07eee06e4262545d67d6",
+      "sha256": "48503bea2f12c30cf2a2a858e81a2ccc29603c3800283c09203267ea32fbae4d",
       "mode": 420
     },
     "src/cairn_install/verification.py": {
@@ -2690,7 +2714,7 @@
       "mode": 420
     },
     "src/cairn_install/workflow.py": {
-      "sha256": "1fa2cc9d9ae656f3587539ab0d1abfdf5f8fcba64e4d01f235d654443157482b",
+      "sha256": "be522fa98dd4c3823e09d9558ae9f35bc13ccc62d69da97df1b0f41caf7b4335",
       "mode": 420
     },
     "src/cairn_migrate/__init__.py": {
@@ -2724,6 +2748,18 @@
     "src/cairn_migrate/verify.py": {
       "sha256": "843f9488b73295bd1f177dd89d8afb9d4a597edbc1f071f9dacae750a54efdd9",
       "mode": 420
+    },
+    "tests/acceptance/installer/attic-check.sh": {
+      "sha256": "c0fd096e70f3a66a57dc234c18591dfb89f5e7fe678198891ebf199ac41a52cd",
+      "mode": 493
+    },
+    "tests/acceptance/installer/persisted-check.sh": {
+      "sha256": "e77abbf3c05330c0d19058db437bd6080c79a9376a8c2ed4c29be67bf36e2883",
+      "mode": 493
+    },
+    "tests/acceptance/installer/semantic-check.sh": {
+      "sha256": "ea1b8ce9d1bfdfb3e6b240db5fd95f5915a097dbbc326a9718e3b80fc7827a7f",
+      "mode": 493
     },
     "tests/acceptance/kind/attic.py": {
       "sha256": "b1abf72e197d98caa24d492e145e3c5ee535a00dacf4efd87848e45f30e65996",
@@ -2782,11 +2818,11 @@
       "mode": 420
     },
     "tests/acceptance/reference/task11a-listener-pod.yaml": {
-      "sha256": "e14bfbb0d63150409ce7ff7b53e2e3e28659453c32ac63b87d55b2948e61f3c2",
+      "sha256": "addff5a8459101cc78059071409307ecd4889d04857f871ba7c4ea869ed00ace",
       "mode": 420
     },
     "tests/acceptance/reference/task11a-probe-pod.yaml": {
-      "sha256": "1a12f48639d2c152a236141497c4135efb3ddc3da6c38d0a176dc440323d9045",
+      "sha256": "1e664c49c3ec50df5183c63ba1f8628cf129e887530fc07d38dd52b62b2786fa",
       "mode": 420
     },
     "tests/administration/test_audit_read.py": {
@@ -3242,11 +3278,19 @@
       "mode": 420
     },
     "tests/deploy/test_compose_acceptance.py": {
-      "sha256": "c074793781733bdd66d8cb9d1c8f28f070ba0c1ec19f235da5b82d5440b9cdaa",
+      "sha256": "9fb6d65c539643f4c5868ad7d9ba47f8e7b32b31969a36844cff1662563eec75",
       "mode": 420
     },
     "tests/deploy/test_compose_project.py": {
       "sha256": "3a54558ec4481c467fa705bf74791a8df5999ab18deb0af6b7668d86bb1689a1",
+      "mode": 420
+    },
+    "tests/deploy/test_doc_block_coverage.py": {
+      "sha256": "9d1710756b00446d142be7a1f14556121a0d6327f1ee6b3b5d255bba0f935c1d",
+      "mode": 420
+    },
+    "tests/deploy/test_doc_blocks.py": {
+      "sha256": "d6379f82b0032f56ae02239910e3445511f7df2f3c63fc35680b53e1741b45ae",
       "mode": 420
     },
     "tests/deploy/test_falkordb_build.py": {
@@ -3265,12 +3309,16 @@
       "sha256": "1e4c772b65ac802cd8f27f37079b5d39788aa641f96213a299d1a689d06afcf3",
       "mode": 420
     },
+    "tests/deploy/test_gateway_removal_docs.py": {
+      "sha256": "c1d218ba4a01b722f67d9be6e426884592fc3ebfd16aa2527b70e39fc4276898",
+      "mode": 420
+    },
     "tests/deploy/test_generate_garden_tls.py": {
-      "sha256": "e6db27f4932def4995856778ebf4bd291b5f670b38026b89ef5920620c9cfa5c",
+      "sha256": "ba9f92bbf1c36c90f7f15db6b496db0e4927567aef18801b6da7fe7c886922df",
       "mode": 420
     },
     "tests/deploy/test_kind_acceptance.py": {
-      "sha256": "d3ef0918368abaf28d875db7168b3cd20004364c57dd0cebf3a40d35daef5209",
+      "sha256": "a0534bba8980ebc354b6827a7a3d04b5f296092faa4f23430d307742290d1e48",
       "mode": 420
     },
     "tests/deploy/test_kubernetes_image_stage.py": {
@@ -3346,11 +3394,11 @@
       "mode": 420
     },
     "tests/installer/test_cli.py": {
-      "sha256": "1a5ad428128246bf5238070f13f9647420bc2c7345b17663d3d490d02b2ba4af",
+      "sha256": "02d0a0377f66968efadef6311bea0d0f2700d16abc7b357717704544d18ff7e3",
       "mode": 420
     },
     "tests/installer/test_core.py": {
-      "sha256": "72aa58338eab4a1991a3ab2e542e3000f1694ccfd2cce96c7cc59983e08d2f1f",
+      "sha256": "50d929a535d74ee5020522d202c03209256eee5d3de99ee61b0bff7e4c19fc80",
       "mode": 420
     },
     "tests/installer/test_darwin_mounts.py": {
@@ -3358,7 +3406,7 @@
       "mode": 420
     },
     "tests/installer/test_docker.py": {
-      "sha256": "386c92afd6c5dec89a42668c5f9cc97a0d482709a295485c4f4b446a72518ea5",
+      "sha256": "fd5639e8ca9decd3890de4225fb9a103b564fbcc0c3c550fb972116d1b3d1128",
       "mode": 420
     },
     "tests/installer/test_docker_blitz_backends.py": {
@@ -3370,11 +3418,11 @@
       "mode": 420
     },
     "tests/installer/test_docs.py": {
-      "sha256": "50c28f151aa7bebbe6bdf40bebd28dcad126b8c998e86685f5c91f300a2dff1f",
+      "sha256": "ceca5749dd168d45cb8b6cc84764fd8336f7e20f8829d36e8f2c411c1eaa8d3b",
       "mode": 420
     },
     "tests/installer/test_garden.py": {
-      "sha256": "f3d57e996b5d3ede31b6ee5a6d5f26442891823629b02604b6e1d233bcfa8138",
+      "sha256": "9982b8ec4f020ddded14e4df8836f15b91fe498256aa07c4a974e01015109d63",
       "mode": 420
     },
     "tests/installer/test_garden_live.py": {
@@ -3382,15 +3430,19 @@
       "mode": 420
     },
     "tests/installer/test_garden_native.py": {
-      "sha256": "1bf727622b3a33979307ada0b020ceccc958ae0967ec4fdf7dfa80cc95411d65",
+      "sha256": "ae7b44fecc521299d034ebbd72c43ff93d0e4e7219a0780739db29b2c3821ba5",
       "mode": 420
     },
     "tests/installer/test_kubernetes.py": {
-      "sha256": "29e8e517bc594b3c4121dc0b7d145a6d49b89313d3c2019fcab3f406f704d01c",
+      "sha256": "53c6686c7d770fca94f0a093be38bba39cae84b86e7238559e85eca41f29794b",
       "mode": 420
     },
     "tests/installer/test_kubernetes_assets.py": {
-      "sha256": "381e3e2529596ea0786d3abebbaa95a5fdf71ca52ed50b43573d7a4daace51d1",
+      "sha256": "0ff8c396a6aa4b7708396155efeed1320fb1c355a3356c6152fc8b0395b6a426",
+      "mode": 420
+    },
+    "tests/installer/test_kubernetes_private_failures.py": {
+      "sha256": "12d05409ce16ab1eb5115aee08ddf08d1b4661f12b67876e9f9056abb7461685",
       "mode": 420
     },
     "tests/installer/test_listing.py": {
@@ -3414,7 +3466,7 @@
       "mode": 420
     },
     "tests/installer/test_native.py": {
-      "sha256": "48654cc0cbfc1331f5c6c9d2a26780cbee76ba61ad0e002f42a8712c0f9cd544",
+      "sha256": "6514dae81751cdde82c618435498431e253d5887c2774745a5d3d2e075bf060a",
       "mode": 420
     },
     "tests/installer/test_native_blitz_backends.py": {
@@ -3430,7 +3482,7 @@
       "mode": 420
     },
     "tests/installer/test_output_cli.py": {
-      "sha256": "8f46c7f635ec0bbd588cffdd38991f141b6e81ade0877797fd1b16e74f17d1ef",
+      "sha256": "00b67d741bf42c06f6854d94935649aeb6e7deb54cc8e7e47b4654262db117f9",
       "mode": 420
     },
     "tests/installer/test_password_resume.py": {
@@ -3438,7 +3490,7 @@
       "mode": 420
     },
     "tests/installer/test_verification.py": {
-      "sha256": "ac9b4f68db9a2cfa3b429ebcf797714704b3af430b4bb5cebd84cfe0eca0e6fa",
+      "sha256": "4193daf017e673cd27220b065c9e1608a7f387c5e83229a97aec88da7f1ed9d7",
       "mode": 420
     },
     "tests/installer/test_verified_resume.py": {
@@ -3446,7 +3498,7 @@
       "mode": 420
     },
     "tests/installer/test_workflow.py": {
-      "sha256": "44c2ff86000cd30d2fa3e416984ec2b3ed7ff5c0133da36f371a425210d4e026",
+      "sha256": "4d8a3d8083a12df61ec156c6bad3869f4e31cd09f7f490e727e40d8919ef6dd6",
       "mode": 420
     },
     "tests/migrate/test_apply.py": {
@@ -3778,7 +3830,7 @@
       "mode": 420
     },
     "uv.lock": {
-      "sha256": "4f7d6f5235e2c4bef1809751ec8180770923765739646dce235b55c201fcc967",
+      "sha256": "f46ca6734194d4187d15af75cda1c9477158fd512e99ae023a8e47b9838e8a25",
       "mode": 420
     }
   }

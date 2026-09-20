@@ -23,6 +23,7 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		cfg.Version = version
 		lease, err := maintenance.Acquire(filepath.Dir(cfg.DaemonURLFile), maintenance.Shared)
 		if err != nil {
 			return err

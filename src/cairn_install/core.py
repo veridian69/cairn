@@ -24,6 +24,11 @@ from typing import Any
 from uuid import uuid4
 
 NAME = re.compile(r"[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?")
+# uv variables that select where the runtime lives or which interpreter runs
+# it; the installer owns both, so they never come from the shell.
+_OWNED_UV_VARIABLES = frozenset(
+    {"UV_PROJECT_ENVIRONMENT", "UV_PYTHON", "UV_SYSTEM_PYTHON", "UV_NO_SYNC"}
+)
 TOKEN = re.compile(r"cairn1\.[0-9a-f-]{36}\.[A-Za-z0-9_-]{43}")
 MAX_OUTPUT = 2 * 1024 * 1024
 
@@ -499,12 +504,22 @@ class Context:
             raise InstallError("Command stdin requires private output")
         working = cwd or self.source
         command = [str(arg) for arg in argv]
+        # Children inherit the operator's proxy and index configuration
+        # (mirrors, offline caches) so fetches work on proxied hosts; only the
+        # variables that would redirect the installer's own resources are
+        # dropped. Loopback is exempt from any proxy because every readiness
+        # and identity check targets 127.0.0.1.
         environment = {
             k: v
             for k, v in os.environ.items()
-            if not k.startswith(("CAIRN_", "COMPOSE_", "UV_"))
-            and k.lower() not in {"http_proxy", "https_proxy", "all_proxy"}
+            if not k.startswith(("CAIRN_", "COMPOSE_")) and k not in _OWNED_UV_VARIABLES
         }
+        for name in ("no_proxy", "NO_PROXY"):
+            environment[name] = ",".join(
+                entry
+                for entry in (environment.get(name, ""), "127.0.0.1", "localhost")
+                if entry
+            )
         environment.update(env or {})
         prefix = " ".join(
             f"{k}={shlex.quote(v)}" for k, v in sorted((env or {}).items())
@@ -662,9 +677,13 @@ class Context:
                     )
                 self.note(f"# exit {code}", detail=True)
                 if code not in allowed:
-                    if not private and not self.verbose:
+                    if private or not self.verbose:
+                        # A private command never shows stdout; its redacted
+                        # stderr tail is the only diagnostic a tester gets.
                         excerpt = "\n".join(
-                            self.redact(errors or output).splitlines()[-8:]
+                            self.redact(
+                                errors if private else errors or output
+                            ).splitlines()[-8:]
                         )[-1600:]
                         self.note(
                             f"Command failed (exit {code})."

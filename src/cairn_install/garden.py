@@ -15,6 +15,7 @@ import socket
 import ssl
 import stat
 import time
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,10 @@ KIND = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._~:/@+%-]{0,254}")
 MAX_RESPONSE = 128 * 1024
 READY_SECONDS = 120
+
+
+class _Unavailable(InstallError):
+    """Garden answered, but its Cairn authority or store is still starting."""
 
 
 def require_listener_available(port: int, *, wildcard: bool) -> None:
@@ -116,6 +121,8 @@ def load_options(path: Path | str, mode: str) -> dict[str, Any]:
             or endpoint.path != "/mcp"
             or endpoint.query
             or endpoint.fragment
+            or endpoint.netloc.endswith(":")
+            or "%" in endpoint.netloc
         ):
             raise ValueError("HTTPS public endpoint must end in /mcp")
         if endpoint.port is not None and endpoint.port < 1:
@@ -126,9 +133,20 @@ def load_options(path: Path | str, mode: str) -> dict[str, Any]:
         try:
             address = ipaddress.ip_address(host)
         except ValueError:
+            # Resolver-specific IPv4 shorthand (integer, octal, hex or fewer
+            # octets) must not masquerade as DNS and bypass the address checks.
+            if all(
+                re.fullmatch(r"(?:[0-9]+|0[xX][0-9A-Fa-f]+)", part)
+                for part in host.rstrip(".").split(".")
+            ):
+                raise ValueError(
+                    "public endpoint requires a canonical IP address"
+                ) from None
             if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", host):
                 raise ValueError("invalid endpoint hostname") from None
         else:
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+                address = address.ipv4_mapped
             if address.is_loopback or address.is_unspecified or address.is_link_local:
                 raise ValueError("public endpoint must be externally reachable")
         scope = value["scope"]
@@ -215,6 +233,23 @@ def load_options(path: Path | str, mode: str) -> dict[str, Any]:
         return value
     except (KeyError, TypeError, ValueError, OSError) as error:
         raise InstallError("Invalid Garden options: " + str(error)) from None
+
+
+def source_version(source: Path) -> str:
+    """Release version from pyproject.toml; every built a2a binary reports it."""
+    pyproject = source / "pyproject.toml"
+    try:
+        project = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        version = project["project"]["version"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+        raise InstallError(
+            f"Cannot read source release version from {pyproject}: {error}"
+        ) from error
+    if not isinstance(version, str) or not re.fullmatch(
+        r"[0-9A-Za-z][0-9A-Za-z.+-]*", version
+    ):
+        raise InstallError(f"Source release version is invalid in {pyproject}")
+    return version
 
 
 def _state(ctx: Context) -> dict[str, Any]:
@@ -409,14 +444,19 @@ def _diagnose(ctx: Context, name: str, agent: dict[str, Any], token: str) -> Non
     ctx.save()
 
 
-def enrol(ctx: Context, admin_token: str) -> None:
-    """Create one workload principal, fixed credential and exact grant per agent."""
-    garden = _state(ctx)
-    options = garden["options"]
+def require_unexpired(options: dict[str, Any]) -> None:
+    """Refuse retained Garden options whose authority window has closed."""
     if _timestamp(options["expires_at"]) <= datetime.now(UTC):
         raise InstallError(
             "Garden authority has expired; explicit recovery is required"
         )
+
+
+def enrol(ctx: Context, admin_token: str) -> None:
+    """Create one workload principal, fixed credential and exact grant per agent."""
+    garden = _state(ctx)
+    options = garden["options"]
+    require_unexpired(options)
     ctx.add_secret(admin_token)
     validate_instance(request(ctx, "/v1/instance", admin_token), ctx.instance_id)
     agents = garden.setdefault("agents", {})
@@ -546,6 +586,7 @@ def gateway_config(
         endpoint += "/memory/v1/diagnose"
     return {
         "listen": listen,
+        "public_endpoint": options["endpoint"],
         "data_dir": data_dir,
         "daemon_url_file": daemon_url_file,
         "tls_cert_file": cert_file,
@@ -657,7 +698,14 @@ def profiles(ctx: Context) -> None:
             "Copy only this participant's directory to its agent machine, using a secure channel.\n"
             "Keep agent.token mode 0600 and this directory mode 0700. Do not distribute installer "
             "administrator credentials, issuance captures or other participants' directories.\n\n"
-            "Install a2a. " + setup + "No host session is created.\n\n"
+            "Install the a2a binary and helper scripts on this machine with "
+            "`a2a/scripts/install-user` from the Cairn source checkout. "
+            + setup
+            + "Then merge the completed profile into the host's MCP configuration with "
+            f"`garden-config --host {adapter} --profile /absolute/path/profile.json "
+            "--binary /absolute/path/a2a --config /absolute/path/to/host-mcp-config`; "
+            "the example files above show the resulting shape if you prefer to edit by hand. "
+            "No host session is created.\n\n"
             "Run `a2a doctor --profile /absolute/path/profile.json` to verify the Garden "
             "binding, then "
             "`a2a connect --profile /absolute/path/profile.json` for the MCP stdio bridge. "
@@ -708,18 +756,14 @@ class _LocalTLS(http.client.HTTPSConnection):
 def _rpc(
     connection: _LocalTLS, token: str, ident: int, method: str, params: dict[str, Any]
 ) -> dict[str, Any]:
-    # Preserve SDK localhost rebinding protection while TLS still verifies the
-    # configured public hostname. The installer connects directly/over a local
-    # port-forward, rather than asking a public virtual host to route the probe.
-    host = connection.connect_host
-    if ":" in host:
-        host = "[" + host + "]"
+    # HTTP authority and TLS SNI both use the public endpoint. Only the socket
+    # destination changes for local/port-forward checks. Let HTTPSConnection
+    # format Host, including IPv6 brackets and the default HTTPS port.
     connection.request(
         "POST",
         "/mcp",
         body=_json({"jsonrpc": "2.0", "id": ident, "method": method, "params": params}),
         headers={
-            "Host": f"{host}:{connection.connect_port}",
             "Authorization": "Bearer " + token,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -728,6 +772,9 @@ def _rpc(
         },
     )
     response = connection.getresponse()
+    if response.status == 503:
+        # Garden answers 503 while its Cairn diagnose call fails during start-up.
+        raise _Unavailable("Garden authentication is not yet available (HTTP 503)")
     if (
         response.status != 200
         or response.getheader("Content-Encoding", "identity") != "identity"
@@ -764,6 +811,10 @@ def verify(
     tls = ssl.create_default_context(cafile=garden["tls"].get("ca_file"))
     deadline = time.monotonic() + READY_SECONDS
     verified = {}
+    ctx.note(
+        f"Waiting up to {READY_SECONDS}s for Garden to accept authenticated MCP "
+        "requests from each participant."
+    )
     for name in sorted(options["participants"]):
         token_file = Path(garden["agents"][name]["token_file"])
         ctx.check_file(token_file)
@@ -804,6 +855,14 @@ def verify(
                 status = result.get("structuredContent", {})
                 if (
                     result.get("isError", False) is not False
+                    and isinstance(status, dict)
+                    and status.get("code") == "unavailable"
+                ):
+                    # The daemon accepted the token but its stream or store
+                    # is still coming up; the binding itself is not disputed.
+                    raise _Unavailable("Garden status is not yet available")
+                if (
+                    result.get("isError", False) is not False
                     or not isinstance(status, dict)
                     or status.get("binding")
                     != {
@@ -829,7 +888,7 @@ def verify(
                     + ": "
                     + (reason or error.__class__.__name__)
                 ) from None
-            except (OSError, http.client.HTTPException):
+            except (OSError, http.client.HTTPException, _Unavailable):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise InstallError(

@@ -19,6 +19,7 @@ func newHostCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		cfg.Gateway.Version = version
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return garden.RunHost(ctx, cfg)

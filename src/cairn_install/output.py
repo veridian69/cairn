@@ -25,3 +25,11 @@ def paint(text: str, kind: str, *, fd: int = 1) -> str:
     ):
         return text
     return f"{style}{text}{_RESET}"
+
+
+def features_label(semantic: bool, garden: bool) -> str:
+    """One operator-facing feature summary shared by status, listing and summaries."""
+    label = "Attic plus semantic search" if semantic else "Attic only"
+    if garden:
+        label += "; Garden"
+    return label

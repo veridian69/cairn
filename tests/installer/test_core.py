@@ -190,6 +190,39 @@ def test_environment_overrides_are_not_inherited(
         assert json.loads(output) == {}
 
 
+def test_children_keep_proxy_and_index_configuration_but_not_owned_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proxied or mirrored host must still fetch; loopback stays direct."""
+    monkeypatch.setenv("https_proxy", "http://proxy.example.invalid:3128")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.invalid:3128")
+    monkeypatch.setenv("no_proxy", "intranet.example.invalid")
+    monkeypatch.setenv("UV_INDEX_URL", "https://mirror.example.invalid/simple")
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "uv-cache"))
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(tmp_path / "hijack"))
+    monkeypatch.setenv("UV_SYSTEM_PYTHON", "1")
+    monkeypatch.setenv("CAIRN_IMAGE", "wrong")
+    with create(tmp_path) as ctx:
+        output = ctx.command(
+            [
+                sys.executable,
+                "-c",
+                "import os,json;print(json.dumps({k:v for k,v in os.environ.items() "
+                "if k.lower().endswith('_proxy') or k.startswith(('UV_', 'CAIRN_'))}))",
+            ]
+        )
+    child = json.loads(output)
+    assert child["https_proxy"] == "http://proxy.example.invalid:3128"
+    assert child["HTTP_PROXY"] == "http://proxy.example.invalid:3128"
+    assert child["UV_INDEX_URL"] == "https://mirror.example.invalid/simple"
+    assert child["UV_CACHE_DIR"] == str(tmp_path / "uv-cache")
+    assert child["no_proxy"] == "intranet.example.invalid,127.0.0.1,localhost"
+    assert child["NO_PROXY"] == "127.0.0.1,localhost"
+    assert "UV_PROJECT_ENVIRONMENT" not in child
+    assert "UV_SYSTEM_PYTHON" not in child
+    assert "CAIRN_IMAGE" not in child
+
+
 def test_state_permissions_and_name_validation(tmp_path: Path) -> None:
     with pytest.raises(InstallError):
         open_context(tmp_path, "../bad", create={})

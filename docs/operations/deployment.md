@@ -15,7 +15,7 @@ configure REST or MCP callers.
 
 ## Image and contract boundary
 
-`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.7.9`. This is a
+`deploy/images.lock` currently sets `CAIRN_IMAGE=cairn:v0.7.10`. This is a
 local build tag, not evidence of a published or registry-verified image. Build
 from a trusted checkout or supply an operator-controlled immutable image
 reference. Record the image digest with the rendered deployment manifest. Do
@@ -265,7 +265,8 @@ namespace or CIDR access.
 
 Before any namespaced operation, an administrator must provision the dedicated
 namespace and its instance label. The overlays do not create that namespace.
-Replace both values below with the site's namespace and instance name. For a new
+Replace both values below with the site's namespace and instance name; for the
+guided installer, `instance` must equal the installation `--name`. For a new
 namespace, the administrator runs:
 
 ```sh
@@ -346,7 +347,7 @@ They never put the one-time token in a Pod log or command argument.
    set -eu
    namespace='REPLACE_WITH_INSTANCE_NAMESPACE'
    site_render='/absolute/path/to/REPLACE_WITH_REVIEWED_RENDER.yaml'
-   realm='REPLACE_WITH_REALM'
+   realm='REPLACE_WITH_REALM'  # every documented verification block assumes local
    label='REPLACE_WITH_INITIAL_OPERATOR_LABEL'
    credential_file="$HOME/.config/cairn/credentials/REPLACE_WITH_INSTANCE.token"
    bootstrap_manifest="$(dirname "$site_render")/cairn-bootstrap.yaml"

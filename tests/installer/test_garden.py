@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -284,6 +285,28 @@ def test_options_validate_and_keep_only_file_references(
         garden.load_options(path, "native")
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://127.1/mcp",
+        "https://2130706433/mcp",
+        "https://0x7f000001/mcp",
+        "https://0177.0.0.1/mcp",
+        "https://127.1./mcp",
+        "https://garden.example:/mcp",
+        "https://[2001:db8::1%25eth0]/mcp",
+        "https://[::ffff:127.0.0.1]/mcp",
+    ],
+)
+def test_public_endpoint_rejects_ambiguous_authority(
+    configuration: tuple[Path, dict[str, Any]], endpoint: str
+) -> None:
+    path, raw = configuration
+    path.write_text(json.dumps(raw | {"endpoint": endpoint}))
+    with pytest.raises(InstallError):
+        garden.load_options(path, "native")
+
+
 def test_public_endpoint_port_is_independent_of_local_listener(
     configuration: tuple[Path, dict[str, Any]],
 ) -> None:
@@ -372,6 +395,7 @@ def test_enrol_is_idempotent_private_and_exactly_scoped(
             listen="0.0.0.0:8443",
             cairn_url="http://127.0.0.1:8000",
         )
+        assert cfg["public_endpoint"] == "https://garden.example.test:8443/mcp"
         assert cfg["auth"]["endpoint"] == "http://127.0.0.1:8000/memory/v1/diagnose"
         assert set(cfg["principals"].values()) == {"val", "spike", "helper"}
         garden.profiles(ctx)
@@ -735,11 +759,20 @@ def test_enrol_against_real_disposable_cairn_http(
                 assert not worker.is_alive()
 
 
+@pytest.mark.parametrize("public_port", [443, 8443, 9444])
 @pytest.mark.parametrize("problem", ["participant", "hostname", "encoding"])
 def test_tls_verification_pins_hostname_and_each_participant(
-    tmp_path: Path, configuration: tuple[Path, dict[str, Any]], problem: str
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    problem: str,
+    public_port: int,
 ) -> None:
-    path, _ = configuration
+    path, raw = configuration
+    raw["endpoint"] = f"https://garden.example.test:{public_port}/mcp"
+    path.write_text(json.dumps(raw))
+    expected_host = "garden.example.test" + (
+        f":{public_port}" if public_port != 443 else ""
+    )
     with (
         installation(tmp_path, garden.load_options(path, "native")) as ctx,
         authority(ctx) as fake,
@@ -760,7 +793,7 @@ def test_tls_verification_pins_hostname_and_each_participant(
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
-                if not self.headers["Host"].startswith("127.0.0.1:"):
+                if self.headers["Host"] != expected_host:
                     self.send_response(403)
                     self.end_headers()
                     return
@@ -862,3 +895,154 @@ def test_listener_preflight_rejects_an_occupied_garden_port(
 
         with pytest.raises(InstallError, match="Garden listener port"):
             garden.require_listener_available(port, wildcard=wildcard)
+
+
+def test_bundle_readme_points_at_install_user_and_garden_config(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        garden.profiles(ctx)
+        readmes = {
+            Path(directory).name: (Path(directory) / "README.md").read_text()
+            for directory in ctx.state["garden"]["profiles"].values()
+        }
+
+    assert set(readmes) == {"val", "spike", "helper"}
+    for name, adapter in ctx.state["garden"]["options"]["participants"].items():
+        readme = readmes[name]
+        assert "`a2a/scripts/install-user`" in readme
+        assert f"`garden-config --host {adapter} --profile" in readme
+        assert "--binary /absolute/path/a2a --config" in readme
+        assert "Install a2a. " not in readme
+
+
+@pytest.mark.parametrize("outage", ["http_503", "tool_unavailable"])
+def test_verification_retries_while_garden_authority_is_starting(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    outage: str,
+) -> None:
+    """Garden binds its listener before Cairn and its stream are reachable."""
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        binding = {
+            "instance_id": ctx.instance_id,
+            "scope": ctx.state["garden"]["options"]["scope"],
+            "classification": "internal",
+        }
+        names = {
+            Path(a["token_file"]).read_text().strip(): name
+            for name, a in ctx.state["garden"]["agents"].items()
+        }
+        outages: list[str] = []
+        pauses: list[float] = []
+        monkeypatch.setattr(time, "sleep", pauses.append)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                name = names[self.headers["Authorization"].removeprefix("Bearer ")]
+                if outage == "http_503" and not outages:
+                    outages.append(name)
+                    self.send_response(503)
+                    self.send_header("Content-Type", "text/plain")
+                    self.end_headers()
+                    self.wfile.write(b"Service Unavailable\n")
+                    return
+                if body["method"] == "initialize":
+                    result: dict[str, Any] = {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "garden", "version": "0.7.10"},
+                    }
+                elif outage == "tool_unavailable" and not outages:
+                    outages.append(name)
+                    result = {
+                        "isError": True,
+                        "structuredContent": {
+                            "code": "unavailable",
+                            "message": "Garden operation unavailable",
+                        },
+                        "content": [{"type": "text", "text": "unavailable"}],
+                    }
+                else:
+                    result = {
+                        "structuredContent": {
+                            "binding": binding,
+                            "participant": name,
+                            "generation": "2026-09-17T00:00:00Z",
+                            "participants": sorted(names.values()),
+                        }
+                    }
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {"jsonrpc": "2.0", "id": body["id"], "result": result}
+                    ).encode()
+                )
+
+            def log_message(self, *_: Any) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(
+            ctx.root / "garden/tls/server.crt", ctx.root / "garden/tls/server.key"
+        )
+        server.socket = tls.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            garden.verify(ctx, connect_port=server.server_port)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        assert len(outages) == 1 and len(pauses) == 1
+        assert set(ctx.state["garden"]["verification"]) == set(names.values())
+
+
+def test_verification_keeps_binding_mismatch_and_denial_fatal(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        monkeypatch.setattr(time, "sleep", lambda _: pytest.fail("must not retry"))
+        answers: Iterator[dict[str, Any]] = iter(
+            [
+                {"protocolVersion": "2025-11-25"},
+                {"isError": True, "structuredContent": {"code": "forbidden"}},
+            ]
+        )
+
+        def rpc(*_: Any, **__: Any) -> dict[str, Any]:
+            return next(answers)
+
+        monkeypatch.setattr(garden, "_rpc", rpc)
+        monkeypatch.setattr(
+            garden, "_LocalTLS", lambda *_: SimpleNamespace(close=lambda: None)
+        )
+        with pytest.raises(InstallError, match="differs from the retained deployment"):
+            garden.verify(ctx)

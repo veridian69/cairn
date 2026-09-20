@@ -19,11 +19,11 @@ from types import FrameType
 from typing import Any, Never
 
 from .core import InstallError, atomic_write, open_context, open_read_context
-from .output import paint
+from .output import features_label, paint
 
 DEFAULT_PORT = 8000
 MODES = ("disposable", "native", "docker", "kubernetes")
-_IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-fA-F]{64}\Z")
+_IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
 _RECEIPT_IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
 _LOCAL_IMAGE_TAG = re.compile(r"[^@\s]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 _KUBERNETES_NAMESPACE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\Z")
@@ -182,6 +182,7 @@ def _parser() -> ArgumentParser:
     parser.add_argument("--kube-image")
     parser.add_argument("--kube-preloaded-image", action="store_true", default=None)
     parser.add_argument("--kube-falkordb-receipt", type=Path)
+    parser.add_argument("--kube-garden-receipt", type=Path)
     parser.add_argument(
         "--state-root", type=Path, default=Path("~/.local/state/cairn-install")
     )
@@ -289,6 +290,7 @@ def _show_configuration(
     mode: str,
     port: int,
     semantic: bool,
+    garden: bool,
     source: Path | None,
     state_root: Path,
 ) -> None:
@@ -297,7 +299,7 @@ def _show_configuration(
     print(f"  Name: {name}")
     print(f"  Mode: {mode}")
     print(f"  Port: {port}")
-    print(f"  Features: {'Attic plus semantic search' if semantic else 'Attic only'}")
+    print(f"  Features: {features_label(semantic, garden)}")
     if source is not None:
         print(f"  Source: {source}")
     print(f"  Private state: {state_root / name}")
@@ -307,8 +309,11 @@ def _show_configuration(
     sys.stdout.flush()
 
 
-def _load_falkordb_receipt(path: Path) -> dict[str, object]:
-    source = _absolute_safe_path(path, purpose="FalkorDB receipt")
+def _load_kubernetes_receipt(
+    path: Path, *, component: str, reject_shared_writes: bool = False
+) -> dict[str, object]:
+    label = f"{component} receipt"
+    source = _absolute_safe_path(path, purpose=label)
     try:
         fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as stream:
@@ -318,23 +323,23 @@ def _load_falkordb_receipt(path: Path) -> dict[str, object]:
                 or info.st_uid != os.getuid()
                 or info.st_size > 64 * 1024
             ):
-                raise InstallError(
-                    "FalkorDB receipt must be a small owned regular file"
-                )
+                raise InstallError(f"{label} must be a small owned regular file")
+            if reject_shared_writes and stat.S_IMODE(info.st_mode) & 0o022:
+                raise InstallError(f"{label} must not be group/world-writable")
             raw = stream.read(64 * 1024 + 1)
     except OSError as error:
-        raise InstallError(f"Cannot safely read FalkorDB receipt: {error}") from error
+        raise InstallError(f"Cannot safely read {label}: {error}") from error
     try:
         value = json.loads(raw)
     except (UnicodeError, json.JSONDecodeError) as error:
-        raise InstallError("FalkorDB receipt is malformed JSON") from error
+        raise InstallError(f"{label} is malformed JSON") from error
     if not isinstance(value, dict) or set(value) != {
         "schema_version",
         "image",
         "archive_sha256",
         "nodes",
     }:
-        raise InstallError("FalkorDB receipt has an invalid schema")
+        raise InstallError(f"{label} has an invalid schema")
     image = value.get("image")
     archive = value.get("archive_sha256")
     nodes = value.get("nodes")
@@ -348,13 +353,13 @@ def _load_falkordb_receipt(path: Path) -> dict[str, object]:
         or not isinstance(nodes, list)
         or not nodes
     ):
-        raise InstallError("FalkorDB receipt has an invalid schema")
+        raise InstallError(f"{label} has an invalid schema")
     normalised_nodes: list[dict[str, str]] = []
     names: set[str] = set()
     uids: set[str] = set()
     for node in nodes:
         if not isinstance(node, dict) or set(node) != {"name", "uid"}:
-            raise InstallError("FalkorDB receipt has an invalid node record")
+            raise InstallError(f"{label} has an invalid node record")
         node_name = node.get("name")
         uid = node.get("uid")
         if (
@@ -367,7 +372,7 @@ def _load_falkordb_receipt(path: Path) -> dict[str, object]:
             or node_name in names
             or uid in uids
         ):
-            raise InstallError("FalkorDB receipt has invalid or duplicate nodes")
+            raise InstallError(f"{label} has invalid or duplicate nodes")
         names.add(node_name)
         uids.add(uid)
         normalised_nodes.append({"name": node_name, "uid": uid})
@@ -377,6 +382,18 @@ def _load_falkordb_receipt(path: Path) -> dict[str, object]:
         "archive_sha256": archive,
         "nodes": normalised_nodes,
     }
+
+
+def _load_falkordb_receipt(path: Path) -> dict[str, object]:
+    return _load_kubernetes_receipt(path, component="FalkorDB")
+
+
+def _load_garden_receipt(path: Path) -> dict[str, object]:
+    return _load_kubernetes_receipt(
+        path,
+        component="Garden",
+        reject_shared_writes=True,
+    )
 
 
 def _load_falkordb_runtime(path: Path) -> dict[str, object]:
@@ -499,7 +516,7 @@ def _kubernetes_configuration(
         )
     if not _IMAGE_DIGEST.fullmatch(image):
         raise InstallError(
-            "--kube-image must use a sha256 digest (REPOSITORY@sha256:DIGEST)",
+            "--kube-image must use a sha256 digest (REPOSITORY@sha256:DIGEST, lowercase hex)",
             "invalid_arguments",
         )
     preloaded = bool(args.kube_preloaded_image)
@@ -532,6 +549,13 @@ def _kubernetes_configuration(
                 "--kube-falkordb-receipt requires --semantic", "invalid_arguments"
             )
         options["falkordb_receipt"] = _load_falkordb_receipt(receipt_path)
+    if args.kube_garden_receipt is not None:
+        if args.garden_config is None:
+            raise InstallError(
+                "--kube-garden-receipt requires --garden-config",
+                "invalid_arguments",
+            )
+        options["garden_receipt"] = _load_garden_receipt(args.kube_garden_receipt)
     return options
 
 
@@ -608,6 +632,7 @@ def _new_configuration(
             args.kube_image,
             args.kube_preloaded_image,
             args.kube_falkordb_receipt,
+            args.kube_garden_receipt,
         )
     ):
         raise InstallError(
@@ -671,6 +696,11 @@ def _assert_resume_kubernetes_options(
             if args.kube_falkordb_receipt is not None
             else None
         ),
+        "--kube-garden-receipt": (
+            _load_garden_receipt(args.kube_garden_receipt)
+            if args.kube_garden_receipt is not None
+            else None
+        ),
     }
     requested = {flag: value for flag, value in supplied.items() if value is not None}
     if not requested:
@@ -688,6 +718,7 @@ def _assert_resume_kubernetes_options(
         "--kube-image": "image",
         "--kube-preloaded-image": "preloaded_image",
         "--kube-falkordb-receipt": "falkordb_receipt",
+        "--kube-garden-receipt": "garden_receipt",
     }
     changed = [
         flag for flag, value in requested.items() if kubernetes.get(keys[flag]) != value
@@ -786,9 +817,12 @@ def _render_result(result: object, *, operation: str, verbose: bool) -> None:
             if value := result.get(key):
                 print(f"  {label}: {value}")
         return
+    endpoint_label = (
+        "Port-forward" if result.get("mode") == "kubernetes" else "Endpoint"
+    )
     fields = (
         ("Status", "status"),
-        ("Endpoint", "endpoint"),
+        (endpoint_label, "endpoint"),
         ("State", "state"),
         ("Credential", "credential_file"),
         ("Garden", "garden_endpoint"),
@@ -858,6 +892,14 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
         raise InstallError(
             "--keep-running is only valid with install or resume", "invalid_arguments"
         )
+    if args.kube_garden_receipt is not None and operation not in {
+        "install",
+        "resume",
+    }:
+        raise InstallError(
+            "--kube-garden-receipt is only valid with install or resume",
+            "invalid_arguments",
+        )
     if args.yes and operation != "blitz":
         raise InstallError(
             "--yes is only valid with blitz",
@@ -908,6 +950,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 mode=ctx.mode,
                 port=ctx.port,
                 semantic=ctx.semantic,
+                garden="garden" in ctx.state,
                 source=None,
                 state_root=state_root,
             )
@@ -933,6 +976,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 mode=ctx.mode,
                 port=ctx.port,
                 semantic=ctx.semantic,
+                garden="garden" in ctx.state,
                 source=None,
                 state_root=state_root,
             )
@@ -966,12 +1010,30 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 {"source": str(source), "source_fingerprint": fingerprint},
             )
             _assert_resume_core_options(ctx.state, args)
+            if args.kube_garden_receipt is not None:
+                if ctx.mode != "kubernetes":
+                    raise InstallError(
+                        "--kube-* options require --mode kubernetes",
+                        "invalid_arguments",
+                    )
+                garden = ctx.state.get("garden")
+                if not isinstance(garden, dict) or not isinstance(
+                    garden.get("options"), dict
+                ):
+                    raise InstallError(
+                        "--kube-garden-receipt requires managed Garden",
+                        "invalid_arguments",
+                    )
             _assert_resume_kubernetes_options(ctx.state, args)
             _assert_resume_falkordb_runtime(ctx.state, args)
             if args.garden_config is not None:
-                from .garden import load_options
+                from .garden import load_options, require_unexpired
 
                 saved = ctx.state.get("garden", {}).get("options")
+                # Expired retained authority needs recovery; reporting the
+                # unchanged file's stale expires_at would misdirect the operator.
+                if isinstance(saved, dict) and "expires_at" in saved:
+                    require_unexpired(saved)
                 if saved != load_options(args.garden_config, ctx.mode):
                     raise InstallError(
                         "Recorded Garden options differ; resume with the original configuration"
@@ -982,6 +1044,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 mode=ctx.mode,
                 port=ctx.port,
                 semantic=ctx.semantic,
+                garden="garden" in ctx.state,
                 source=source,
                 state_root=state_root,
             )
@@ -1009,6 +1072,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
         mode=mode,
         port=port,
         semantic=semantic,
+        garden=args.garden_config is not None,
         source=source,
         state_root=state_root,
     )
@@ -1030,6 +1094,14 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
         garden_options = load_options(args.garden_config, mode)
         if garden_options["port"] == port:
             raise InstallError("Garden and Cairn need different listening ports")
+        if kubernetes_options is not None:
+            garden_receipt = kubernetes_options.get("garden_receipt")
+            if isinstance(garden_receipt, dict) and garden_receipt.get(
+                "image"
+            ) != garden_options.get("image"):
+                raise InstallError(
+                    "Garden receipt image differs from Garden configuration"
+                )
         create["garden"] = {"options": garden_options}
         print(f"  Garden HTTPS endpoint: {garden_options['endpoint']}")
         print("  Garden data: preserved by restart/rollback; deleted by blitz")
