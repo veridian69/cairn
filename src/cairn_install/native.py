@@ -394,9 +394,10 @@ class Backend:
             self.stop()
         if self._index is not None:
             self._index.rollback()
-        self.ctx.note(
-            f"Rollback retained configuration, data and credentials under {self.ctx.root}."
-        )
+        self.ctx.note(self._rollback_notice())
+
+    def _rollback_notice(self) -> str:
+        return f"Rollback retained configuration, data and credentials under {self.ctx.root}."
 
     def validate_blitz_inventory(self) -> None:
         """Prove all survivors before a sibling service begins deletion."""
@@ -876,11 +877,19 @@ class Backend:
                 f"Native vendor drop-in policy changed for {self._service_name()}"
             )
         if record_policy:
+            output_context = getattr(self.ctx, "parent", self.ctx)
+            reported = getattr(output_context, "_reported_vendor_dropins", None)
+            if reported is None:
+                reported = set()
+                output_context.__dict__["_reported_vendor_dropins"] = reported
             for item in expected_files:
-                self.ctx.note(
-                    "Accepted system vendor user-service drop-in "
-                    f"{item['path']} with SHA256 {item['sha256']}."
-                )
+                identity = (item["path"], item["sha256"])
+                if identity not in reported:
+                    self.ctx.note(
+                        "Accepted system vendor user-service drop-in "
+                        f"{item['path']} with SHA256 {item['sha256']}."
+                    )
+                    reported.add(identity)
 
     def _unit_delete_is_reconcilable(self, unit_path: Path) -> bool:
         value = self.ctx.state["resources"].get("native_unit_delete_intent")

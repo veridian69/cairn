@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "drystane-cairn"
 # A release has the same identity in source and history-free exports.
-version = "0.7.9"
+version = "0.7.10"
 description = "A scoped, evidence-aware memory authority"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -93,7 +93,7 @@ packages = ["src/cairn", "src/cairn_install"]
 required-version = "==0.12.14"
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers --cov=cairn --cov-branch --cov-report=term-missing"
+addopts = "--strict-config --strict-markers --cov=cairn --cov=cairn_install --cov-branch --cov-report=term-missing"
 testpaths = ["tests"]
 filterwarnings = [
   "error::ResourceWarning",
@@ -107,7 +107,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["cairn"]
+source = ["cairn", "cairn_install"]
 
 [tool.mypy]
 python_version = "3.12"

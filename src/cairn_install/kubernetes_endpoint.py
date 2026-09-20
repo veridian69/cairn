@@ -44,6 +44,8 @@ class EndpointProcess:
         self.close()
         with socket.socket() as check:
             try:
+                # kubectl's Go listener binds through TIME_WAIT; match it.
+                check.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 check.bind(("127.0.0.1", self.local_port))
             except OSError as error:
                 raise InstallError(
@@ -163,37 +165,42 @@ class EndpointProcess:
             if type(pid) is not int or pid <= 1:
                 raise InstallError("Recorded port-forward process identity is invalid")
             process = Path("/proc") / str(pid)
-            try:
-                stat = (process / "stat").read_text().rsplit(")", 1)[1].split()
-                boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-                if (
-                    record.get("boot_id") != boot
-                    or record.get("start_time") != stat[19]
-                    or record.get("cmdline") != (process / "cmdline").read_bytes().hex()
-                    or process.stat().st_uid != os.getuid()
-                    or os.getpgid(pid) != pid
-                ):
-                    raise InstallError(
-                        "Recorded port-forward process identity changed; refusing to signal"
-                    )
-                with defer_spawn_signals():
-                    stop_process_group(pid)
-            except (FileNotFoundError, ProcessLookupError):
-                # A dead/reaped leader does not imply that its group is empty.
-                # With no leader identity, a surviving group cannot be safely
-                # attributed to this endpoint: retain the journal and refuse.
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            # A different boot proves nothing from that endpoint survives; any
+            # PID or group ID match now belongs to an unrelated process, so
+            # drop the record without signalling.
+            if record.get("boot_id") == boot:
                 try:
-                    os.killpg(pid, 0)
-                except ProcessLookupError:
-                    pass
-                except PermissionError as error:
-                    raise InstallError(
-                        "Cannot verify recorded endpoint process group identity"
-                    ) from error
-                else:
-                    raise InstallError(
-                        "Recorded endpoint process group survives its leader; identity cannot be verified"
-                    )
+                    stat = (process / "stat").read_text().rsplit(")", 1)[1].split()
+                    if (
+                        record.get("start_time") != stat[19]
+                        or record.get("cmdline")
+                        != (process / "cmdline").read_bytes().hex()
+                        or process.stat().st_uid != os.getuid()
+                        or os.getpgid(pid) != pid
+                    ):
+                        raise InstallError(
+                            "Recorded port-forward process identity changed; refusing to signal"
+                        )
+                    with defer_spawn_signals():
+                        stop_process_group(pid)
+                except (FileNotFoundError, ProcessLookupError):
+                    # A dead/reaped leader does not imply that its group is
+                    # empty. With no leader identity, a surviving group cannot
+                    # be safely attributed to this endpoint: retain the journal
+                    # and refuse.
+                    try:
+                        os.killpg(pid, 0)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError as error:
+                        raise InstallError(
+                            "Cannot verify recorded endpoint process group identity"
+                        ) from error
+                    else:
+                        raise InstallError(
+                            "Recorded endpoint process group survives its leader; identity cannot be verified"
+                        )
         if "endpoint" in self.record:
             self.record.pop("endpoint")
             self.ctx.save()

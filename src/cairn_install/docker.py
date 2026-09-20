@@ -9,17 +9,58 @@ import re
 import secrets
 import socket
 import stat
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import garden
 from .core import Context, InstallError
 from .docker_assets import FALKORDB_IMAGE, render_compose, render_config
+from .garden import source_version
 
 _INSTANCE_LABEL = "io.cairn.install.instance"
 _RUN_LABEL = "io.cairn.install.run"
 _PREFLIGHT_LABEL = "io.cairn.install.preflight"
 _CONFIG_PATH = "/etc/cairn/config.yaml"
+_SOURCE_DIGEST_LABEL = "io.cairn.source.digest"
+_VCS_REVISION_LABEL = "org.opencontainers.image.revision"
+_BRIDGE_READY_SECONDS = 30
+
+
+def _clean_git_revision(source: Path) -> str | None:
+    """Return HEAD only when source is exactly a clean Git worktree root."""
+
+    def git(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(source), *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+
+    try:
+        top = git("rev-parse", "--show-toplevel")
+        if (
+            top.returncode != 0
+            or Path(top.stdout.strip()).resolve() != source.resolve()
+        ):
+            return None
+        revision_result = git("rev-parse", "--verify", "HEAD")
+        status = git("status", "--porcelain=v1", "--untracked-files=all")
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    revision = revision_result.stdout.strip().lower()
+    if (
+        revision_result.returncode != 0
+        or status.returncode != 0
+        or status.stdout
+        or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", revision) is None
+    ):
+        return None
+    return revision
+
 
 _SERVER_CODE = """\
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -400,6 +441,13 @@ class Backend:
         label_arguments: list[str] = []
         for label, value in self._owner_labels.items():
             label_arguments.extend(["--label", f"{label}={value}"])
+        fingerprint = str(self.ctx.state.get("source_fingerprint", "unknown"))
+        label_arguments.extend(
+            ["--label", f"{_SOURCE_DIGEST_LABEL}=sha256:{fingerprint}"]
+        )
+        revision = _clean_git_revision(self.ctx.source)
+        if revision is not None:
+            label_arguments.extend(["--label", f"{_VCS_REVISION_LABEL}={revision}"])
         self._command(
             [
                 "docker",
@@ -407,7 +455,7 @@ class Backend:
                 "--pull=false",
                 *label_arguments,
                 "--build-arg",
-                f"REVISION={self.ctx.state.get('source_fingerprint', 'unknown')}",
+                f"VERSION={source_version(self.ctx.source)}",
                 "--tag",
                 reference,
                 str(source),
@@ -1103,7 +1151,10 @@ class Backend:
             )
             self._require_probe_owned("container", server, token)
             ready = False
-            for _ in range(10):
+            # A cold image on a loaded daemon can take well over the few
+            # seconds ten back-to-back probes allow; bound by wall clock.
+            deadline = time.monotonic() + _BRIDGE_READY_SECONDS
+            while True:
                 output = self._command(
                     [
                         "docker",
@@ -1119,6 +1170,9 @@ class Backend:
                 if output.strip() == "ready":
                     ready = True
                     break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.5)
             if not ready:
                 raise InstallError(
                     "Docker bridge preflight server did not become ready"

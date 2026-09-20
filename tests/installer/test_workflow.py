@@ -504,3 +504,22 @@ def test_failed_foreground_cleanup_is_recorded_before_context_unlock(
         assert ctx.state["status"] == "failed"
         assert "owned child did not stop" in ctx.state["last_error"]
         assert ctx.state["verified_recheck"] is True
+
+
+def test_status_and_summary_report_managed_garden_as_a_feature(
+    tmp_path: Path,
+) -> None:
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "native",
+            "port": 19000,
+            "semantic": False,
+            "garden": {"options": {"endpoint": "https://garden.example.test/mcp"}},
+        },
+    ) as ctx:
+        result = workflow.status_install(ctx)
+
+    assert result["features"] == "Attic only; Garden"

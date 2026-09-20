@@ -45,6 +45,9 @@ func New(ctx context.Context, cfg Config) (s *Server, err error) {
 		principals[k] = v
 	}
 	cfg.Principals = principals
+	if cfg.Version == "" {
+		cfg.Version = "dev"
+	}
 	auth, err := gardenauth.New(cfg.Auth)
 	if err != nil {
 		return nil, err
@@ -173,6 +176,10 @@ func (s *Server) Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		if s.cfg.PublicEndpoint != "" && !matchesPublicAuthority(s.cfg.PublicEndpoint, r.Host) {
+			http.Error(w, "invalid Host header", http.StatusForbidden)
+			return
+		}
 		if len(r.Header.Values("Origin")) != 0 {
 			http.Error(w, "origin forbidden", 403)
 			return
@@ -193,9 +200,11 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 128*1024)
-		server := mcp.NewServer(&mcp.Implementation{Name: "garden", Version: "0.1.0"}, nil)
+		server := mcp.NewServer(&mcp.Implementation{Name: "garden", Version: s.cfg.Version}, nil)
 		s.register(server, id, token)
-		h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, PropagateRequestCancellation: true})
+		// Our explicit authority check replaces the SDK loopback heuristic only
+		// for configured endpoints; Origin rejection and authentication still apply.
+		h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, PropagateRequestCancellation: true, DisableLocalhostProtection: s.cfg.PublicEndpoint != ""})
 		h.ServeHTTP(w, r)
 	})
 }

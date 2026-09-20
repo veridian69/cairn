@@ -5,10 +5,12 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 MODULE = Path(__file__).absolute().parent.parent
@@ -45,6 +47,23 @@ def absolute_destination(value):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def release_version():
+    """Read the release identity shared with Cairn's source distribution."""
+    pyproject = MODULE.parent / "pyproject.toml"
+    regular_path(pyproject)
+    try:
+        value = tomllib.loads(pyproject.read_text())["project"]["version"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(
+            f"cannot read release version from {pyproject}: {error}"
+        ) from error
+    if not isinstance(value, str) or re.fullmatch(
+        r"[0-9A-Za-z][0-9A-Za-z.+-]*", value
+    ) is None:
+        raise ValueError(f"invalid release version in {pyproject}")
+    return value
 
 
 def atomic_write(path, data, mode):
@@ -164,9 +183,10 @@ def main(kind="user"):
         if args.binary is not None and not os.access(args.binary, os.X_OK):
             raise ValueError(f"binary must be executable: {args.binary}")
 
+        build_version = release_version() if args.binary is None else None
         if args.dry_run:
             if args.binary is None:
-                print(f"Would build: make -C {MODULE} build")
+                print(f"Would build: make -C {MODULE} VERSION={build_version} build")
             for relative in sources:
                 print(f"Would install: {root / relative}")
             for relative in preserved:
@@ -177,7 +197,10 @@ def main(kind="user"):
             return 0
 
         if args.binary is None:
-            subprocess.run(["make", "-C", str(MODULE), "build"], check=True)
+            subprocess.run(
+                ["make", "-C", str(MODULE), f"VERSION={build_version}", "build"],
+                check=True,
+            )
         binary = sources[prefix / "bin/a2a"]
         regular_path(binary)
         if not binary.is_file() or not os.access(binary, os.X_OK):

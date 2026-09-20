@@ -7,7 +7,12 @@ from typing import Any
 import pytest
 import yaml
 
-from cairn_install.kubernetes_assets import asset_envelope, render_holder, render_site
+from cairn_install.kubernetes_assets import (
+    _constrain_required_node_names,
+    asset_envelope,
+    render_holder,
+    render_site,
+)
 
 ROOT = Path(__file__).parents[2]
 KUBERNETES_NAMESPACE = "cairn-install-namespace"
@@ -270,6 +275,185 @@ def test_local_falkordb_receipt_changes_only_the_falkordb_workload() -> None:
     ]
 
 
+def test_local_garden_receipt_constrains_initial_cairn_and_holder_only() -> None:
+    garden_image = "registry.example/garden@sha256:" + "d" * 64
+    output = asset_envelope(
+        raw=_source("kubernetes-retrieval.yaml"),
+        namespace=KUBERNETES_NAMESPACE,
+        instance_name=INSTANCE_NAME,
+        instance_id=INSTANCE_ID,
+        image="registry.example/cairn@sha256:" + "a" * 64,
+        storage_class="fast-rwop",
+        semantic=True,
+        owner_labels=OWNER_LABELS,
+        image_policy="Always",
+        garden_enabled=True,
+        garden_receipt={
+            "schema_version": 1,
+            "image": garden_image,
+            "archive_sha256": "e" * 64,
+            "nodes": [
+                {"name": "worker-a", "uid": "uid-a"},
+                {"name": "worker-b", "uid": "uid-b"},
+            ],
+        },
+        falkordb_receipt={
+            "schema_version": 1,
+            "image": "registry.example/falkordb@sha256:" + "b" * 64,
+            "archive_sha256": "c" * 64,
+            "nodes": [{"name": "worker-c", "uid": "uid-c"}],
+        },
+    )
+    documents = output["documents"]
+    cairn = _named(documents, "StatefulSet", "cairn")["spec"]["template"]["spec"]
+    falkordb = _named(documents, "StatefulSet", "falkordb")["spec"]["template"]["spec"]
+    holder = output["holder_document"]["spec"]
+    garden_requirement = {
+        "matchFields": [
+            {
+                "key": "metadata.name",
+                "operator": "In",
+                "values": ["worker-a", "worker-b"],
+            }
+        ]
+    }
+
+    assert cairn["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"] == [garden_requirement]
+    assert holder["affinity"] == cairn["affinity"]
+    assert falkordb["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"] == [
+        {
+            "matchFields": [
+                {
+                    "key": "metadata.name",
+                    "operator": "In",
+                    "values": ["worker-c"],
+                }
+            ]
+        }
+    ]
+
+    resumed = asset_envelope(
+        site=output["site"],
+        holder=output["holder"],
+        namespace=KUBERNETES_NAMESPACE,
+        instance_name=INSTANCE_NAME,
+        instance_id=INSTANCE_ID,
+        image="registry.example/cairn@sha256:" + "a" * 64,
+        storage_class="fast-rwop",
+        semantic=True,
+        owner_labels=OWNER_LABELS,
+        image_policy="Always",
+        garden_enabled=True,
+        garden_receipt={
+            "schema_version": 1,
+            "image": garden_image,
+            "archive_sha256": "e" * 64,
+            "nodes": [
+                {"name": "worker-a", "uid": "uid-a"},
+                {"name": "worker-b", "uid": "uid-b"},
+            ],
+        },
+        falkordb_receipt={
+            "schema_version": 1,
+            "image": "registry.example/falkordb@sha256:" + "b" * 64,
+            "archive_sha256": "c" * 64,
+            "nodes": [{"name": "worker-c", "uid": "uid-c"}],
+        },
+    )
+    assert resumed["site"] == output["site"]
+    assert resumed["holder"] == output["holder"]
+
+
+def test_garden_without_receipt_keeps_registry_pull_and_unconstrained_placement() -> (
+    None
+):
+    output = asset_envelope(
+        raw=_source("kubernetes.yaml"),
+        namespace=KUBERNETES_NAMESPACE,
+        instance_name=INSTANCE_NAME,
+        instance_id=INSTANCE_ID,
+        image="registry.example/cairn@sha256:" + "a" * 64,
+        storage_class="fast-rwop",
+        semantic=False,
+        owner_labels=OWNER_LABELS,
+        image_policy="Always",
+        garden_enabled=True,
+    )
+    cairn = _named(output["documents"], "StatefulSet", "cairn")["spec"]["template"][
+        "spec"
+    ]
+    assert "affinity" not in cairn
+    assert "affinity" not in output["holder_document"]["spec"]
+
+
+def test_garden_node_constraint_is_anded_into_every_existing_required_term() -> None:
+    pod: dict[str, Any] = {
+        "affinity": {
+            "nodeAffinity": {
+                "preferredDuringSchedulingIgnoredDuringExecution": [
+                    {"weight": 1, "preference": {"matchExpressions": []}}
+                ],
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
+                        {
+                            "matchExpressions": [
+                                {"key": "zone", "operator": "In", "values": ["a"]}
+                            ]
+                        },
+                        {
+                            "matchFields": [
+                                {
+                                    "key": "metadata.name",
+                                    "operator": "NotIn",
+                                    "values": ["retired"],
+                                }
+                            ]
+                        },
+                    ]
+                },
+            },
+            "podAntiAffinity": {"preferredDuringSchedulingIgnoredDuringExecution": []},
+        }
+    }
+    preferred = deepcopy(
+        pod["affinity"]["nodeAffinity"][
+            "preferredDuringSchedulingIgnoredDuringExecution"
+        ]
+    )
+    anti = deepcopy(pod["affinity"]["podAntiAffinity"])
+
+    _constrain_required_node_names(pod, ["worker-a", "worker-b"])
+
+    terms = pod["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"]
+    requirement = {
+        "key": "metadata.name",
+        "operator": "In",
+        "values": ["worker-a", "worker-b"],
+    }
+    assert all(requirement in term["matchFields"] for term in terms)
+    assert terms[0]["matchExpressions"] == [
+        {"key": "zone", "operator": "In", "values": ["a"]}
+    ]
+    assert terms[1]["matchFields"][0] == {
+        "key": "metadata.name",
+        "operator": "NotIn",
+        "values": ["retired"],
+    }
+    assert (
+        pod["affinity"]["nodeAffinity"][
+            "preferredDuringSchedulingIgnoredDuringExecution"
+        ]
+        == preferred
+    )
+    assert pod["affinity"]["podAntiAffinity"] == anti
+
+
 def test_render_site_refuses_an_unrecognised_rendered_resource() -> None:
     """Accepting a new overlay object without review would exceed the installer boundary."""
     documents = _documents(_source("kubernetes.yaml"))
@@ -331,6 +515,8 @@ def test_render_holder_derives_a_safe_waiting_pod_from_the_rendered_cairn_templa
     assert holder["spec"]["serviceAccountName"] == source_spec["serviceAccountName"]
     assert holder["spec"]["securityContext"] == source_spec["securityContext"]
     assert holder["spec"]["restartPolicy"] == "Never"
+    assert source_spec["terminationGracePeriodSeconds"] == 60
+    assert holder["spec"]["terminationGracePeriodSeconds"] == 1
     assert container["name"] == "cairn-bootstrap"
     assert container["image"] == source_spec["containers"][0]["image"]
     assert (

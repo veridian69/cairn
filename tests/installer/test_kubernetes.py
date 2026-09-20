@@ -19,6 +19,7 @@ import yaml
 from cairn_install.core import Context, InstallError
 
 IMAGE = "registry.example/cairn@sha256:" + "a" * 64
+GARDEN_IMAGE = "registry.example/garden@sha256:" + "b" * 64
 LABELS = {
     "cairn.example.invalid/instance-id": "11111111-1111-4111-8111-111111111111",
     "cairn.example.invalid/run-id": "22222222-2222-4222-8222-222222222222",
@@ -87,13 +88,25 @@ class Cluster(Context):
         self.uid_counts: dict[str, int] = {}
         self.uv_version = "uv 0.12.14"
         self.driver = "csi.example"
+        self.volume_binding_mode = "Immediate"
+        self.reclaim_policy = "Delete"
+        self.missing: set[str] = set()  # cluster-scoped kinds that 404
+        self.holder_status: dict[str, Any] | None = None
+        self.fail_holder_wait = False
         self.allowed = True
         self.denied_permissions: set[tuple[str, str, str]] = set()
         self.fail_probe = False
         self.fail_rollout = False
         self.probe_failure_message: str | None = None
+        self.probe_status: dict[str, Any] | None = None
         self.falkordb_probe_mutation: str | None = None
+        self.garden_probe_mutation: str | None = None
+        self.garden_probe_status: dict[str, Any] | None = None
+        self.combined_garden_probe_mutation: str | None = None
         if semantic:
+            # A FalkorDB receipt pins falkordb-0, so its pre-created claim
+            # must bind topology-aware.
+            self.volume_binding_mode = "WaitForFirstConsumer"
             self.state["kubernetes"]["falkordb_receipt"] = {
                 "schema_version": 1,
                 "image": "cairn.local/falkordb-runtime@sha256:" + "b" * 64,
@@ -145,6 +158,23 @@ class Cluster(Context):
                     doc["status"]["containerStatuses"][0]["imageID"] = (
                         "docker-pullable://wrong.example/image@sha256:" + "d" * 64
                     )
+            if doc["metadata"]["name"].startswith("garden-cache-"):
+                if self.garden_probe_mutation == "image":
+                    doc["spec"]["containers"][0]["image"] = "mutated.example/image:tag"
+                elif self.garden_probe_mutation == "pull-policy":
+                    doc["spec"]["containers"][0]["imagePullPolicy"] = "Always"
+                elif self.garden_probe_mutation == "node":
+                    doc["spec"]["nodeName"] = "other-node"
+                elif self.garden_probe_mutation == "image-id":
+                    doc["status"]["containerStatuses"][0]["imageID"] = (
+                        "docker-pullable://wrong.example/image@sha256:" + "d" * 64
+                    )
+                elif self.garden_probe_mutation == "exit":
+                    doc["status"]["containerStatuses"][0]["state"]["terminated"][
+                        "exitCode"
+                    ] = 1
+                if self.garden_probe_status is not None:
+                    doc["status"] = copy.deepcopy(self.garden_probe_status)
             if (self.fail_probe or self.probe_failure_message) and doc["metadata"][
                 "name"
             ].startswith("cairn-probe-"):
@@ -164,6 +194,43 @@ class Cluster(Context):
                         }
                     ],
                 }
+            if self.probe_status is not None and doc["metadata"]["name"].startswith(
+                "cairn-probe-"
+            ):
+                doc["status"] = copy.deepcopy(self.probe_status)
+            if (
+                self.holder_status is not None
+                and doc["metadata"]["name"] == "cairn-bootstrap"
+            ):
+                doc["status"] = copy.deepcopy(self.holder_status)
+            if doc["metadata"]["name"].startswith("cairn-probe-"):
+                garden_index = next(
+                    (
+                        index
+                        for index, container in enumerate(doc["spec"]["containers"])
+                        if container["name"] == "garden-probe"
+                    ),
+                    None,
+                )
+                if garden_index is not None:
+                    if self.combined_garden_probe_mutation == "image":
+                        doc["spec"]["containers"][garden_index]["image"] = (
+                            "mutated.example/image:tag"
+                        )
+                    elif self.combined_garden_probe_mutation == "pull-policy":
+                        doc["spec"]["containers"][garden_index]["imagePullPolicy"] = (
+                            "Always"
+                        )
+                    elif self.combined_garden_probe_mutation == "node":
+                        doc["spec"]["nodeName"] = "other-node"
+                    elif self.combined_garden_probe_mutation == "image-id":
+                        doc["status"]["containerStatuses"][garden_index]["imageID"] = (
+                            "docker-pullable://wrong.example/image@sha256:" + "d" * 64
+                        )
+                    elif self.combined_garden_probe_mutation == "image-id-suffix":
+                        doc["status"]["containerStatuses"][garden_index]["imageID"] += (
+                            "00"
+                        )
         self.objects[key] = doc
         if doc["kind"] == "StatefulSet":
             for claim in doc["spec"]["volumeClaimTemplates"]:
@@ -229,6 +296,12 @@ class Cluster(Context):
                     ]
                 }
             )
+        if args[0] == "get" and args[1] in {"namespace", "storageclass", "csidriver"}:
+            # Real kubectl exits 1 on NotFound unless --ignore-not-found is given.
+            if args[1] in self.missing:
+                if "--ignore-not-found" in args:
+                    return ""
+                raise InstallError("Command failed with exit 1")
         if args[:2] == ["get", "namespace"]:
             return json.dumps(self.namespace)
         if args[:2] == ["get", "nodes"]:
@@ -236,7 +309,13 @@ class Cluster(Context):
         if args[:2] == ["get", "node"]:
             return json.dumps(self.nodes[0])
         if args[:2] == ["get", "storageclass"]:
-            return json.dumps({"provisioner": self.driver})
+            return json.dumps(
+                {
+                    "provisioner": self.driver,
+                    "volumeBindingMode": self.volume_binding_mode,
+                    "reclaimPolicy": self.reclaim_policy,
+                }
+            )
         if args[:2] == ["get", "csidriver"]:
             return json.dumps({"metadata": {"name": self.driver}})
         if args[:2] == ["auth", "can-i"]:
@@ -254,7 +333,12 @@ class Cluster(Context):
                 self.allowed
                 and (args[2], resource, subresource) not in self.denied_permissions
             )
-            return "yes\n" if allowed else "no\n"
+            if allowed:
+                return "yes\n"
+            # Real kubectl (>= 1.19) prints "no" and exits 1.
+            if 1 not in kwargs.get("allowed", (0,)):
+                raise InstallError("Command failed with exit 1")
+            return "no\n"
         if args[:2] == ["create", "secret"]:
             data = {}
             for arg in args:
@@ -277,6 +361,8 @@ class Cluster(Context):
                 self.put(document)
             return ""
         if args[0] == "get":
+            if "namespace" in self.missing:
+                return ""  # --ignore-not-found also covers a missing namespace
             obj = self.objects.get(args[1].lower())
             return json.dumps(obj) if obj else ""
         if args[:2] == ["delete", "--raw"]:
@@ -291,6 +377,12 @@ class Cluster(Context):
             return ""
         if args[:2] == ["wait", "--for=delete"]:
             raise AssertionError("Deletion must use exact GET, not List/Watch")
+        if (
+            args[0] == "wait"
+            and "pod/cairn-bootstrap" in args
+            and self.fail_holder_wait
+        ):
+            raise InstallError("Command failed with exit 1")
         if args[0] == "scale" and "--replicas=0" in args:
             self.objects.pop("pod/" + args[1].split("/", 1)[1] + "-0", None)
             return ""
@@ -563,6 +655,92 @@ def test_failed_probe_never_replays_untrusted_termination_message(
 
     assert "provider-secret" not in str(caught.value)
     assert "Exact-image probe failed" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_elapsed"), [("Pending", 180), ("Failed", 0)]
+)
+def test_probe_reports_gateway_and_garden_image_pull_failures(
+    garden_cluster: Cluster,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    expected_elapsed: int,
+) -> None:
+    from cairn_install import kubernetes
+
+    ctx = garden_cluster
+    ctx.state["semantic"] = True
+    clock = DeletionClock()
+    monkeypatch.setattr(kubernetes, "time", clock, raising=False)
+    gateway = (
+        "shared egress gateway cairn-egress-gateway.cairn-egress:3128 is not "
+        "resolvable; install docs/operations/kubernetes-gateway.md"
+    )
+    ctx.probe_status = {
+        "phase": phase,
+        "containerStatuses": [
+            {
+                "name": "probe",
+                "state": {
+                    "terminated": {
+                        "exitCode": 1,
+                        "reason": "Error",
+                        "message": gateway,
+                    }
+                },
+            },
+            {
+                "name": "garden-probe",
+                "state": {
+                    "waiting": {
+                        "reason": "ImagePullBackOff",
+                        "message": "provider-secret-value",
+                    }
+                },
+            },
+        ],
+    }
+
+    with pytest.raises(InstallError) as caught:
+        backend(ctx).preflight()
+
+    message = str(caught.value)
+    assert gateway in message
+    assert "container garden-probe waiting ImagePullBackOff" in message
+    assert "provider-secret-value" not in message
+    assert clock.elapsed == expected_elapsed
+
+
+def test_pending_probe_timeout_reports_only_safe_container_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn_install import kubernetes
+
+    ctx = Cluster(tmp_path)
+    ctx.probe_status = {
+        "phase": "Pending",
+        "containerStatuses": [
+            {
+                "name": "probe",
+                "state": {
+                    "waiting": {
+                        "reason": "ContainerCreating",
+                        "message": "provider-secret-value",
+                    }
+                },
+            }
+        ],
+    }
+    clock = DeletionClock()
+    monkeypatch.setattr(kubernetes, "time", clock, raising=False)
+
+    with pytest.raises(InstallError) as caught:
+        backend(ctx).preflight()
+
+    message = str(caught.value)
+    assert "did not finish within 180s" in message
+    assert "container probe waiting ContainerCreating" in message
+    assert "provider-secret-value" not in message
 
 
 def test_prepare_protects_credentials_and_records_creation_before_mutation(
@@ -1481,11 +1659,13 @@ def garden_cluster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Cluster:
     import types
 
     ctx = Cluster(tmp_path)
+    # Garden mounts two pre-created claims in one Pod: topology-aware binding.
+    ctx.volume_binding_mode = "WaitForFirstConsumer"
     ctx.state["garden"] = {
         "options": {
             "endpoint": "https://garden.example.invalid:9443/mcp",
             "port": 9443,
-            "image": "registry.example/garden@sha256:" + "b" * 64,
+            "image": GARDEN_IMAGE,
             "kubernetes_service_type": "ClusterIP",
             "allowed_cidrs": ["192.0.2.0/24"],
         }
@@ -1515,6 +1695,259 @@ def garden_cluster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Cluster:
     module.require_listener_available = require_listener_available  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "cairn_install.garden", module)
     return ctx
+
+
+def garden_receipt(ctx: Cluster, *nodes: tuple[str, str]) -> None:
+    ctx.state["kubernetes"]["garden_receipt"] = {
+        "schema_version": 1,
+        "image": GARDEN_IMAGE,
+        "archive_sha256": "c" * 64,
+        "nodes": [{"name": name, "uid": uid} for name, uid in nodes],
+    }
+    ctx.volume_binding_mode = "WaitForFirstConsumer"
+    for node in ctx.nodes:
+        node_info = node.setdefault("status", {}).setdefault("nodeInfo", {})
+        node_info.update(
+            operatingSystem="linux",
+            architecture="amd64",
+            containerRuntimeVersion="containerd://2.1.4",
+        )
+
+
+def test_garden_receipt_backend_rejects_invalid_or_mismatched_input(
+    garden_cluster: Cluster,
+) -> None:
+    ctx = garden_cluster
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    ctx.state["kubernetes"]["garden_receipt"]["schema_version"] = True
+    with pytest.raises(InstallError, match="Invalid Kubernetes Garden receipt"):
+        backend(ctx)
+
+    ctx.state["kubernetes"]["garden_receipt"]["schema_version"] = 1
+    ctx.state["kubernetes"]["garden_receipt"]["image"] = (
+        "registry.example/other@sha256:" + "d" * 64
+    )
+    with pytest.raises(InstallError, match="differs from Garden options"):
+        backend(ctx)
+
+
+def test_garden_receipt_requires_managed_garden(tmp_path: Path) -> None:
+    ctx = Cluster(tmp_path)
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    with pytest.raises(InstallError, match="requires managed Garden"):
+        backend(ctx)
+
+
+@pytest.mark.parametrize(
+    ("node_change", "message"),
+    [
+        ({"uid": "replacement"}, "UID or eligibility"),
+        ({"unschedulable": True}, "UID or eligibility"),
+        ({"runtime": "cri-o://1.31"}, "UID or eligibility"),
+        ({"runtime": "containerd://"}, "UID or eligibility"),
+        ({"node_os": "windows"}, "UID or eligibility"),
+        ({"node_arch": "arm64"}, "UID or eligibility"),
+        ({"duplicate_ready": True}, "UID or eligibility"),
+    ],
+)
+def test_garden_receipt_rejects_recreated_or_ineligible_nodes(
+    garden_cluster: Cluster, node_change: dict[str, object], message: str
+) -> None:
+    ctx = garden_cluster
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    if "uid" in node_change:
+        ctx.nodes[0]["metadata"]["uid"] = node_change["uid"]
+    if "unschedulable" in node_change:
+        ctx.nodes[0]["spec"]["unschedulable"] = node_change["unschedulable"]
+    if "runtime" in node_change:
+        ctx.nodes[0]["status"]["nodeInfo"]["containerRuntimeVersion"] = node_change[
+            "runtime"
+        ]
+    if "node_os" in node_change:
+        ctx.nodes[0]["status"]["nodeInfo"]["operatingSystem"] = node_change["node_os"]
+    if "node_arch" in node_change:
+        ctx.nodes[0]["status"]["nodeInfo"]["architecture"] = node_change["node_arch"]
+    if "duplicate_ready" in node_change:
+        ctx.nodes[0]["status"]["conditions"].append({"type": "Ready", "status": "True"})
+
+    with pytest.raises(InstallError, match=message):
+        backend(ctx).preflight()
+
+
+def test_garden_receipt_requires_wait_for_first_consumer_before_any_probe(
+    garden_cluster: Cluster,
+) -> None:
+    ctx = garden_cluster
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    ctx.volume_binding_mode = "Immediate"
+
+    with pytest.raises(InstallError, match="WaitForFirstConsumer"):
+        backend(ctx).preflight()
+    assert not any(args[-3:] == ["create", "-f", "-"] for args, _ in ctx.calls)
+
+
+def test_garden_receipt_probes_every_node_and_constrains_combined_probe(
+    garden_cluster: Cluster,
+) -> None:
+    ctx = garden_cluster
+    second = copy.deepcopy(ctx.nodes[0])
+    second["metadata"].update(name="node2", uid="uid-node2")
+    ctx.nodes.append(second)
+    garden_receipt(ctx, ("node1", "uid-node1"), ("node2", "uid-node2"))
+
+    backend(ctx).preflight()
+
+    pods = [
+        yaml.safe_load(kw["stdin_data"])
+        for args, kw in ctx.calls
+        if args[-3:] == ["create", "-f", "-"]
+        and yaml.safe_load(kw["stdin_data"])["kind"] == "Pod"
+    ]
+    cache_probes = [
+        pod for pod in pods if pod["metadata"]["name"].startswith("garden-cache-")
+    ]
+    assert len(cache_probes) == 2
+    assert all(
+        pod["spec"]["containers"]
+        == [
+            {
+                "name": "garden-cache-probe",
+                "image": GARDEN_IMAGE,
+                "imagePullPolicy": "Never",
+                "command": ["/usr/local/bin/a2a", "--version"],
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "readOnlyRootFilesystem": True,
+                    "capabilities": {"drop": ["ALL"]},
+                },
+            }
+        ]
+        for pod in cache_probes
+    )
+    assert {
+        pod["spec"]["affinity"]["nodeAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]["nodeSelectorTerms"][0]["matchFields"][0]["values"][0]
+        for pod in cache_probes
+    } == {"node1", "node2"}
+    combined = next(
+        pod for pod in pods if pod["metadata"]["name"].startswith("cairn-probe-")
+    )
+    assert all(pods.index(probe) < pods.index(combined) for probe in cache_probes)
+    assert combined["spec"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"] == [
+        {
+            "matchFields": [
+                {
+                    "key": "metadata.name",
+                    "operator": "In",
+                    "values": ["node1", "node2"],
+                }
+            ]
+        }
+    ]
+    assert {
+        container["name"]: container["imagePullPolicy"]
+        for container in combined["spec"]["containers"]
+    } == {"probe": "Always", "garden-probe": "Never"}
+    assert not any(key.startswith("pod/garden-cache-") for key in ctx.objects)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["image", "pull-policy", "node", "image-id", "exit"]
+)
+def test_garden_receipt_rejects_mutated_or_missing_cache_attestation(
+    garden_cluster: Cluster, mutation: str
+) -> None:
+    ctx = garden_cluster
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    ctx.garden_probe_mutation = mutation
+
+    with pytest.raises(InstallError, match="Garden exact-image cache probe failed"):
+        backend(ctx).preflight()
+    assert not any(key.startswith("pod/garden-cache-") for key in ctx.objects)
+
+
+def test_garden_missing_cache_reports_safe_restage_guidance(
+    garden_cluster: Cluster,
+) -> None:
+    ctx = garden_cluster
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    ctx.garden_probe_status = {
+        "phase": "Failed",
+        "containerStatuses": [
+            {
+                "name": "garden-cache-probe",
+                "state": {
+                    "waiting": {
+                        "reason": "ErrImageNeverPull",
+                        "message": "sensitive runtime detail",
+                    }
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(InstallError) as caught:
+        backend(ctx).preflight()
+    message = str(caught.value)
+    assert "ErrImageNeverPull" in message
+    assert "re-stage the Garden image on every receipt node" in message
+    assert "sensitive runtime detail" not in message
+    assert not any(
+        yaml.safe_load(kw["stdin_data"])["metadata"]["name"].startswith("cairn-probe-")
+        for args, kw in ctx.calls
+        if args[-3:] == ["create", "-f", "-"]
+        and yaml.safe_load(kw["stdin_data"])["kind"] == "Pod"
+    )
+    assert not any(key.startswith("pod/garden-cache-") for key in ctx.objects)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["image", "pull-policy", "node", "image-id", "image-id-suffix"]
+)
+def test_garden_receipt_rejects_mutated_combined_probe_attestation(
+    garden_cluster: Cluster, mutation: str
+) -> None:
+    ctx = garden_cluster
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    ctx.combined_garden_probe_mutation = mutation
+
+    with pytest.raises(InstallError, match="Exact image execution"):
+        backend(ctx).preflight()
+    assert not any(key.startswith("pod/cairn-probe-") for key in ctx.objects)
+    assert not any(
+        key.startswith("persistentvolumeclaim/cairn-probe-") for key in ctx.objects
+    )
+
+
+def test_garden_receipt_placement_and_never_policy_survive_attachment_and_lifecycle(
+    garden_cluster: Cluster,
+) -> None:
+    ctx = garden_cluster
+    garden_receipt(ctx, ("node1", "uid-node1"))
+    adapter = backend(ctx)
+    adapter.preflight()
+    adapter.prepare()
+    initial = ctx.objects["statefulset/cairn"]["spec"]["template"]["spec"]
+    placement = copy.deepcopy(initial["affinity"])
+    assert adapter.holder_document["spec"]["affinity"] == placement
+
+    adapter.garden_prepare()
+    attached = ctx.objects["statefulset/cairn"]["spec"]["template"]["spec"]
+    assert attached["affinity"] == placement
+    assert {
+        container["name"]: container["imagePullPolicy"]
+        for container in attached["containers"]
+    } == {"cairn": "Always", "garden": "Never"}
+
+    adapter.stop()
+    assert ctx.objects["pod/cairn-bootstrap"]["spec"]["affinity"] == placement
+    adapter.start()
+    adapter.rollback()
+    adapter.blitz()
+    assert not ctx.objects
 
 
 def test_garden_initial_prepare_does_not_start_before_enrolment(
@@ -1853,3 +2286,199 @@ def test_garden_permission_policy_drift_is_not_ignored(garden_cluster: Cluster) 
     with pytest.raises(InstallError, match="template drift"):
         adapter.garden_prepare()
     assert not any("patch" in args for args, _ in ctx.calls)
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [
+        ("namespace", "namespace is missing"),
+        ("storageclass", "StorageClass is missing"),
+        ("csidriver", "CSI driver is not registered"),
+    ],
+)
+def test_preflight_names_missing_cluster_scoped_objects(
+    tmp_path: Path, kind: str, message: str
+) -> None:
+    """A bare NotFound exit gives a tester nothing; the read must name the object."""
+    ctx = Cluster(tmp_path)
+    ctx.missing.add(kind)
+    with pytest.raises(InstallError, match=message):
+        backend(ctx).preflight()
+    assert not mutations(ctx)
+    reads = [args for args, _ in ctx.calls if args[3:5] == ["get", kind]]
+    assert reads and all("--ignore-not-found" in args for args in reads)
+
+
+def test_preflight_refuses_retain_reclaim_policy_before_any_probe_volume(
+    tmp_path: Path,
+) -> None:
+    ctx = Cluster(tmp_path)
+    ctx.reclaim_policy = "Retain"
+    with pytest.raises(InstallError, match="Retain"):
+        backend(ctx).preflight()
+    assert not mutations(ctx)
+
+
+def test_falkordb_receipt_requires_wait_for_first_consumer_before_any_probe(
+    tmp_path: Path,
+) -> None:
+    ctx = Cluster(tmp_path, semantic=True)
+    ctx.volume_binding_mode = "Immediate"
+    with pytest.raises(InstallError, match="WaitForFirstConsumer"):
+        backend(ctx).preflight()
+    assert not mutations(ctx)
+
+
+def test_garden_without_receipt_requires_wait_for_first_consumer_before_any_probe(
+    garden_cluster: Cluster,
+) -> None:
+    ctx = garden_cluster
+    ctx.volume_binding_mode = "Immediate"
+    with pytest.raises(InstallError, match="WaitForFirstConsumer"):
+        backend(ctx).preflight()
+    assert not mutations(ctx)
+
+
+def test_plain_cairn_accepts_immediate_binding(tmp_path: Path) -> None:
+    ctx = Cluster(tmp_path)
+    assert ctx.volume_binding_mode == "Immediate"
+    backend(ctx).preflight()
+
+
+def test_permission_denial_is_reported_by_name_not_as_kubectl_exit_status(
+    tmp_path: Path,
+) -> None:
+    """Real kubectl exits 1 for a "no" answer; the harness now does the same."""
+    ctx = Cluster(tmp_path)
+    ctx.denied_permissions.add(("create", "pods", "exec"))
+    with pytest.raises(InstallError) as caught:
+        backend(ctx).preflight()
+    assert str(caught.value) == "Kubernetes permission required: create pods/exec"
+    assert not any(args[-3:] == ["create", "-f", "-"] for args, _ in ctx.calls)
+
+
+def test_holder_readiness_failure_reports_the_pod_state(tmp_path: Path) -> None:
+    ctx, adapter = prepared(tmp_path)
+    ctx.fail_holder_wait = True
+    ctx.holder_status = {
+        "phase": "Pending",
+        "containerStatuses": [
+            {
+                "name": "cairn-bootstrap",
+                "state": {
+                    "waiting": {
+                        "reason": "ImagePullBackOff",
+                        "message": "untrusted provider-secret-value",
+                    }
+                },
+            }
+        ],
+    }
+    with pytest.raises(InstallError) as caught:
+        adapter.stop()
+    message = str(caught.value)
+    assert (
+        "pod/cairn-bootstrap: container cairn-bootstrap waiting ImagePullBackOff"
+        in message
+    )
+    assert "provider-secret-value" not in message
+
+
+def test_resumed_stop_finishes_its_own_accepted_holder_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PID 1 sleep ignores SIGTERM: the holder lingers Terminating after DELETE."""
+    from cairn_install import kubernetes_resources
+
+    ctx, adapter = prepared(tmp_path)
+    adapter.stop()
+    previous = ctx.objects["pod/cairn-bootstrap"]["metadata"]["uid"]
+    clock = DeletionClock()
+    monkeypatch.setattr(kubernetes_resources, "time", clock, raising=False)
+    original = ctx.command
+    reads_after_delete: int | None = None
+    interrupted = False
+
+    def lingering_termination(argv: Sequence[str], **kwargs: Any) -> str:
+        nonlocal reads_after_delete, interrupted
+        args = list(argv)
+        raw = args[args.index("--raw") + 1] if "--raw" in args else ""
+        if "delete" in args and raw.endswith("/pods/cairn-bootstrap"):
+            holder = ctx.objects["pod/cairn-bootstrap"]
+            assert json.loads(kwargs["stdin_data"])["preconditions"]["uid"] == previous
+            holder["metadata"]["deletionTimestamp"] = "2026-09-20T00:00:00Z"
+            reads_after_delete = 0
+            if not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt
+            return "{}"
+        if (
+            "get" in args
+            and "pod/cairn-bootstrap" in args
+            and reads_after_delete is not None
+        ):
+            reads_after_delete += 1
+            if reads_after_delete > 3:
+                ctx.objects.pop("pod/cairn-bootstrap", None)
+                reads_after_delete = None  # gone; a fresh holder may now appear
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(ctx, "command", lingering_termination)
+    with pytest.raises(KeyboardInterrupt):
+        adapter.start()
+    assert ctx.objects["pod/cairn-bootstrap"]["metadata"].get("deletionTimestamp")
+    ctx.state = json.loads((ctx.directory / "state.json").read_text())
+    receipt = ctx.state["resources"]["kubernetes"]["objects"]["pod/cairn-bootstrap"]
+    assert receipt["phase"] == "deleting"
+
+    backend(ctx).stop()
+
+    holder = ctx.objects["pod/cairn-bootstrap"]
+    assert holder["metadata"]["uid"] != previous
+    assert "deletionTimestamp" not in holder["metadata"]
+    receipt = ctx.state["resources"]["kubernetes"]["objects"]["pod/cairn-bootstrap"]
+    assert receipt["phase"] == "live" and receipt["uid"] == holder["metadata"]["uid"]
+    assert receipt["previous_uid"] == previous
+    assert clock.elapsed < 180
+
+
+def test_endpoint_record_from_a_previous_boot_is_dropped_without_signalling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a reboot the recorded PID can only belong to an unrelated process."""
+    install_tunnel_binary(tmp_path, monkeypatch)
+    ctx, adapter = prepared(tmp_path)
+    adapter.open_endpoint()
+    try:
+        ctx.state["resources"]["kubernetes"]["endpoint"]["boot_id"] = "previous-boot"
+        resumed = backend(ctx)
+        resumed.close_endpoint()
+        assert "endpoint" not in ctx.state["resources"]["kubernetes"]
+        assert adapter.endpoint.process.poll() is None
+        resumed.rollback()
+        assert "pod/cairn-bootstrap" not in ctx.objects
+    finally:
+        adapter.close_endpoint()
+
+
+def test_blitz_finishes_after_namespace_deletion_but_changed_uid_still_refuses(
+    tmp_path: Path,
+) -> None:
+    ctx, adapter = prepared(tmp_path)
+    ctx.namespace["metadata"]["uid"] = "replacement-namespace-uid"
+    ctx.calls.clear()
+    with pytest.raises(InstallError, match="UID changed"):
+        backend(ctx).blitz()
+    assert not mutations(ctx)
+
+    ctx.namespace["metadata"]["uid"] = "namespace-uid"
+    ctx.missing.add("namespace")
+    with pytest.raises(InstallError, match="namespace is missing"):
+        backend(ctx).validate_ownership()
+    ctx.calls.clear()
+    backend(ctx).blitz()
+    assert not mutations(ctx)
+    receipts = ctx.state["resources"]["kubernetes"]["objects"]
+    assert receipts and all(r["phase"] == "deleted" for r in receipts.values())
+    assert ctx.state["resources"]["kubernetes"]["namespace_uid"] == "namespace-uid"
+    backend(ctx).blitz()

@@ -37,7 +37,7 @@ Four modes, two feature choices:
 
 | Mode | What you get | Features |
 | --- | --- | --- |
-| `disposable` | Throwaway check on loopback; process stopped after verification, data retained for inspection | Attic only |
+| `disposable` | Throwaway check on loopback; process stopped after verification (or kept in the foreground with `--keep-running`), data retained for inspection | Attic only |
 | `native` | Persistent `systemd --user` service on Linux, or per-user launchd service on macOS | Linux: Attic only or Attic plus semantic search; macOS: Attic only |
 | `docker` | Persistent Compose project with volumes | Attic only, or Attic plus semantic search |
 | `kubernetes` | One named instance in an existing, administrator-prepared namespace | Attic only, or Attic plus semantic search |
@@ -76,7 +76,9 @@ interactively; the non-interactive forms below make the same choices explicit
 ./cairn-install --non-interactive --mode docker --name notes-docker --port 8124
 ```
 
-For semantic installs, first [build FalkorDB locally](../deploy/falkordb/README.md).
+For semantic Kubernetes, first complete the administrator
+[early gateway check](operations/guided-installation.md#check-the-shared-gateway-before-building-images).
+For semantic installs, then [build FalkorDB locally](../deploy/falkordb/README.md).
 Pass the resulting `--falkordb-runtime` descriptor for Docker/native installs,
 or prepare the Kubernetes nodes and pass `--kube-falkordb-receipt`. Cairn ships
 the recipe; each operator retains their built image and its digest.
@@ -90,11 +92,14 @@ or paste it into a transcript. The
 [key-file procedure](operations/guided-installation.md#supply-the-openai-key-without-exposing-it)
 also shows how to supply a file you protected yourself.
 
-A successful run prints each stage, then a summary ending in `Status: verified`
-with the endpoint, the state file, the administrator credential path and one
-`Transcript:` line. Verified means the authenticated identity, the exact Attic
+A successful run prints each stage, then a summary that begins with
+`Status: verified` and lists the endpoint (for Kubernetes, a port-forward
+command), the state file and the administrator credential path, followed by
+one `Transcript:` line. Verified means the authenticated identity, the exact Attic
 bytes, semantic retrieval when chosen, and retention across a restart all
-passed. Persistent modes are left running on `http://127.0.0.1:PORT`;
+passed. A fresh write can still return `503 evidence_pending` on its first
+read while delivery is queued; retry after the indicated `Retry-After` delay.
+Persistent modes are left running on `http://127.0.0.1:PORT`;
 disposable mode stops its process. Continue with the
 [client guide](clients.md) using the credential file it named. On any failure,
 fix the reported problem and resume:
@@ -135,17 +140,15 @@ the installer does, to deploy to Kubernetes, or to develop Cairn.
 
 ## Obtain a trusted checkout
 
-Use the repository URL supplied by your distributor. In the following block,
-replace `REPLACE_WITH_TRUSTED_REPOSITORY_URL` with that URL; it is the only
-substitution. Do not put a password or token in the URL. Use your Git client's
-credential manager if the distributor requires authentication.
+The public repository on GitHub, [veridian69/cairn](https://github.com/veridian69/cairn),
+is the distribution source. Clone it and record the revision you install from;
+to install a specific release, check out its tag after cloning and record that
+revision instead.
 
 ```sh
 mkdir -p "$HOME/projects"
 cd "$HOME/projects"
-repository_url='REPLACE_WITH_TRUSTED_REPOSITORY_URL'
-test "$repository_url" != REPLACE_WITH_TRUSTED_REPOSITORY_URL
-git clone "$repository_url" cairn
+git clone https://github.com/veridian69/cairn.git cairn
 cd cairn
 git rev-parse HEAD
 ```

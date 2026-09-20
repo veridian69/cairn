@@ -1,5 +1,5 @@
-.PHONY: sync fetch-kubectl check check-cairn-mcp test test-backup test-restore contract render compose-config \
-	image smoke-image kind-acceptance compose-acceptance reference-acceptance \
+.PHONY: sync fetch-kubectl check check-cairn-mcp check-a2a test test-backup test-restore contract render compose-config \
+	image smoke-image kind-acceptance pre-blind compose-acceptance reference-acceptance \
 	reference-posture-acceptance reference-posture-launch
 
 IMAGE ?= cairn:dev
@@ -8,6 +8,7 @@ IMAGES_LOCK = deploy/images.lock
 RENDER_DIR = deploy/kustomize/rendered
 COMPOSE_DIR = deploy/compose
 CAIRN_MCP_DIR = cairn-mcp
+A2A_DIR = a2a
 # P-69: the pins reach Compose from $(IMAGES_LOCK) itself, and the
 # instance parameters from the committed example. Both compositions are
 # validated — with and without the retrieval overlay — because an overlay
@@ -75,6 +76,13 @@ check-cairn-mcp:
 	cd $(CAIRN_MCP_DIR) && go vet ./...
 	cd $(CAIRN_MCP_DIR) && go test ./...
 	cd $(CAIRN_MCP_DIR) && go test -race ./...
+
+# The Garden component ships with the distribution, so its Go suite, offline
+# installer tests and build-version check gate the repository like cairn-mcp.
+# Blind acceptance found `a2a --version` reporting `dev` while this suite
+# was only run by hand.
+check-a2a:
+	$(MAKE) -C $(A2A_DIR) check
 
 # P-30: both copies of each artefact and its digest come from one render.
 # The generator writes to stdout and this target owns the paths. The
@@ -154,7 +162,7 @@ compose-config:
 	FALKORDB_CONFIG_FILE=./falkordb.conf \
 		$(COMPOSE) -f $(COMPOSE_DIR)/compose.graphiti.yaml config -q
 
-check: check-cairn-mcp
+check: check-cairn-mcp check-a2a
 	uv lock --check
 	./scripts/check-license
 	uv run --locked ruff check .
@@ -187,6 +195,13 @@ smoke-image:
 # takes minutes, none of which belongs in a host gate.
 kind-acceptance:
 	IMAGE=$(IMAGE) ./scripts/kind-acceptance
+
+# The blind-acceptance rehearsal: every guided installer mode and feature on
+# a real host, driven through the documented procedures and the blind
+# tester's own independent checks. On demand, never part of `check`; run it
+# on the reference host before handing a release to a blind tester.
+pre-blind:
+	./scripts/pre-blind
 
 # P-69's production-target evidence tier. Like kind acceptance, this is
 # deliberately on demand: it builds images and creates disposable Docker

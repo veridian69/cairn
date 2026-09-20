@@ -301,14 +301,14 @@ class SplitTests(unittest.TestCase):
     def test_makefile_and_default_coverage_remain_intact(self):
         self.assertEqual(
             hashlib.sha256((ROOT / "Makefile").read_bytes()).hexdigest(),
-            "8b11b5326eb984b5943afb98410789c5059c7eaec9b02f73412b79b1d12d8de9",
+            "b4fc7d8e298e9e351919f6951b8f6f2530327a68f7dfc46be7e1332c6e26fddc",
         )
         import tomllib
 
         config = tomllib.loads((ROOT / "pyproject.toml").read_text())
         self.assertEqual(
             config["tool"]["pytest"]["ini_options"]["addopts"],
-            "--strict-config --strict-markers --cov=cairn "
+            "--strict-config --strict-markers --cov=cairn --cov=cairn_install "
             "--cov-branch --cov-report=term-missing",
         )
         self.assertTrue(config["tool"]["coverage"]["run"]["branch"])

@@ -18,13 +18,19 @@ import (
 
 // Config binds a single daemon and storage directory to Cairn authority.
 type Config struct {
-	Listen        string            `json:"listen"`
-	DataDir       string            `json:"data_dir"`
-	DaemonURLFile string            `json:"daemon_url_file"`
-	TLSCertFile   string            `json:"tls_cert_file,omitempty"`
-	TLSKeyFile    string            `json:"tls_key_file,omitempty"`
-	Auth          gardenauth.Config `json:"auth"`
-	Principals    map[string]string `json:"principals"`
+	// PublicEndpoint restricts HTTP Host to the advertised authority, including
+	// when a reverse proxy or kubectl port-forward connects through loopback.
+	PublicEndpoint string            `json:"public_endpoint,omitempty"`
+	Listen         string            `json:"listen"`
+	DataDir        string            `json:"data_dir"`
+	DaemonURLFile  string            `json:"daemon_url_file"`
+	TLSCertFile    string            `json:"tls_cert_file,omitempty"`
+	TLSKeyFile     string            `json:"tls_key_file,omitempty"`
+	Auth           gardenauth.Config `json:"auth"`
+	Principals     map[string]string `json:"principals"`
+	// Version is the build's release version, reported as the MCP server
+	// version. It is set by the command, never read from configuration.
+	Version string `json:"-"`
 }
 
 // LoadConfig reads bounded JSON and rejects unknown fields or trailing values.
@@ -60,6 +66,11 @@ func canonicalUUID(s string) bool {
 	return err == nil && u.String() == s && u != uuid.Nil
 }
 func (c Config) validate() error {
+	if c.PublicEndpoint != "" {
+		if _, _, _, err := endpointAuthority(c.PublicEndpoint); err != nil {
+			return err
+		}
+	}
 	host, _, err := net.SplitHostPort(c.Listen)
 	if err != nil {
 		return errors.New("Garden listen must be host:port")

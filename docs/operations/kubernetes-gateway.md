@@ -51,6 +51,19 @@ The only other operator values are:
   directory created there for the baseline, final manifests, digests, selected
   profile and Cairn source revision.
 
+For a lab without an existing site GitOps checkout, create a separate local
+record repository once (no remote is required):
+
+```bash
+mkdir "$HOME/cairn-site-gitops"
+git init --initial-branch=main "$HOME/cairn-site-gitops"
+```
+
+The directory must be new; do not initialise over an unrelated directory. Use
+that absolute path for `gateway_gitops_root` below and configure your normal Git
+author identity before the later record commit. Production sites should use
+their approved GitOps repository and review process.
+
 Changing the allow-list changes every retrieval-enabled Cairn instance on the
 cluster. Include only destinations approved for all of them.
 
@@ -236,7 +249,17 @@ profile, followed by SHA-256 digests for `gateway.yaml` and the derived
 namespace-only manifest. Review both manifests, the profile, revision and
 digests. Add all six generated files to the site repository, complete its
 normal review and commit them before the cluster checks. Do not apply
-`baseline.yaml`; it exists to make the allow-list change reviewable.
+`baseline.yaml`; it exists to make the allow-list change reviewable. A
+repository created by the first block of this guide has no author identity
+yet; set `user.name` and `user.email` in it before committing.
+
+```sh
+git -C "$gateway_gitops_root" add -- cairn-egress
+git -C "$gateway_gitops_root" commit --quiet --message 'Add cairn-egress gateway record'
+git -C "$gateway_gitops_root" status --porcelain -- cairn-egress
+```
+
+Expect no output from the final status line.
 
 ## Check access and prepare the namespace
 
@@ -274,9 +297,9 @@ printf 'Committed gateway record: %s at %s\n' "$gateway_record_relative" \
 
 kubectl config current-context
 for check in 'get namespaces' 'create namespaces' 'patch namespaces'; do
-  # Namespace is cluster-scoped. Keep these checks separate from the
-  # namespace-scoped loop below so kubectl does not emit its misleading
-  # "resource is not namespace scoped" warning.
+  # Namespace is cluster-scoped. Pinned kubectl may still print
+  # "resource is not namespace scoped" here. That warning is harmless;
+  # each permission check must return yes.
   test "$(kubectl auth can-i $check)" = yes
 done
 for check in \
@@ -596,14 +619,25 @@ kubectl get -f "$gateway_objects" --ignore-not-found
 Deleting the dedicated namespace is optional and requires one additional
 inventory. Run this only when the namespace was created for this gateway and
 contains no objects except the controller-created `default` ServiceAccount and
-`kube-root-ca.crt` ConfigMap; otherwise leave the namespace in place for the
-administrator.
+`kube-root-ca.crt` ConfigMap and historical Events; otherwise leave the namespace
+in place for the administrator. Wait for gateway Pods and Cilium endpoints to
+vanish before collecting the inventory. A timeout or unrelated resource leaves
+the namespace intact; do not delete controller endpoints by hand.
 
 ```bash
 test "$(kubectl get namespace "$gateway_namespace" \
   -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}')" = \
   cairn-egress-gateway
-kubectl api-resources --verbs=list --namespaced -o name | while read -r resource; do
+kubectl wait --namespace "$gateway_namespace" --for=delete pod \
+  --selector app.kubernetes.io/name=cairn-egress-gateway --timeout=120s
+namespaced_resources="$(kubectl api-resources --verbs=list --namespaced -o name)"
+if printf '%s\n' "$namespaced_resources" | grep -Fxq ciliumendpoints.cilium.io; then
+  kubectl wait --namespace "$gateway_namespace" --for=delete \
+    ciliumendpoints.cilium.io --all --timeout=120s
+fi
+# Reset the temporary inventory so a retry cannot retain stale objects.
+: > "$gateway_inventory"
+printf '%s\n' "$namespaced_resources" | while read -r resource; do
   kubectl get --namespace "$gateway_namespace" "$resource" \
     --ignore-not-found -o name >> "$gateway_inventory"
 done
@@ -614,7 +648,11 @@ import sys
 
 observed = set(Path(sys.argv[1]).read_text().splitlines())
 allowed = {"serviceaccount/default", "configmap/kube-root-ca.crt"}
-unexpected = sorted(observed - allowed)
+# Events record past activity; they are not surviving workloads or credentials.
+unexpected = sorted(
+    item for item in observed - allowed
+    if not item.startswith(("event/", "event.events.k8s.io/"))
+)
 if unexpected:
     raise SystemExit("namespace contains unexpected objects: " + ", ".join(unexpected))
 PY

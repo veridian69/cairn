@@ -129,6 +129,7 @@ def manager(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]]:
 def test_garden_unit_uses_separate_receipts_and_preserves_data_on_rollback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     commands = manager(monkeypatch, tmp_path)
     with context(tmp_path) as ctx:
@@ -144,6 +145,12 @@ def test_garden_unit_uses_separate_receipts_and_preserves_data_on_rollback(
         assert "PartOf=cairn-install-demo.service" in unit.read_text()
         assert " host --config " in unit.read_text()
         backend.rollback()
+        output = capsys.readouterr().out
+        assert (
+            f"Rollback retained Garden configuration and data under {ctx.root / 'garden'}."
+            in output
+        )
+        assert "retained configuration, data and credentials" not in output
         assert not unit.exists()
         assert data.read_text() == "message history\n"
         assert ctx.state["resources"]["native_unit"] == original
@@ -208,3 +215,41 @@ def test_foreign_cairn_unit_blocks_blitz_before_garden_is_stopped(
             blitz_install(ctx)
         assert (tmp_path / "units" / "cairn-install-demo-garden.service").exists()
         assert not any("stop" in argv or "disable" in argv for argv in commands)
+
+
+def test_native_build_stamps_the_release_version_and_keeps_go_caches_owned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "cairn"\nversion = "9.9.9"\n'
+    )
+    builds: list[tuple[list[str], Path | None, dict[str, str] | None]] = []
+
+    def command(self: Context, argv: list[str], **kwargs: Any) -> str:
+        if argv[:2] == ["go", "build"]:
+            builds.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            Path(argv[argv.index("-o") + 1]).write_text("#!/bin/sh\n")
+        return ""
+
+    monkeypatch.setattr(Context, "command", command)
+    with context(tmp_path) as ctx:
+        backend = GardenBackend(ctx)
+        backend.binary.parent.mkdir(parents=True, mode=0o700)
+        backend._prepare_binary()  # noqa: SLF001
+        garden_root = ctx.root / "garden"
+        assert backend.binary.stat().st_mode & 0o777 == 0o755
+        assert str(backend.binary) in ctx.state["owned_files"]
+
+    [(argv, cwd, env)] = builds
+    assert cwd == tmp_path / "a2a"
+    assert "-trimpath" in argv and "-mod=readonly" in argv
+    assert argv[argv.index("-ldflags") + 1] == (
+        "-s -w -X github.com/veridian69/cairn/a2a/cmd.version=9.9.9"
+    )
+    assert env == {
+        "CGO_ENABLED": "0",
+        "GOCACHE": str(garden_root / "go-build"),
+        "GOMODCACHE": str(garden_root / "go-mod"),
+        "GOFLAGS": "-modcacherw",
+        "XDG_CONFIG_HOME": str(garden_root / "go-config"),
+    }

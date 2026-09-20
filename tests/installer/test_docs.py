@@ -51,9 +51,9 @@ def test_kubernetes_guided_installation_documents_operator_interface() -> None:
         "Replace kube_image with the distributor-supplied immutable image before running",
         '--kube-image "$kube_image"',
         "--semantic",
-        "--provider-key-file /home/operator/.config/cairn/openai-api-key",
-        "--state-root /home/operator/.local/state/cairn-install",
-        "--source /home/operator/projects/cairn",
+        '--kube-falkordb-receipt "$PWD/build/falkordb-local/kubernetes-receipt.json"',
+        '--provider-key-file "$HOME/.local/state/cairn-openai-key"',
+        "./cairn-install --non-interactive --mode kubernetes --name cairn-v05",
         "--kube-preloaded-image",
         "normal registry path",
         "registry-credential policy",
@@ -138,5 +138,22 @@ def test_installation_docs_make_external_inputs_and_shared_gateway_boundaries_ex
         in garden
     )
     assert '--kube-context "$kube_context"' in garden
-    assert "REPLACE_WITH_TRUSTED_REPOSITORY_URL" in public_readme
-    assert "github.com/veridian69/cairn.git" not in public_readme
+    # The public repository on GitHub is the distribution source for the
+    # public README (Operator, 20 September 2026); the private tree keeps the
+    # distributor placeholder in install.md.
+    assert "git clone https://github.com/veridian69/cairn.git" in public_readme
+    assert "REPLACE_WITH_TRUSTED_REPOSITORY_URL" not in public_readme
+
+
+def test_managed_garden_documents_recovery_and_native_build_boundaries() -> None:
+    garden = " ".join(
+        (ROOT / "docs" / "operations" / "managed-garden.md").read_text().split()
+    )
+
+    assert "### Recovery" in garden
+    assert "Garden authority has expired; explicit recovery is required" in garden
+    assert "needs_credential_recovery" in garden
+    assert "There is no in-place re-issue path" in garden
+    assert "instance/garden/go-build" in garden
+    assert "telemetry directory" in garden
+    assert "`a2a/scripts/install-user`" in garden

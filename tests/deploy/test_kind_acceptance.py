@@ -754,6 +754,10 @@ def test_interrupt_reports_failure_and_cleans_only_the_owned_cluster(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        # A suite launched as a shell background job inherits SIGINT ignored,
+        # and bash cannot trap a signal ignored at entry; the probe must see
+        # the default disposition whatever launched pytest.
+        preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
     )
     assert process.stdout is not None
     temporary = Path(process.stdout.readline().removeprefix("ready ").strip())

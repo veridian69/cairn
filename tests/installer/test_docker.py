@@ -7,6 +7,7 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -111,6 +112,10 @@ class FakeContext:
         self.root.mkdir()
         self.source.mkdir()
         (self.source / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+        (self.source / "pyproject.toml").write_text(
+            '[project]\nname = "drystane-cairn"\nversion = "7.8.9"\n',
+            encoding="utf-8",
+        )
         credentials = self.root / "credentials"
         credentials.mkdir(mode=0o700)
         provider = credentials / "openai-api-key"
@@ -123,7 +128,7 @@ class FakeContext:
             "semantic": semantic,
             "instance_id": OWNER_LABELS["io.cairn.install.instance"],
             "run_id": OWNER_LABELS["io.cairn.install.run"],
-            "source_fingerprint": "abc123",
+            "source_fingerprint": "a" * 64,
             "provider_key_file": str(provider),
             "resources": {},
             "owned_files": {},
@@ -360,6 +365,9 @@ def test_prepare_materialises_an_interpolation_free_locked_stack(
     )
     assert build[-1] == str(ctx.source)
     assert "--pull=false" in build
+    assert "VERSION=7.8.9" in build
+    assert "REVISION=" not in repr(build)
+    assert "io.cairn.source.digest=sha256:" + "a" * 64 in build
     assert all(cwd == ctx.directory for _, cwd, _ in ctx.commands)
     assert all(env == {} for _, _, env in ctx.commands)
     assert any(
@@ -367,6 +375,60 @@ def test_prepare_materialises_an_interpolation_free_locked_stack(
     )
     assert not any("up" in command for command, _, _ in ctx.commands)
     assert ctx.saved >= 2
+
+
+def test_clean_git_source_labels_image_with_exact_commit(tmp_path: Path) -> None:
+    ctx = FakeContext(tmp_path)
+    subprocess.run(["git", "init", "-q", str(ctx.source)], check=True)
+    subprocess.run(
+        ["git", "-C", str(ctx.source), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(ctx.source), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(ctx.source), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(ctx.source), "commit", "-qm", "fixture"], check=True
+    )
+    revision = subprocess.check_output(
+        ["git", "-C", str(ctx.source), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    Backend(cast(Context, ctx)).prepare()
+
+    build = next(
+        command for command, _, _ in ctx.commands if command[:2] == ["docker", "build"]
+    )
+    assert f"org.opencontainers.image.revision={revision}" in build
+    assert "io.cairn.source.digest=sha256:" + "a" * 64 in build
+
+
+def test_dirty_git_source_uses_digest_without_claiming_commit(tmp_path: Path) -> None:
+    ctx = FakeContext(tmp_path)
+    subprocess.run(["git", "init", "-q", str(ctx.source)], check=True)
+    subprocess.run(
+        ["git", "-C", str(ctx.source), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(ctx.source), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(ctx.source), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(ctx.source), "commit", "-qm", "fixture"], check=True
+    )
+    (ctx.source / "Dockerfile").write_text("FROM scratch\n# dirty\n")
+
+    Backend(cast(Context, ctx)).prepare()
+
+    build = next(
+        command for command, _, _ in ctx.commands if command[:2] == ["docker", "build"]
+    )
+    assert not any(
+        argument.startswith("org.opencontainers.image.revision=") for argument in build
+    )
+    assert "io.cairn.source.digest=sha256:" + "a" * 64 in build
 
 
 def test_semantic_prepare_copies_secrets_through_an_isolated_init_container(
@@ -760,3 +822,55 @@ def test_rollback_removes_only_owned_containers_and_network(tmp_path: Path) -> N
     assert "--volumes" not in down
     assert (ctx.root / "config.yaml").exists()
     assert ctx.state["resources"]["docker"]["rollback"] == "containers_removed"
+
+
+def test_bridge_preflight_waits_by_wall_clock_rather_than_probe_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cold image on a loaded daemon needs more than ten back-to-back probes."""
+    ctx = FakeContext(tmp_path)
+    backend = Backend(cast(Context, ctx))
+    probes = 0
+    original = ctx.command
+
+    def command(argv: Sequence[str], **kwargs: Any) -> str:
+        nonlocal probes
+        if list(argv)[:2] == ["docker", "exec"]:
+            probes += 1
+            return "" if probes <= 15 else "ready\n"
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(ctx, "command", command)
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+
+    backend._bridge_preflight()  # noqa: SLF001
+
+    assert probes == 16
+    assert len(sleeps) == 15 and all(0 < pause <= 1 for pause in sleeps)
+
+
+def test_bridge_preflight_gives_up_at_the_readiness_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = FakeContext(tmp_path)
+    backend = Backend(cast(Context, ctx))
+    original = ctx.command
+    probes = 0
+
+    def command(argv: Sequence[str], **kwargs: Any) -> str:
+        nonlocal probes
+        if list(argv)[:2] == ["docker", "exec"]:
+            probes += 1
+            return ""
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(ctx, "command", command)
+    clock = iter(range(0, 10_000, 20))
+    monkeypatch.setattr(time, "monotonic", lambda: float(next(clock)))
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    with pytest.raises(InstallError, match="did not become ready"):
+        backend._bridge_preflight()  # noqa: SLF001
+
+    assert 1 < probes < 10

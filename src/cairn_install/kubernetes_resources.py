@@ -108,6 +108,11 @@ class ResourceJournal:
             receipt.update(phase="deleted", intent=False)
             self.ctx.save()
 
+    def vanished(self) -> None:
+        """The namespace is gone, and every recorded object went with it."""
+        for key in self.expected:
+            self._deleted(key)
+
     def inventory(self, *, allow_absent: bool = False) -> None:
         for key in self.expected:
             observed = self.get(key)
@@ -147,12 +152,15 @@ class ResourceJournal:
         observed = self.get(key)
         if observed:
             self.owned(key, observed)
-            if (
-                observed["metadata"].get("deletionTimestamp")
-                or self.objects[key]["phase"] == "deleting"
-            ):
+            if self.objects[key]["phase"] == "deleting":
+                # owned() proved this UID is our own accepted deletion: finish
+                # it (re-sending is UID-preconditioned) instead of failing a
+                # resumed run for the whole termination grace period.
+                self.delete(key)
+            elif observed["metadata"].get("deletionTimestamp"):
                 raise InstallError("Kubernetes resource is still terminating: " + key)
-            return
+            else:
+                return
         receipt = self.objects.get(key, {})
         if receipt.get("phase") == "deleting":
             self._deleted(key)
