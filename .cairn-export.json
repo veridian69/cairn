@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "1171a62f9543e40fbb8aaa84303a64a15be3e7c0",
+  "source_revision": "7258557a7bb573cc5f9a19195cd7b2022f211573",
   "release_configuration": {
-    "files.json": "23d9d611f53637c87d2bc53e8d0f024dce5b2910d748215fbedd441cfc3b2c81",
+    "files.json": "0e847bd7e9fccca72b1753d677bfd2ad6f4bd8443b8b4a8f59f9f40ebf26ee40",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "3b63ea91b5ba334e1a27d98cd8dbcc661e3e791e86c2f6e7eedd672f76d49dcc",
-    "overlay_set_sha256": "10161d7af3d535703b7e7e9d0a5ab58e032ba58e16e377c14d0bd5e3052e8b30"
+    "overlay_set_sha256": "aa7ee4d00b72f3dd376c542bb2d1d69613745f895c7199042662f4e834fdd91b"
   },
   "files": {
     ".dockerignore": {
@@ -34,7 +34,7 @@
       "mode": 420
     },
     ".github/ci/test_ci_split.py": {
-      "sha256": "f56f3de7551ae9f3b664f0ab985894153c6ad3b6b369fb92e5ea926309d78c03",
+      "sha256": "0593803d92cb6640f4a43b55eea6e6ebd11e943647e308e01c33fca2ae3e2a23",
       "mode": 420
     },
     ".github/ci/test_private_namespace_canary.py": {
