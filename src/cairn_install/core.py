@@ -27,7 +27,13 @@ NAME = re.compile(r"[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?")
 # uv variables that select where the runtime lives or which interpreter runs
 # it; the installer owns both, so they never come from the shell.
 _OWNED_UV_VARIABLES = frozenset(
-    {"UV_PROJECT_ENVIRONMENT", "UV_PYTHON", "UV_SYSTEM_PYTHON", "UV_NO_SYNC"}
+    {
+        "UV_PROJECT",
+        "UV_PROJECT_ENVIRONMENT",
+        "UV_PYTHON",
+        "UV_SYSTEM_PYTHON",
+        "UV_NO_SYNC",
+    }
 )
 TOKEN = re.compile(r"cairn1\.[0-9a-f-]{36}\.[A-Za-z0-9_-]{43}")
 MAX_OUTPUT = 2 * 1024 * 1024

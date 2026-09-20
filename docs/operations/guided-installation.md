@@ -30,8 +30,8 @@ The tools the installer runs (`uv`, `docker`, `go`, `kubectl`) inherit your
 proxy and package-index configuration, so a proxied or mirrored host works as
 it does for you; loopback is always exempt from proxies, and the variables
 that would relocate the installer's own runtime (`CAIRN_*`, `COMPOSE_*`,
-`UV_PROJECT_ENVIRONMENT`, `UV_PYTHON`, `UV_SYSTEM_PYTHON`, `UV_NO_SYNC`) are
-not passed on.
+`UV_PROJECT`, `UV_PROJECT_ENVIRONMENT`, `UV_PYTHON`, `UV_SYSTEM_PYTHON`,
+`UV_NO_SYNC`) are not passed on.
 
 Native modes require `uv 0.12.14`. Linux persistent native mode also requires a
 working systemd user manager. macOS native mode uses the ordinary user's

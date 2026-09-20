@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "7258557a7bb573cc5f9a19195cd7b2022f211573",
+  "source_revision": "9799409be28adc7f3094a1da8080af59536bef14",
   "release_configuration": {
     "files.json": "0e847bd7e9fccca72b1753d677bfd2ad6f4bd8443b8b4a8f59f9f40ebf26ee40",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
@@ -1682,7 +1682,7 @@
       "mode": 420
     },
     "docs/operations/guided-installation.md": {
-      "sha256": "7173b39ed7af31a56d9d514c84be2e831eba127834d066b76eb2d6c9fc8dcedb",
+      "sha256": "4b26991eb61b385913882b904c3296e23340ed52a2f123e8fd40ca01c744da38",
       "mode": 420
     },
     "docs/operations/kubernetes-gateway.md": {
@@ -2642,7 +2642,7 @@
       "mode": 420
     },
     "src/cairn_install/core.py": {
-      "sha256": "ab238e3b1b706558dbc90448fb5042a1c4590013651aafb2a0d3e9eefc6733d2",
+      "sha256": "afc6152dcf720efc6db734cde7bba3be3267ae1f536531b84b29cffa8e6b4756",
       "mode": 420
     },
     "src/cairn_install/destruction.py": {
@@ -3398,7 +3398,7 @@
       "mode": 420
     },
     "tests/installer/test_core.py": {
-      "sha256": "50d929a535d74ee5020522d202c03209256eee5d3de99ee61b0bff7e4c19fc80",
+      "sha256": "39e15e3119b09e0541d3de5125a7ebf3df200ba0467b069a3a51d9b2a9c204c0",
       "mode": 420
     },
     "tests/installer/test_darwin_mounts.py": {
