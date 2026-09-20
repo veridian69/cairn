@@ -78,10 +78,14 @@ func TestPrintThreadShowsAncestorChainAndDescendants(t *testing.T) {
 	if !strings.Contains(output, "[redacted: sensitive]") {
 		t.Fatalf("thread output should render redacted child content: %s", output)
 	}
-	if !strings.Contains(output, "  [2026-03-29 12:01:00]") {
+	// Timestamps render in the local zone, so derive the expectation the
+	// same way rather than assuming the developer's zone.
+	selectedTS := selected.CreatedAt.Local().Format("2006-01-02 15:04:05")
+	childTS := child.CreatedAt.Local().Format("2006-01-02 15:04:05")
+	if !strings.Contains(output, "  ["+selectedTS+"]") {
 		t.Fatalf("selected reply should be indented one level: %s", output)
 	}
-	if !strings.Contains(output, "    [2026-03-29 12:02:00]") {
+	if !strings.Contains(output, "    ["+childTS+"]") {
 		t.Fatalf("child reply should be indented two levels: %s", output)
 	}
 }
