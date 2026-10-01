@@ -10,7 +10,7 @@ description = "A scoped, evidence-aware memory authority"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = "Apache-2.0"
-authors = [{ name = "Example Operator", email = "jon@jclk.ch" }]
+authors = [{ name = "Jon Kowszun", email = "jon@jclk.ch" }]
 dependencies = [
   # anyio promoted from the dev group per P-34: P-29 imports anyio.Lock and
   # anyio.to_thread from runtime code, and a runtime import must not rest on
