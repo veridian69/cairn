@@ -34,6 +34,10 @@ func TestInstallAssetsAreSafeAndUseOneBinaryPath(t *testing.T) {
 	if !strings.Contains(script, `binary_path="$HOME/.local/share/bin/cairn-mcp"`) {
 		t.Fatal("installer and unit binary paths disagree")
 	}
+	// enable --now leaves an already-running relay on the replaced binary.
+	if strings.Contains(script, "enable --now") || !strings.Contains(script, "systemctl --user restart cairn-mcp.service") {
+		t.Fatal("installer does not restart the relay onto the new binary")
+	}
 	for _, forbidden := range []string{"CF-Access-Client-Secret=", "CF-Access-Client-Id=", "Environment="} {
 		if strings.Contains(unit, forbidden) || strings.Contains(script, forbidden) {
 			t.Fatalf("installation artefact contains forbidden %q", forbidden)

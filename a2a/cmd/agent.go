@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -230,6 +232,11 @@ func init() {
 func loadOrCreateConfig(path string) (*config.Config, error) {
 	cfg, err := config.LoadRaw(path)
 	if err != nil {
+		// Only a missing file starts fresh: an existing one that fails to load would
+		// otherwise be saved over as an empty config, losing every agent in it.
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
 		os.MkdirAll(filepath.Dir(path), 0755)
 		cfg = &config.Config{
 			Agents: make(map[string]config.AgentConfig),

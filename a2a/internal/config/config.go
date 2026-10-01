@@ -20,7 +20,7 @@ type AgentConfig struct {
 }
 
 type Defaults struct {
-	ContextWindow   int      `yaml:"context_window"`
+	ContextWindow   int      `yaml:"context_window,omitempty"`
 	Responsiveness  *float64 `yaml:"responsiveness,omitempty"`
 	ControlContract *bool    `yaml:"control_contract,omitempty"`
 }
@@ -175,6 +175,10 @@ func LoadRaw(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	// omitempty on save would turn an explicit zero into the default; refuse it here.
+	if err := validateSuppliedContextWindow(data); err != nil {
+		return nil, err
 	}
 	if cfg.Agents == nil {
 		cfg.Agents = make(map[string]AgentConfig)

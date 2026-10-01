@@ -2,6 +2,8 @@
 
 A 30-second revision of the shared-memory demo. Dark navy, mint accents, blue for Val/Codex and peach for Spike/Claude. Waiting is shortened; exact excerpts are labelled.
 
+![Val saves a plan, Spike corrects it and notifies Val through Garden, then Val checks Cairn history and both Attic sources](assets/cairn-attic-garden-correction-demo.gif)
+
 [Video](assets/cairn-attic-garden-correction-demo.mp4) · [Animated GIF](assets/cairn-attic-garden-correction-demo.gif)
 
 Status: **passed**. This is synthetic data in one disposable Cairn and Garden instance. Val (Codex) and Spike (Claude) made every displayed Cairn, Garden and Attic call themselves.

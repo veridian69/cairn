@@ -67,7 +67,9 @@ validate_secret_file "$config_dir/cf-access-client-secret" "Cloudflare client se
 install -m 0644 "$source_dir/deploy/cairn-mcp.service" "$unit_dir/cairn-mcp.service"
 systemctl --user daemon-reload
 if [ "${1:-}" != "--no-start" ]; then
-    systemctl --user enable --now cairn-mcp.service
+    systemctl --user enable cairn-mcp.service
+    # Restart, not start: a start is a no-op for a running relay on the replaced binary.
+    systemctl --user restart cairn-mcp.service
 fi
 
 echo "Cairn MCP relay installed"

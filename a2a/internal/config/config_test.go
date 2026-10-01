@@ -164,6 +164,24 @@ func TestLoadRawDoesNotInjectDefaults(t *testing.T) {
 	if strings.Contains(string(data), "per_agent_per_hour: 20") {
 		t.Errorf("saved config should not contain injected default per_agent_per_hour")
 	}
+	if strings.Contains(string(data), "context_window:") {
+		t.Error("saving an omitted context window must preserve its omission")
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("saved raw config cannot be loaded: %v", err)
+	}
+	if loaded.Defaults.ContextWindow != 50 {
+		t.Fatalf("loaded context window = %d, want default 50", loaded.Defaults.ContextWindow)
+	}
+}
+
+func TestLoadRawRejectsExplicitZeroContextWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("defaults:\n  context_window: 0\n"), 0644)
+	if _, err := LoadRaw(path); err == nil {
+		t.Fatal("LoadRaw must reject an explicit zero rather than let Save erase it")
+	}
 }
 
 func TestSaveDropsLegacyDailyBudgetSetting(t *testing.T) {

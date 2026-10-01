@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	benchmarking "github.com/veridian69/cairn/cairn-mcp/internal/benchmark"
 	"github.com/veridian69/cairn/cairn-mcp/internal/bridge"
@@ -111,7 +113,9 @@ func runWithBenchmark(
 			httpClient:       client,
 		})
 		if err != nil {
-			fmt.Fprintf(stderr, "stdio error: %v\n", err)
+			line := fmt.Sprintf("stdio error: %v", err)
+			fmt.Fprintln(stderr, line)
+			appendStdioLog(line)
 			return 1
 		}
 		return 0
@@ -190,6 +194,29 @@ func runStdio(ctx context.Context, stdin io.ReadCloser, stdout io.Writer, opts s
 		return err
 	}
 	return bridge.Run(ctx, stdin, stdout, session)
+}
+
+// appendStdioLog keeps the terminal stdio error after the client has discarded
+// stderr. It is best-effort and receives only the line already sent to stderr.
+func appendStdioLog(line string) {
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if !filepath.IsAbs(stateHome) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		stateHome = filepath.Join(home, ".local", "state")
+	}
+	dir := filepath.Join(stateHome, "cairn-mcp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	file, err := os.OpenFile(filepath.Join(dir, "stdio.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	fmt.Fprintf(file, "%s %s\n", time.Now().UTC().Format(time.RFC3339), line)
 }
 
 // isUnknownCommand runs after the benchmark branch has already returned, so the

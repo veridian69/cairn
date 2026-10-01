@@ -232,7 +232,8 @@ def test_failed_generation_leaves_no_outputs_and_can_be_retried(tmp_path: Path) 
     shim = shim_dir / "openssl"
     shim.write_text(
         "#!/usr/bin/env bash\n"
-        "if [[ $1 == x509 && ${2:-} == -req ]]; then exit 42; fi\n"
+        # Fail the server signing: openssl ca without -selfsign.
+        'if [[ $1 == ca && " $* " != *" -selfsign "* ]]; then exit 42; fi\n'
         'exec "$REAL_OPENSSL" "$@"\n'
     )
     shim.chmod(0o755)
@@ -280,3 +281,39 @@ def test_existing_configuration_is_not_overwritten(tmp_path: Path) -> None:
     assert "Refusing to overwrite" in result.stderr
     assert config.read_bytes() == before
     assert list(output.iterdir()) == [config]
+
+
+def _validity(cert: Path) -> tuple[float, float]:
+    import calendar
+    import time
+
+    def epoch(field: str) -> float:
+        text = (
+            subprocess.check_output(
+                ["openssl", "x509", "-in", str(cert), "-noout", f"-{field}"], text=True
+            )
+            .split("=", 1)[1]
+            .strip()
+        )
+        # OpenSSL prints GMT; timegm reads the struct as UTC, never local time.
+        return calendar.timegm(time.strptime(text, "%b %d %H:%M:%S %Y GMT"))
+
+    return epoch("startdate"), epoch("enddate")
+
+
+def test_certificates_are_backdated_ten_minutes_with_unchanged_lifetimes(
+    tmp_path: Path,
+) -> None:
+    """Operator, 25 September 2026: tolerate clock skew between hosts, and clocks
+    stepped back by time synchronisation, without stretching any lifetime."""
+    import time
+
+    output = tmp_path / "tls"
+    before = time.time()
+    subprocess.run([str(SCRIPT), "garden.example.test", str(output)], check=True,
+                   capture_output=True)  # fmt: skip
+    after = time.time()
+    for name, days in (("internal-ca.pem", 3650), ("garden-cert.pem", 825)):
+        start, end = _validity(output / name)
+        assert before - 600 - 2 <= start <= after - 600 + 2, name
+        assert end - start == days * 86400, name  # 825 d stays within Apple's limit

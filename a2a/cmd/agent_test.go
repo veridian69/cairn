@@ -10,6 +10,21 @@ import (
 	daemonpkg "github.com/veridian69/cairn/a2a/internal/daemon"
 )
 
+func TestLoadOrCreateConfigRefusesAnUnreadableExistingConfig(t *testing.T) {
+	for name, body := range map[string]string{
+		"invalid value": "agents:\n  keep:\n    provider: anthropic\n    model: x\ndefaults:\n  context_window: 0\n",
+		"malformed":     "agents:\n  keep: [\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			os.WriteFile(path, []byte(body), 0644)
+			if cfg, err := loadOrCreateConfig(path); err == nil {
+				t.Fatalf("an existing config that fails to load must not become an empty one: %+v", cfg)
+			}
+		})
+	}
+}
+
 func TestLoadOrCreateConfigCreatesEmptyConfigForMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
 

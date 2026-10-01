@@ -68,6 +68,30 @@ args = ["stdio", "--upstream-url", "https://cairn.example.invalid/mcp"]
 STDIO reads the Cloudflare files directly and exits when its standard input
 closes. It does not use the HTTP relay token.
 
+For OpenCode, in `~/.config/opencode/opencode.json` or a project
+`opencode.json`, a `local` server is a command array with no headers:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "cairn": {
+      "type": "local",
+      "command": [
+        "/absolute/path/to/cairn-mcp",
+        "stdio",
+        "--upstream-url",
+        "https://cairn.example.invalid/mcp"
+      ],
+      "enabled": true
+    }
+  }
+}
+```
+
+Do not use a `remote` or URL entry that carries the Cloudflare headers: that
+copies the service-token pair into a client config file.
+
 ## Persistent HTTP mode
 
 The installer builds the binary at `$HOME/.local/share/bin/cairn-mcp`, creates

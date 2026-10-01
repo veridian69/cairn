@@ -1,6 +1,7 @@
 # Explicit Cairn host workflows
 
-The Codex and Claude packages use the public `cairn-memory` command. They run
+The Codex and Claude packages use the public `cairn-memory` command; OpenCode
+uses the Codex or Claude package. They run
 when explicitly selected by the host; they do not observe all turns, install
 lifecycle hooks or capture arbitrary desktop/web conversations.
 
@@ -16,6 +17,11 @@ Choose an existing explicit project or host root. The installer adds:
 | --- | --- |
 | `codex` | `.agents/skills/cairn-memory/SKILL.md` |
 | `claude` | `.claude/skills/cairn-memory/SKILL.md` |
+
+There is no separate OpenCode layout. OpenCode reads `.claude/skills` and
+`.agents/skills` under both a project root and the home directory, so either
+the `codex` or the `claude` package serves it; its own `.opencode/skills` is
+project-only and `~/.config/opencode/skills` is home-only.
 
 Preview in a disposable native directory from a source checkout:
 

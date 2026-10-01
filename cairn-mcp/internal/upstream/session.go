@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -314,7 +315,7 @@ func (s *Session) startLegacyListener() {
 	s.mu.RLock()
 	protocolVersion := s.protocolVersion
 	s.mu.RUnlock()
-	if protocolVersion == "" || protocolVersion >= legacyListenerProtocolCutoff {
+	if !legacyProtocol(protocolVersion) {
 		return
 	}
 
@@ -329,6 +330,17 @@ func (s *Session) startLegacyListener() {
 	})
 }
 
+// legacyProtocol reports whether a negotiated protocol version is a date before
+// the cutoff. An absent or non-date version starts no listener.
+func legacyProtocol(version string) bool {
+	negotiated, err := time.Parse(time.DateOnly, version)
+	if err != nil {
+		return false
+	}
+	cutoff, _ := time.Parse(time.DateOnly, legacyListenerProtocolCutoff)
+	return negotiated.Before(cutoff)
+}
+
 // Only the standalone GET is retried. Send and its POST body are never replayed.
 func (s *Session) runLegacyListener() error {
 	lastEventID := ""
@@ -338,7 +350,9 @@ func (s *Session) runLegacyListener() error {
 		if err == nil || s.ctx.Err() != nil {
 			return err
 		}
-		if !recoverableListenerDrop(err) {
+		// A 5xx is retried only when it answers a reconnect, never the first GET.
+		reconnecting := retries > 0
+		if !recoverableListenerDrop(err) && !(reconnecting && serverErrorStatus(err)) {
 			return err
 		}
 		// A healthy long-lived stream earns a fresh recovery budget. Rapid
@@ -365,8 +379,42 @@ func recoverableListenerDrop(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
 		return true
 	}
+	var streamError http2StreamError
+	if errors.As(err, &streamError) {
+		return true
+	}
+	// net/http's GOAWAY errors are unexported and carry no As method.
+	message := err.Error()
+	if strings.Contains(message, "http2: server sent GOAWAY") ||
+		strings.Contains(message, "http2: Transport received Server's graceful shutdown GOAWAY") {
+		return true
+	}
 	var networkError net.Error
 	return errors.As(err, &networkError) && networkError.Timeout()
+}
+
+// http2StreamError mirrors net/http's unexported HTTP/2 stream error
+// (RST_STREAM), which converts itself via errors.As into any struct with
+// these fields.
+type http2StreamError struct {
+	StreamID uint32
+	Code     uint32
+	Cause    error
+}
+
+func (e http2StreamError) Error() string {
+	return fmt.Sprintf("stream error: stream ID %d; code %d", e.StreamID, e.Code)
+}
+
+type listenerStatusError int
+
+func (e listenerStatusError) Error() string {
+	return fmt.Sprintf("upstream GET returned status %d", int(e))
+}
+
+func serverErrorStatus(err error) bool {
+	var status listenerStatusError
+	return errors.As(err, &status) && status >= 500 && status <= 599
 }
 
 func (s *Session) listenLegacy(lastEventID *string) (time.Duration, error) {
@@ -390,7 +438,7 @@ func (s *Session) listenLegacy(lastEventID *string) (time.Duration, error) {
 		return 0, nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("upstream GET returned status %d", response.StatusCode)
+		return 0, listenerStatusError(response.StatusCode)
 	}
 	contentType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || contentType != "text/event-stream" {
