@@ -945,7 +945,7 @@ def test_verification_retries_while_garden_authority_is_starting(
                     result: dict[str, Any] = {
                         "protocolVersion": "2025-11-25",
                         "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "garden", "version": "0.7.10"},
+                        "serverInfo": {"name": "garden", "version": "0.7.12"},
                     }
                 elif outage == "tool_unavailable" and not outages:
                     outages.append(name)
