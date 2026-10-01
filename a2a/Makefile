@@ -57,6 +57,6 @@ license-check: $(CACHE_DIR)
 GARDEN_CAIRN_PYTHON ?= $(abspath ../.venv/bin/python)
 integration: $(CACHE_DIR) build
 	test -x "$(GARDEN_CAIRN_PYTHON)"
-	GARDEN_CAIRN_PYTHON="$(GARDEN_CAIRN_PYTHON)" $(GO) test -count=1 -race -timeout 60s ./internal/garden -run '^TestRealCairnGardenDelivery$$'
+	GARDEN_CAIRN_PYTHON="$(GARDEN_CAIRN_PYTHON)" $(GO) test -count=1 -race -timeout 180s ./internal/garden -run '^(TestRealCairnGardenDelivery|TestRealCairnGardenTLSCompatibility)$$'
 	GARDEN_TEST_BINARY="$(CURDIR)/a2a" $(GO) test -count=1 -race -timeout 60s ./internal/attention -run '^TestAttentionAdaptersEndToEndWithCentralGarden$$'
 	cd .. && GARDEN_TEST_BINARY="$(CURDIR)/a2a" "$(GARDEN_CAIRN_PYTHON)" -m pytest tests/installer/test_garden_live.py -q -o addopts=''

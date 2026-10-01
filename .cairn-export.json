@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "0117bb170201b2b2cd21236471e22eeb6ed1f3f4",
+  "source_revision": "3702061c567ccd801bb579315bc177745fd06f21",
   "release_configuration": {
-    "files.json": "0e847bd7e9fccca72b1753d677bfd2ad6f4bd8443b8b4a8f59f9f40ebf26ee40",
+    "files.json": "94dc555fba7b43b3273a4f670bc5a04e5f8cd9e5a0776ddcb59e1b31db7edcbf",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
-    "sanitise.py": "3b63ea91b5ba334e1a27d98cd8dbcc661e3e791e86c2f6e7eedd672f76d49dcc",
-    "overlay_set_sha256": "aa7ee4d00b72f3dd376c542bb2d1d69613745f895c7199042662f4e834fdd91b"
+    "sanitise.py": "de3a58fe7baae3e93a34e956d418d4c931f84ce0925e189d3afcd680bc82dc23",
+    "overlay_set_sha256": "e2314d77c2023bb64e50b2aa75f040f26472e2210e46a7c2a73cc21e81943f9a"
   },
   "files": {
     ".dockerignore": {
@@ -54,7 +54,7 @@
       "mode": 420
     },
     ".gitignore": {
-      "sha256": "d808e55c6b3be95170dcac9c71a206d570b7f5714bf4a9b7bdd337c4df38e825",
+      "sha256": "931ec60b0ce168bcfaa227131b8f00277a841a7ed5130b291d5cc85b51db6f94",
       "mode": 420
     },
     ".python-version": {
@@ -86,7 +86,7 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "77aed743758696c72e239cc66e7443a04286f74eccc87efcf0b050a76a007428",
+      "sha256": "cd7f1f74b2bd2b77123c638e401aa6f27577b56c796a7b979c80313d9b37029e",
       "mode": 420
     },
     "SECURITY.md": {
@@ -110,11 +110,11 @@
       "mode": 420
     },
     "a2a/Makefile": {
-      "sha256": "3b21a800ca7741dc7247032e5153b262dee5e51ccc90fb14938a034673e46fca",
+      "sha256": "8873ce276e092f7343e25c6f9f0e216a0cc29115ef3a0ffc22732b7f0bb202b5",
       "mode": 420
     },
     "a2a/README.md": {
-      "sha256": "031d12cc2548089a06454e6149c52c9e8d65c119c74080cf24fd0b2bd87ef47a",
+      "sha256": "6c86fab5b3b660896d5c74d9cdc2af2ce26f257e3133ccda6906a04b89b7a8be",
       "mode": 420
     },
     "a2a/THIRD_PARTY_LICENSES/github.com/antithesishq/antithesis-sdk-go@v0.6.0-default-no-op/LICENSE": {
@@ -358,19 +358,19 @@
       "mode": 420
     },
     "a2a/cmd/agent.go": {
-      "sha256": "eab31b89e8bc84953caf857ddde0e1e44c012cef8112b5e5aa1d4a4d5b413df8",
+      "sha256": "74491569b75f3baa8c5e4faf8d2985f9b355afb79bb7d4a420205c175bf619de",
       "mode": 420
     },
     "a2a/cmd/agent_test.go": {
-      "sha256": "8b1c0a03a61f94f108644df5190e94880a7f095c8dc733b27ac4ae0bda2fd9ed",
+      "sha256": "0b2538d65e8e67cef463e3da8e69e42fb5909bef66c68c0a1d237a44c558ec2a",
       "mode": 420
     },
     "a2a/cmd/attention.go": {
-      "sha256": "3514c43b204e289b34e04efe7f2c9c5be4019ed8b97e4d9696ca7906e9d82aa4",
+      "sha256": "348e910b2a48d8b378af427a0ee41db03252e4b31e3a8e249cc5898b7515ec60",
       "mode": 420
     },
     "a2a/cmd/attention_test.go": {
-      "sha256": "8e4ded1b8a46553571a3c73c5657839ae58df6df07164933b2199d7cc2becab1",
+      "sha256": "f7f50b68756bee9ca08f7badffb4f96e22af3040a2309ecfaf78e3274cca1535",
       "mode": 420
     },
     "a2a/cmd/chat.go": {
@@ -553,6 +553,10 @@
       "sha256": "03aedf32d452c6abb85fa0a952726eef7ae354d38082e02ddd943699b07564a6",
       "mode": 420
     },
+    "a2a/docs/readiness.md": {
+      "sha256": "dc6bb548ffcb5a3fe90bdc2299b11aa721bef63ec7be0121193e463427a389d0",
+      "mode": 420
+    },
     "a2a/go.mod": {
       "sha256": "3e38fd897f572b27c8799ad5eb4dedd898bbfd17667e625ab754b907c45bf41d",
       "mode": 420
@@ -562,7 +566,7 @@
       "mode": 420
     },
     "a2a/integration/cairn_fixture.py": {
-      "sha256": "f2166e340d89d1fca3f8ed3d581e4511560990d4e3d817d55d70bbbd787ad4f1",
+      "sha256": "18201b779e40cab6e4de1ed3012b8908eea45134327689901e59aac25fb295e8",
       "mode": 420
     },
     "a2a/integration/test_build.py": {
@@ -618,7 +622,7 @@
       "mode": 420
     },
     "a2a/internal/attention/integration_e2e_test.go": {
-      "sha256": "3725e35ef6aaf6fbe28e4241d05f236910566ae05f22264a6bb83ed324af3819",
+      "sha256": "6c057f7cbcad99c27956091cc2aa472526e78485c623e7deb671b2a00c049531",
       "mode": 420
     },
     "a2a/internal/attention/opencode.go": {
@@ -635,6 +639,14 @@
     },
     "a2a/internal/attention/profile_test.go": {
       "sha256": "988e41bb617418ec4a155c7a7dac2d0d61ce42adf9a3472dc5505a73a1752261",
+      "mode": 420
+    },
+    "a2a/internal/attention/readiness.go": {
+      "sha256": "ef049478c44c5be58685c1d214ecba49fdcbfb0b3933777ee73cfab8818ff7c5",
+      "mode": 420
+    },
+    "a2a/internal/attention/readiness_test.go": {
+      "sha256": "0677e414cc899a2f2d5c712f23dce87bc9346c03f99722fd3ea97dac3e0589ca",
       "mode": 420
     },
     "a2a/internal/attention/recovery_test.go": {
@@ -718,15 +730,15 @@
       "mode": 420
     },
     "a2a/internal/config/config.go": {
-      "sha256": "42a8c6f91e954d2c2e6b160eb32eb293cb92a21de81bf4d71c21f025f7eaba34",
+      "sha256": "a7a84a0e246eaac4ff48a5654f063641265529a4e1321dcaaeb7ca5ffe68aef8",
       "mode": 420
     },
     "a2a/internal/config/config_test.go": {
-      "sha256": "5e27a4ad2fdeda481ee86f3d076442717528f087eb7cac7b36552c63321c3b9c",
+      "sha256": "bf0e089a657707263738cb92376fbcddff265d8950c3b8b17e110cc85e84f143",
       "mode": 420
     },
     "a2a/internal/config/parse.go": {
-      "sha256": "a93b1321fb3a709f028acc3e2ab318fef40252a48fc89379af3e3c1abc3500e8",
+      "sha256": "418c7e65cf6ff491044da1fae622c8db90073b4178a1f1f47fa4f4d4074c5c74",
       "mode": 420
     },
     "a2a/internal/config/parse_test.go": {
@@ -755,6 +767,10 @@
     },
     "a2a/internal/garden/cairn_integration_test.go": {
       "sha256": "4fbb414d498b92ce9bef6e797fc480933c4abee887b1bf8dd365d42b6374bc9f",
+      "mode": 420
+    },
+    "a2a/internal/garden/cairn_tls_integration_test.go": {
+      "sha256": "85145704f05a5cfd39dddb26653adc782ffce5d57cd96d4b5e19460d27f21d6c",
       "mode": 420
     },
     "a2a/internal/garden/client.go": {
@@ -1078,23 +1094,23 @@
       "mode": 420
     },
     "cairn-mcp/README.md": {
-      "sha256": "8eaf4322b5d7eb69c0f615a6260ee39475ad5cc563c143d5f4e0603f8c8e043a",
+      "sha256": "24ac4d6ec868ad940d5dae287ca220385aca629204cf79f000725b038538a4b9",
       "mode": 420
     },
     "cairn-mcp/WINDOWS.md": {
-      "sha256": "cb3466cfca8e6948c21a9ec1cc197b1f011937031ac25196dffb33baa542bb5c",
+      "sha256": "dab60a0397fcac3e485b0ff4dec45cbfecc173865e12415093f0ebc5308a0124",
       "mode": 420
     },
     "cairn-mcp/cmd/cairn-mcp/install_assets_test.go": {
-      "sha256": "dd9c9a6620e04f0ed5ae47b1854563574d43c4fe344e253e6385efef1bc493fd",
+      "sha256": "bd4a12fbab356c4a050ac143544c3ee22ed261e2a5c4012364c48e15b6523d75",
       "mode": 420
     },
     "cairn-mcp/cmd/cairn-mcp/main.go": {
-      "sha256": "e87a80c8c633117935b98fdac98e91c4c1bbae2b01ebad07cc4c94e7f8498e46",
+      "sha256": "e87573f14013decae11ffcfad7228fbf335880847d9b21476ab9b73b7538d42c",
       "mode": 420
     },
     "cairn-mcp/cmd/cairn-mcp/main_test.go": {
-      "sha256": "2dfebeeb440ae59d59dfe065216a8f5207ce628858389e77485fd3cf614e0ecb",
+      "sha256": "8116e479c46506c7a7a5bc79caa3451305d1ef4ba603c0d307bae3a20999bec8",
       "mode": 420
     },
     "cairn-mcp/cmd/cairn-mcp/permissions_unix_test.go": {
@@ -1194,11 +1210,11 @@
       "mode": 420
     },
     "cairn-mcp/internal/upstream/listener_recovery_test.go": {
-      "sha256": "e79a3c42a6ed9cdba37c3855b6fa35dc3d9abce9f984081e9697c76045eeab08",
+      "sha256": "2319f6fb4758ad083f1a01b77d3a23db927de8a41fbb9141d97b015057ba92ef",
       "mode": 420
     },
     "cairn-mcp/internal/upstream/session.go": {
-      "sha256": "392f335f10c29f806e7c781cb67b7ce74e1a6bd8936dfaae7b37e9501d47562a",
+      "sha256": "16af9e3179f80e3e8862188c8698350a452cccd2f6a0b9e6bcd491ab326883d5",
       "mode": 420
     },
     "cairn-mcp/internal/upstream/session_test.go": {
@@ -1218,7 +1234,7 @@
       "mode": 493
     },
     "cairn-mcp/scripts/install-user": {
-      "sha256": "b38c02f2275004b97aac595a7ed3f4af887004e825bffeec3aabcc219b6e4bd2",
+      "sha256": "7fe55c05f848c94e48e27f112295ba33ed4fa347ab72694b7702a276c39a3234",
       "mode": 493
     },
     "cairn-mcp/scripts/setup-windows.ps1": {
@@ -1581,6 +1597,18 @@
       "sha256": "ed82c13190124b62b50b6dad7f72c93d1560bdde4a1daeab42d304f061135613",
       "mode": 420
     },
+    "docs/assets/cairn-real-work-demo.gif": {
+      "sha256": "ae4c908802877d8d3522f10058931ee9a09e2abb06dcacb1db7d63ed3cebf28b",
+      "mode": 420
+    },
+    "docs/assets/cairn-real-work-demo.mp4": {
+      "sha256": "a38f314f45921cbc8f6296c2cc0ec6ae4acba6ba8c0bfb8b731414b7868e1948",
+      "mode": 420
+    },
+    "docs/assets/cairn-real-work-demo.png": {
+      "sha256": "ce43c8e1f3b7fbb954f306195a595124f9336c192dcbae4ad59c312205550c13",
+      "mode": 420
+    },
     "docs/assets/hero-dark.png": {
       "sha256": "35e58f0a71a9fcfa827ac49fad20ec59d13c8779c497db39d3ac3a41d2434ee8",
       "mode": 420
@@ -1610,11 +1638,27 @@
       "mode": 420
     },
     "docs/cairn-attic-garden-correction-demo.md": {
-      "sha256": "0cdaca00af1b2b0005a683f62748712b822a5ea05369a8e0002ef3b8f7639a70",
+      "sha256": "f4cbb2b8abcc2b083052589e365e2bd332f0e3d9678b07d2d51b81628d01465a",
       "mode": 420
     },
     "docs/cairn-attic-garden-demo.md": {
-      "sha256": "f501c78339c564f9d110b601e38e1f7243014862996cb28617d38a2c4272ca22",
+      "sha256": "6c3bd04fd911a91589469443d90d23a8fc2785277c780876bc84e46074f73cc2",
+      "mode": 420
+    },
+    "docs/cairn-real-work-demo.md": {
+      "sha256": "9bf8406a13c5fb35c774870ec0e192fc805cf375714155102706035451d69a9b",
+      "mode": 420
+    },
+    "docs/cairn-real-work-demo/transcript.md": {
+      "sha256": "f5cbb13aa7d31770a90451b55f833ac58d6ae2c8fba63249a1cbe718975af96f",
+      "mode": 420
+    },
+    "docs/cairn-real-work-demo/verification-ruling-a1.json": {
+      "sha256": "936d2e33d4c7eb277a0d03ea62022dae8bfb41b06e33939ceb810bab768866bf",
+      "mode": 420
+    },
+    "docs/cairn-real-work-demo/verification.json": {
+      "sha256": "b8c1fbcd958df6e6d576502ce4efefc0af57eb9e769b9d412658c4c5329ca570",
       "mode": 420
     },
     "docs/clients.md": {
@@ -1634,7 +1678,7 @@
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-inventory.md": {
-      "sha256": "ac72ea67079d92fcbcd6e8c1a2cba7cc4c484e589762a9f1d66b0ec4ab43b981",
+      "sha256": "0850f7facd139c8bae280e55d390bc86e1aaaea51c5eab28ba5aa66e39ab2cf5",
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-security.md": {
@@ -1646,7 +1690,7 @@
       "mode": 420
     },
     "docs/host-memory-workflows.md": {
-      "sha256": "588ca8a222a45e4682e690b59ac18de1d089d8795486a586c06438d27dfc74c9",
+      "sha256": "ecc9a1fb5cc5c5fd6a4db676d33fa97dd64c72c26d96a43c8dfb33a223d34b6e",
       "mode": 420
     },
     "docs/install.md": {
@@ -1666,7 +1710,7 @@
       "mode": 420
     },
     "docs/operations/cairn-mcp-relay.md": {
-      "sha256": "cfb6dc4863f4893e9ad852d0de2a5bf768fb39b6e7c6bbd9b93ed812e010db3b",
+      "sha256": "23afb82ac973b0fd7913e7a042a9c0e0103d76d1db64e1a1d5a45f0604ab6939",
       "mode": 420
     },
     "docs/operations/deployment.md": {
@@ -1726,7 +1770,7 @@
       "mode": 420
     },
     "docs/operations/shared-garden.md": {
-      "sha256": "77ff7e00c359d52749f118cd0dc172b2b7eb7b289c689b0ca9b1e985250942f8",
+      "sha256": "4b8b86dda46bf39e992574a06a03f6f35f03deadbbf580fd99941674a308bb7a",
       "mode": 420
     },
     "docs/quickstart.md": {
@@ -1814,7 +1858,7 @@
       "mode": 420
     },
     "pyproject.toml": {
-      "sha256": "7c81236f6d8483c4d2d14d794f7d9ab946234d838e4d26ffb6aa0d59e71d8f42",
+      "sha256": "df7df8c89aa6c24bbd5c2cf4e5fa02dce3e82ef1dd8038cecd0b7bbc0aa2a9bb",
       "mode": 420
     },
     "scripts/check-image-pins": {
@@ -1866,7 +1910,7 @@
       "mode": 493
     },
     "scripts/generate-garden-tls": {
-      "sha256": "fe87236eef6510cfbf4ee230ebeee87b29672c4bcf6bf219894a169edc761559",
+      "sha256": "9eee9d119e025ae876613c6e8870ef8ca0097bcefefd8dd85d9857adefca22e4",
       "mode": 493
     },
     "scripts/graphiti-smoke": {
@@ -1904,6 +1948,58 @@
     "scripts/pre-blind": {
       "sha256": "0c292481482b5dbe838526e65d0f32abd710736c69f72f46c9248a7a415ef2ba",
       "mode": 493
+    },
+    "scripts/real_work_demo/__init__.py": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 420
+    },
+    "scripts/real_work_demo/actors.py": {
+      "sha256": "53a9cd0686ba8e2f99427d766644cb53b859992d11662bf53c15a7e2991309c5",
+      "mode": 420
+    },
+    "scripts/real_work_demo/agents.py": {
+      "sha256": "9e7b5ac79cb4836d3aa7523cf0b748cb6992294d97c01f0371bac70bbd45f094",
+      "mode": 420
+    },
+    "scripts/real_work_demo/logs.py": {
+      "sha256": "3cd5940d42923119415a614ddca32400073c221f13033c8b4a6992471a33fc6a",
+      "mode": 420
+    },
+    "scripts/real_work_demo/probe.py": {
+      "sha256": "73cfbb0503f85ebf8777c711e6aaefeedffc960ef3b2d49aec3b111e9dd0d0ac",
+      "mode": 420
+    },
+    "scripts/real_work_demo/prompts.py": {
+      "sha256": "4f65df81910cd4498aa4793154b01b48ddc573ad2ad869ccf14ce62880ca3732",
+      "mode": 420
+    },
+    "scripts/real_work_demo/publish.py": {
+      "sha256": "cbcafee585482474dd716e645ff60850a7405d3e6a6709af769552fe42e0883d",
+      "mode": 420
+    },
+    "scripts/real_work_demo/render.py": {
+      "sha256": "a7018bbe90496600142cc4d15d2a46443c8b1d1bba78075a9e30dd0252154c47",
+      "mode": 420
+    },
+    "scripts/real_work_demo/run.py": {
+      "sha256": "f4555c05e0ee75726619494ddbd2c54a92d6eefc8375ec77e5b537b54a99957f",
+      "mode": 420
+    },
+    "scripts/real_work_demo/storyboard.py": {
+      "sha256": "4454ff5dd585113e239ff1c6d300b958d88c592e2e29c9e0a53dc37534c7d5e2",
+      "mode": 420
+    },
+    "scripts/real_work_demo/transcript.py": {
+      "sha256": "25ffd9a62a66a3cec16b0ccd8f5e885dc240ffce66110a09b13434fba94f42a7",
+      "mode": 420
+    },
+    "scripts/real_work_demo/verify.py": {
+      "sha256": "c02de16027cedc32a0051f3e65cf0f2b86a382ed08e67fa46551f7f55c9b895b",
+      "mode": 420
+    },
+    "scripts/real_work_demo/workspace.py": {
+      "sha256": "e029847fcdebb5788ff696c6c4e0c6048955833641e057c09cd6c2da786985e1",
+      "mode": 420
     },
     "scripts/reference-acceptance": {
       "sha256": "bd71e1e68739ee72cac28e149ea9e81afc918aadebcf87a1c8c139f5aad5dad1",
@@ -3241,6 +3337,62 @@
       "sha256": "bc86acc2d677df6c615695a63584ffa01266911a9fc9b290f6fda92a234ff591",
       "mode": 420
     },
+    "tests/demo/__init__.py": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 420
+    },
+    "tests/demo/real_work/__init__.py": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_actors.py": {
+      "sha256": "a63cccb17b73162e6643c269bf2e00cf8eaddb067d7c40ea4ac4bd93f3cb346f",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_agents.py": {
+      "sha256": "70dde394f9fff24d2859ff857006feaecc987fd88e1d42a904e5890092fa841d",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_logs.py": {
+      "sha256": "eec1d11d2b26491591d9eae8d98a1e037c46669269945de8438cfdd9ba024b2f",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_probe.py": {
+      "sha256": "07ddd9ecbda245ec24dd312059cb059657c55dcbc8993067435f1f96baf84758",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_prompts.py": {
+      "sha256": "d36cb6474280363c91b816da7171d21f76788199282eb95d7dc774930a728f97",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_publish.py": {
+      "sha256": "bf352128c403de45a5675be3e775655919819a977a145d21314ba471ba89117e",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_render.py": {
+      "sha256": "5b7e10ceab5ad97308f6a96112fbcb03fbb5e3073fc2ff652ee2b90338327e87",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_run.py": {
+      "sha256": "ae3b6a9a628da57a46d7d01e8f30588ee02e7c33529aa8bb25662c8148e8c3cd",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_storyboard.py": {
+      "sha256": "727a9e1b04ba2f55159b044139b282d0d4a0214b5ec2cad84ba900482e722d48",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_transcript.py": {
+      "sha256": "a1401d6693d5309368446852216ecfa9e1a186dbdfd2271cd6be6d0ba0f9dd18",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_verify.py": {
+      "sha256": "9f1e3d836b0a1f10da653cb4c7a943a7b10ba0d3b204bcc52b22f2275f4d1082",
+      "mode": 420
+    },
+    "tests/demo/real_work/test_workspace.py": {
+      "sha256": "db85541296a99702d0e1b71da216fd317245d8b29d8f74bab591e19a05adecf4",
+      "mode": 420
+    },
     "tests/deploy/__init__.py": {
       "sha256": "2ac90950e4042cc3e8d8a77e3c4be2de76ba77eb3527d8df335d6d1e0a0ed57d",
       "mode": 420
@@ -3314,7 +3466,7 @@
       "mode": 420
     },
     "tests/deploy/test_generate_garden_tls.py": {
-      "sha256": "ba9f92bbf1c36c90f7f15db6b496db0e4927567aef18801b6da7fe7c886922df",
+      "sha256": "b6a316d45d16dee14a5f5b58949268549a3871ac8cb2c17fab5725d7e279ed93",
       "mode": 420
     },
     "tests/deploy/test_kind_acceptance.py": {
@@ -3334,7 +3486,7 @@
       "mode": 420
     },
     "tests/deploy/test_reference_cilium_evidence.py": {
-      "sha256": "bbec131d730dd0ac3067af322c3323ef8eb1374184969cdf96784186c68e8571",
+      "sha256": "645b3c5a41bd7318a1d0460255e58db2aa72a4a9029145e5d45e503edf2fcc9c",
       "mode": 420
     },
     "tests/deploy/test_reference_oci_provenance.py": {
@@ -3342,7 +3494,7 @@
       "mode": 420
     },
     "tests/deploy/test_reference_posture.py": {
-      "sha256": "c855fc65dcd9a09f47a9edd469a8be718b32bdf65718f29f07c0191ac55f89fd",
+      "sha256": "6a5910efc6cb3c5b1ce7c8af5961089b996fdb83b764844c48a613453d16fdf4",
       "mode": 420
     },
     "tests/deploy/test_rendered_manifests.py": {
@@ -3422,11 +3574,11 @@
       "mode": 420
     },
     "tests/installer/test_garden.py": {
-      "sha256": "9982b8ec4f020ddded14e4df8836f15b91fe498256aa07c4a974e01015109d63",
+      "sha256": "5968a9fc745ba44a816f81ac711343ab95df3efed879b3d17c189b47160f5b96",
       "mode": 420
     },
     "tests/installer/test_garden_live.py": {
-      "sha256": "3b2194f694d2ebb85703d86c4fee3f7aae399df1f9ff277a4d31a3ad7cf5f2b5",
+      "sha256": "c0d7ad4db7392b864dddda42d8441840922b195c8c8f8bef60253b2304932e3d",
       "mode": 420
     },
     "tests/installer/test_garden_native.py": {
@@ -3499,6 +3651,10 @@
     },
     "tests/installer/test_workflow.py": {
       "sha256": "4d8a3d8083a12df61ec156c6bad3869f4e31cd09f7f490e727e40d8919ef6dd6",
+      "mode": 420
+    },
+    "tests/installer/tls_support.py": {
+      "sha256": "60a59617f23f712e9bf0dc2321e4a059198548ced9a73201373bb1ed28fddef3",
       "mode": 420
     },
     "tests/migrate/test_apply.py": {
@@ -3830,7 +3986,7 @@
       "mode": 420
     },
     "uv.lock": {
-      "sha256": "f46ca6734194d4187d15af75cda1c9477158fd512e99ae023a8e47b9838e8a25",
+      "sha256": "86982291b8660f33f982c26a0e9542646c98fa27087ecbb1f89cb4638d2b2119",
       "mode": 420
     }
   }

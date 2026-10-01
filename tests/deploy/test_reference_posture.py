@@ -227,7 +227,7 @@ def _initialise_git_repository(path: Path) -> str:
             "-c",
             "user.name=Val",
             "-c",
-            "user.email=reviewer@example.invalid",
+            "user.email=val@jclk.ch",
             "commit",
             "-q",
             "-m",

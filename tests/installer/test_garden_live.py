@@ -26,6 +26,8 @@ from cairn_install import garden
 from cairn_install.core import open_context
 from cairn_install.verification import ready
 
+from .tls_support import self_signed
+
 
 @pytest.mark.skipif(
     not os.environ.get("GARDEN_TEST_BINARY"),
@@ -37,30 +39,7 @@ def test_managed_enrolment_tls_host_restart_and_retained_history(
     binary = Path(os.environ["GARDEN_TEST_BINARY"])
     assert binary.is_absolute() and binary.is_file()
     cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
-    subprocess.run(
-        [
-            "openssl",
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            str(key),
-            "-out",
-            str(cert),
-            "-days",
-            "2",
-            "-subj",
-            "/CN=garden.example.test",
-            "-addext",
-            "subjectAltName=DNS:garden.example.test",
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    key.chmod(0o600)
+    self_signed(cert, key, "garden.example.test", days=2)
     with socket.socket() as allocated:
         allocated.bind(("127.0.0.1", 0))
         garden_port = allocated.getsockname()[1]

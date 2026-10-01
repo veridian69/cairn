@@ -20,9 +20,12 @@ func init() { rootCmd.AddCommand(newConnectCommand(), newAttendCommand(), newDoc
 func newDoctorCommand() *cobra.Command {
 	var profile string
 	var host bool
+	var readiness bool
 	command := &cobra.Command{Use: "doctor", Short: "Check Garden authentication and optional host session without sending", Args: cobra.NoArgs, PersistentPreRunE: func(*cobra.Command, []string) error { return nil }}
 	command.Flags().StringVar(&profile, "profile", "", "Explicit Garden adapter profile")
 	command.Flags().BoolVar(&host, "host", false, "Also read the explicitly selected host session")
+	command.Flags().BoolVar(&readiness, "readiness", false, "Emit one machine-readable Garden readiness observation without checking a host")
+	command.MarkFlagsMutuallyExclusive("host", "readiness")
 	_ = command.MarkFlagRequired("profile")
 	command.RunE = func(cmd *cobra.Command, _ []string) error {
 		p, err := attention.LoadProfile(profile)
@@ -33,6 +36,9 @@ func newDoctorCommand() *cobra.Command {
 		defer stop()
 		ctx, cancel := context.WithTimeout(signalCtx, 30*time.Second)
 		defer cancel()
+		if readiness {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(attention.Readiness(ctx, p))
+		}
 		report, err := attention.Doctor(ctx, p, host)
 		if err != nil {
 			return err

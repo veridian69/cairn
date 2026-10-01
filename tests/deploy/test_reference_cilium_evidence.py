@@ -769,7 +769,7 @@ exec /bin/cat \"$FAKE_FIXTURES/helm.json\"
             "-c",
             "user.name=Val",
             "-c",
-            "user.email=reviewer@example.invalid",
+            "user.email=val@jclk.ch",
             "commit",
             "-qm",
             "collector fixture",

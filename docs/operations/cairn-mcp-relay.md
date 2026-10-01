@@ -43,7 +43,9 @@ From `cairn-mcp/` in a trusted checkout:
 This builds and checks the source, installs the binary at
 `$HOME/.local/share/bin/cairn-mcp`, installs the user unit and creates
 `$HOME/.config/cairn/relay-token` only when absent. The token has mode `0600`.
-`--no-start` neither enables nor starts the service.
+`--no-start` neither enables nor starts the service. Without it, the installer
+enables the unit and restarts it, so re-running it after an update moves a
+running relay onto the new binary.
 
 ## Configure a client
 
@@ -61,6 +63,31 @@ args = ["stdio", "--upstream-url", "https://cairn.example/mcp"]
 STDIO reads the Cloudflare files directly and exits when its client's stdin
 closes. Restart the client after replacing either credential so a new process
 loads the complete pair.
+
+OpenCode takes the same launch as a `local` command array in
+`~/.config/opencode/opencode.json` or a project `opencode.json`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "cairn": {
+      "type": "local",
+      "command": [
+        "/absolute/path/to/cairn-mcp",
+        "stdio",
+        "--upstream-url",
+        "https://cairn.example/mcp"
+      ],
+      "enabled": true
+    }
+  }
+}
+```
+
+Verify with `opencode mcp list`. Never configure a remote entry that carries
+the Cloudflare headers; that puts the service-token pair into a client config
+file.
 
 ### HTTP with a user service
 

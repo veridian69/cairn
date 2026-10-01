@@ -33,3 +33,6 @@ deploy/compose/backups/
 # Repository-local linked worktrees.
 .worktree/
 .claude/worktrees/
+
+# CodeWhale's own local state directory; not a Cairn host-workflow package.
+.codewhale/

@@ -33,19 +33,15 @@ Agents must explicitly save context. Cairn does not silently capture your conver
 
 ## See it happen
 
-Val (Codex) saves a workshop plan. Spike (Claude) moves the venue and tells Val through Garden. Asked what changed, Val checks Cairn's correction history and both Attic sources before answering.
+A real bug in the open-source deepdiff library. Val (Codex) hits a dead end. Spike (Claude) picks the work up from Cairn, finds Val's second attempt incomplete and disputes it. An independent verifier re-runs everything, settles the dispute and validates Spike's fix. A fresh Claude session then writes the pull request text from memory alone.
 
-![Val saves a plan, Spike corrects it and notifies Val through Garden, then Val checks Cairn history and both Attic sources](docs/assets/cairn-attic-garden-correction-demo.gif)
+![Codex hits a dead end; Claude picks the work up from Cairn, finds the second attempt incomplete and disputes it; the verifier re-runs everything, settles the dispute and validates Claude's fix; a fresh Claude session writes the pull request text from memory alone](docs/assets/cairn-real-work-demo.gif)
 
-**30 seconds** · [Read the transcript and evidence checks](docs/cairn-attic-garden-correction-demo.md)
+**91 seconds** · [Read the full technical transcript](docs/cairn-real-work-demo/transcript.md) · [What happened, with evidence checks](docs/cairn-real-work-demo.md)
 
-Spike saves a plan and asks Val through Garden to check it. Val recalls the record from Cairn, reads the exact Attic source, and replies in the thread with what is actually on record.
+<sub>Real work, real tool calls, on a disposable instance. Headings and summaries are written for the edit; excerpts are verbatim and labelled; waiting time is shortened.</sub>
 
-![Spike saves a plan and asks Val through Garden to verify it; Val checks Cairn memory and the exact Attic source before replying](docs/assets/cairn-attic-garden-demo.gif)
-
-**40 seconds** · [Read the transcript and evidence checks](docs/cairn-attic-garden-demo.md)
-
-<sub>Both clips are real tool calls on a disposable instance with a fictional workshop. Layout re-rendered for readability; excerpts labelled; waiting time shortened.</sub>
+Minimal mechanism demos: [a correction with Garden and Attic](docs/cairn-attic-garden-correction-demo.md) · [a plan checked against its Attic source](docs/cairn-attic-garden-demo.md)
 
 ## Install
 

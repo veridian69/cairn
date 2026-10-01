@@ -1,0 +1,60 @@
+{
+  "checks": [
+    {
+      "number": 1,
+      "name": "actor custody",
+      "passed": true,
+      "detail": "every allowed mutation by an agent principal"
+    },
+    {
+      "number": 2,
+      "name": "dead end preserved",
+      "passed": true,
+      "detail": "2 failed-approach by an agent, 2 with diff and failing run"
+    },
+    {
+      "number": 3,
+      "name": "fix claimed",
+      "passed": true,
+      "detail": "2 candidate by spike, 2 with diff and passing run"
+    },
+    {
+      "number": 4,
+      "name": "disagreements resolved independently",
+      "passed": true,
+      "detail": "1 disagreements, unresolved by a verifier session on its own evidence: [], retained=True"
+    },
+    {
+      "number": 5,
+      "name": "promotion decision by the last verifier session",
+      "passed": true,
+      "detail": "t4-verifier: 1 validated derived from spike's candidate; 0 promotion(s) refused on evidence"
+    },
+    {
+      "number": 6,
+      "name": "code truth re-observed",
+      "passed": true,
+      "detail": "suite_on_fix=True failed_rev=7a878e9cad800bfa912ee3348f4e5d1035aca584 regression_fails_on_failed=True regression_fails_on_base=True lock_matches_run=True"
+    },
+    {
+      "number": 7,
+      "name": "cold start from memory only",
+      "passed": true,
+      "detail": "writes=[] garden=[] cited=14 unknown=[] cites_failed_approach=True fix_validated=True overclaims=[]"
+    },
+    {
+      "number": 8,
+      "name": "no egress",
+      "passed": true,
+      "detail": "foreign_remotes={} foreign_pushes=[] unsandboxed=[]"
+    }
+  ],
+  "timed_out": [],
+  "evidence_valid": true,
+  "demo_usable": true,
+  "beats": {
+    "t1_failing_run": true,
+    "worker_disagreement": true,
+    "loop_closed": true
+  }
+}

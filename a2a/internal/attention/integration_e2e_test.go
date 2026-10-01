@@ -121,6 +121,30 @@ func TestAttentionAdaptersEndToEndWithCentralGarden(t *testing.T) {
 	if err != nil || report.Garden != "authenticated_binding_verified" || report.Host != "tools_only" {
 		t.Fatalf("doctor: %+v %v", report, err)
 	}
+	t.Run("readiness_binding_and_unavailability", func(t *testing.T) {
+		ready := Readiness(ctx, diagnosticProfile)
+		if !ready.Ready || ready.Retryable || ready.Reason != "ready" {
+			t.Fatalf("valid readiness: %+v", ready)
+		}
+		wrong := diagnosticProfile
+		wrong.Participant = "another-participant"
+		rejected := Readiness(ctx, wrong)
+		if rejected.Ready || rejected.Retryable || rejected.Reason != "rejected" {
+			t.Fatalf("mismatched participant retried: %+v", rejected)
+		}
+		unavailable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer unavailable.Close()
+		missing := diagnosticProfile
+		missing.GardenEndpoint = unavailable.URL + "/mcp"
+		bounded, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		observation := Readiness(bounded, missing)
+		if observation.Ready || !observation.Retryable || observation.Reason != "unavailable" {
+			t.Fatalf("unavailable readiness: %+v", observation)
+		}
+	})
 	t.Run("tls_doctor", func(t *testing.T) {
 		secure := httptest.NewTLSServer(central.Handler())
 		defer secure.Close()

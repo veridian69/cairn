@@ -51,6 +51,33 @@ args = ['stdio', '--upstream-url', 'https://cairn.example.invalid/mcp']
 Restart Codex, then inspect `/mcp`. STDIO does not need a local relay token.
 Do not rely on the binary's compiled upstream default.
 
+## Configure OpenCode
+
+OpenCode runs natively on Windows, not only under WSL. Its config file follows
+the same `~/.config/opencode/` convention as Linux, which resolves under
+`%USERPROFILE%\.config\opencode\` on native Windows. Add a `local` server
+pointing at the same installed binary and trusted upstream:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "cairn": {
+      "type": "local",
+      "command": [
+        "C:\\Users\\YOUR_USERNAME\\AppData\\Local\\Programs\\Cairn\\cairn-mcp.exe",
+        "stdio",
+        "--upstream-url",
+        "https://cairn.example.invalid/mcp"
+      ],
+      "enabled": true
+    }
+  }
+}
+```
+
+Restart OpenCode and confirm with `opencode mcp list`.
+
 The binary is unsigned. Compare its SHA-256 with the separately published
 release checksum before installation:
 

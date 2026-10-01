@@ -117,6 +117,9 @@ The main sections are:
 The effective config behavior is:
 
 - `defaults.context_window` defaults to `50` and must be between `1` and `10000`
+- `a2a agent add` refuses an existing config it cannot read or parse, or whose
+  `defaults.context_window` is out of range, rather than replacing it; it does
+  not run the daemon's full validation
 - `defaults.responsiveness` defaults to `0.5`
 - agent `temperature` defaults to `0.7`
 - agent `responsiveness` falls back to the default responsiveness

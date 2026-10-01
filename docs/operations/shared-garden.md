@@ -353,7 +353,9 @@ make check
 
 The integration target defaults to the repository's `.venv/bin/python`; override
 `GARDEN_CAIRN_PYTHON` explicitly if needed. It starts a disposable real Cairn
-HTTP instance with synthetic credentials. Tests exercise real MCP HTTP, NATS and SQLite, simulated
+HTTP instance with synthetic credentials. It also runs Garden against that
+instance over HTTPS, once trusting the fixture's certificate authority and once
+with an unrelated one that must be refused. Tests exercise real MCP HTTP, NATS and SQLite, simulated
 host subprocess/HTTP/channel protocols, revocation and restart recovery. They
 make no provider calls and do not prove compatibility with every installed host
 release. Before production use, perform one addressed-message/reply smoke test

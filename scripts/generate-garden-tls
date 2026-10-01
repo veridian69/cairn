@@ -149,14 +149,58 @@ openssl genpkey -quiet -algorithm RSA \
   -pkeyopt rsa_keygen_bits:3072 \
   -out "$staging_dir/internal-ca-key.pem"
 
-openssl req -x509 -new -sha256 \
-  -days 3650 \
+# Both certificates start ten minutes in the past, so a peer whose clock runs a
+# little behind, or one stepped back by time synchronisation, does not reject a
+# fresh certificate as not yet valid. Explicit end dates keep the lifetimes
+# exact: 3650 days for the CA and 825 days, the Apple TLS maximum, for the
+# server. openssl req and x509 in OpenSSL 3.0 cannot set a start date; ca can.
+validity() {
+  python3 - "$1" <<'PY'
+from datetime import UTC, datetime, timedelta
+import sys
+
+start = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=10)
+end = start + timedelta(days=int(sys.argv[1]))
+print(start.strftime("%Y%m%d%H%M%SZ"), end.strftime("%Y%m%d%H%M%SZ"))
+PY
+}
+# openssl ca reports progress on its own; keep it unless signing fails.
+sign() {
+  openssl rand -hex 16 >"$staging_dir/serial"
+  local status=0
+  openssl ca -batch -notext -config "$ca_config" "$@" \
+    >"$staging_dir/ca.log" 2>&1 || status=$?
+  if ((status != 0)); then
+    cat "$staging_dir/ca.log" >&2
+    exit "$status"
+  fi
+}
+ca_config=$staging_dir/ca.cnf
+: >"$staging_dir/index.txt"
+printf '%s\n' \
+  '[ca]' 'default_ca = garden_ca' '' \
+  '[garden_ca]' \
+  "database = $staging_dir/index.txt" \
+  "serial = $staging_dir/serial" \
+  "new_certs_dir = $staging_dir" \
+  'default_md = sha256' 'policy = garden_policy' 'unique_subject = no' '' \
+  '[garden_policy]' 'commonName = supplied' '' \
+  '[internal_ca]' \
+  'basicConstraints = critical, CA:TRUE' \
+  'keyUsage = critical, keyCertSign, cRLSign' \
+  'subjectKeyIdentifier = hash' >"$ca_config"
+
+read -r ca_start ca_end < <(validity 3650)
+openssl req -new -sha256 \
   -key "$staging_dir/internal-ca-key.pem" \
-  -out "$staging_dir/internal-ca.pem" \
-  -subj '/CN=Cairn Garden Internal CA' \
-  -addext 'basicConstraints=critical,CA:TRUE' \
-  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
-  -addext 'subjectKeyIdentifier=hash'
+  -out "$staging_dir/internal-ca.csr" \
+  -subj '/CN=Cairn Garden Internal CA'
+sign -selfsign \
+  -keyfile "$staging_dir/internal-ca-key.pem" \
+  -in "$staging_dir/internal-ca.csr" \
+  -startdate "$ca_start" -enddate "$ca_end" \
+  -extensions internal_ca \
+  -out "$staging_dir/internal-ca.pem"
 
 openssl genpkey -quiet -algorithm RSA \
   -pkeyopt rsa_keygen_bits:3072 \
@@ -167,12 +211,12 @@ openssl req -new -sha256 \
   -out "$request" \
   -subj "/CN=${dns_name}"
 
-openssl x509 -req -sha256 \
+read -r server_start server_end < <(validity 825)
+sign \
+  -cert "$staging_dir/internal-ca.pem" \
+  -keyfile "$staging_dir/internal-ca-key.pem" \
   -in "$request" \
-  -CA "$staging_dir/internal-ca.pem" \
-  -CAkey "$staging_dir/internal-ca-key.pem" \
-  -set_serial "0x$(openssl rand -hex 16)" \
-  -days 825 \
+  -startdate "$server_start" -enddate "$server_end" \
   -extfile "$extensions" \
   -extensions garden_server \
   -out "$staging_dir/garden-cert.pem"

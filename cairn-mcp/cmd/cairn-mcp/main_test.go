@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -232,5 +233,60 @@ func TestRelayServerDoesNotApplyWholeResponseWriteDeadline(t *testing.T) {
 	}
 	if server.ReadHeaderTimeout != cfg.HeaderReadTimeout {
 		t.Fatalf("ReadHeaderTimeout = %s, want %s", server.ReadHeaderTimeout, cfg.HeaderReadTimeout)
+	}
+}
+
+func TestStdioTerminalErrorIsLoggedWithoutSecrets(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	const request = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"body-sentinel"}}`
+	stdin, stdinWriter := io.Pipe()
+	defer stdinWriter.Close()
+	go func() { _, _ = io.WriteString(stdinWriter, request+"\n") }()
+	var stdout, stderr bytes.Buffer
+
+	code := run(context.Background(), []string{
+		"stdio",
+		"--allow-http-upstream",
+		"--upstream-url", server.URL,
+		"--cf-client-id-path", writeMode0600(t, "client-id", "id-sentinel"),
+		"--cf-client-secret-path", writeMode0600(t, "client-secret", "secret-sentinel"),
+	}, stdin, &stdout, &stderr)
+
+	if code != 1 || !strings.Contains(stderr.String(), "stdio error:") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	path := filepath.Join(stateHome, "cairn-mcp", "stdio.log")
+	logged, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSuffix(string(logged), "\n")
+	timestamp, rest, _ := strings.Cut(line, " ")
+	if parsed, err := time.Parse(time.RFC3339, timestamp); err != nil || parsed.Location() != time.UTC {
+		t.Fatalf("log line %q has no UTC timestamp", line)
+	}
+	if rest != strings.TrimSuffix(stderr.String(), "\n") {
+		t.Fatalf("log line %q does not match stderr %q", rest, stderr.String())
+	}
+	for _, secret := range []string{"id-sentinel", "secret-sentinel", "body-sentinel", "CF-Access"} {
+		if strings.Contains(string(logged), secret) {
+			t.Fatalf("log contains %q: %q", secret, logged)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		for name, want := range map[string]os.FileMode{filepath.Dir(path): 0o700, path: 0o600} {
+			info, err := os.Stat(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != want {
+				t.Fatalf("%s mode = %v, want %v", name, info.Mode().Perm(), want)
+			}
+		}
 	}
 }

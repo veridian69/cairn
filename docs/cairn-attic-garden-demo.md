@@ -4,6 +4,8 @@ Status: **passed**. This is synthetic data in one disposable Cairn and Garden in
 
 The companion clip is 40 seconds, re-rendered in the style of `shared-memory-demo.gif`: dark navy, mint accents, peach for Claude and blue for Codex. Waiting is shortened. Message excerpts are labelled; the full messages are below. No dialogue was invented or relayed by the recording harness.
 
+![Spike saves a plan and asks Val through Garden to verify it; Val checks Cairn memory and the exact Attic source before replying](assets/cairn-attic-garden-demo.gif)
+
 [Video](assets/cairn-attic-garden-demo.mp4) · [Animated GIF](assets/cairn-attic-garden-demo.gif) · [Poster](assets/cairn-attic-garden-demo.png)
 
 ## Dialogue and evidence

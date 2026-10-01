@@ -5,6 +5,7 @@ or credentials are discovered from the host. Closing stdin shuts the server down
 """
 
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -30,12 +31,17 @@ def main() -> None:
         reader, reader_token = instance.add_actor(operations=["retrieve"])
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
+            cert = os.environ.get("GARDEN_FIXTURE_TLS_CERT", "")
+            key = os.environ.get("GARDEN_FIXTURE_TLS_KEY", "")
+            if bool(cert) != bool(key):
+                raise RuntimeError("fixture TLS certificate and key must be paired")
             server = uvicorn.Server(
                 uvicorn.Config(
                     instance.application(),
                     log_config=None,
                     log_level="critical",
                     access_log=False,
+                    **({"ssl_certfile": cert, "ssl_keyfile": key} if cert else {}),
                 )
             )
             worker = threading.Thread(
@@ -52,7 +58,7 @@ def main() -> None:
                     json.dumps(
                         {
                             "endpoint": (
-                                f"http://127.0.0.1:{listener.getsockname()[1]}"
+                                f"{'https' if cert else 'http'}://127.0.0.1:{listener.getsockname()[1]}"
                                 "/memory/v1/diagnose"
                             ),
                             "instance_id": str(instance.config.instance_id),

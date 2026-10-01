@@ -30,34 +30,13 @@ from cairn_install import garden
 from cairn_install.core import Context, InstallError, open_context
 from cairn_install.verification import request
 
+from .tls_support import self_signed
+
 
 @pytest.fixture
 def configuration(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     cert, key = tmp_path / "server.crt", tmp_path / "server.key"
-    subprocess.run(
-        [
-            "openssl",
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            str(key),
-            "-out",
-            str(cert),
-            "-days",
-            "2",
-            "-subj",
-            "/CN=garden.example.test",
-            "-addext",
-            "subjectAltName=DNS:garden.example.test",
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    key.chmod(0o600)
+    self_signed(cert, key, "garden.example.test", days=2)
     value: dict[str, Any] = {
         "endpoint": "https://garden.example.test:8443/mcp",
         "tls_cert_file": str(cert),
@@ -1046,3 +1025,26 @@ def test_verification_keeps_binding_mismatch_and_denial_fatal(
         )
         with pytest.raises(InstallError, match="differs from the retained deployment"):
             garden.verify(ctx)
+
+
+def test_test_certificates_are_backdated_ten_minutes(tmp_path: Path) -> None:
+    """Operator, 25 September 2026: a clock stepped back by time synchronisation must
+    not make a freshly generated certificate 'not yet valid'."""
+    import calendar
+    import time
+
+    cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
+    before = time.time()
+    self_signed(cert, key, "garden.example.test", days=2)
+    text = subprocess.check_output(
+        ["openssl", "x509", "-in", str(cert), "-noout", "-startdate", "-enddate",
+         "-ext", "subjectAltName,basicConstraints"], text=True,
+    )  # fmt: skip
+    start, end = (
+        calendar.timegm(time.strptime(line.split("=", 1)[1], "%b %d %H:%M:%S %Y GMT"))
+        for line in text.splitlines()[:2]
+    )
+    assert before - 600 - 2 <= start <= time.time() - 600 + 2
+    assert end - start == 2 * 86400
+    assert "DNS:garden.example.test" in text and "CA:TRUE" in text
+    assert key.stat().st_mode & 0o777 == 0o600
