@@ -1,11 +1,11 @@
 {
   "format": 1,
-  "source_revision": "c124cbf18443b945df779915182954cc6e2d4a35",
+  "source_revision": "0c6dadbe0781c519f9d6b28fea47122f04b7993e",
   "release_configuration": {
     "files.json": "06056d1c279531c97a37153277272c2ffcab22f6f895e0811a99288d56eb3e28",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
-    "sanitise.py": "de3a58fe7baae3e93a34e956d418d4c931f84ce0925e189d3afcd680bc82dc23",
+    "sanitise.py": "825cb1cd556756810af9b3de3fec1141ef1455e93bff9b754f8405640d86d740",
     "overlay_set_sha256": "01fc61397808eeb6967433382f093eccc6e167e972d0cb22861c12b9fb539757"
   },
   "files": {
@@ -1858,7 +1858,7 @@
       "mode": 420
     },
     "pyproject.toml": {
-      "sha256": "df7df8c89aa6c24bbd5c2cf4e5fa02dce3e82ef1dd8038cecd0b7bbc0aa2a9bb",
+      "sha256": "deee69836025263e1c4183186639adb86d1104b51bb82e8c3dd4f0983119232e",
       "mode": 420
     },
     "scripts/check-image-pins": {
