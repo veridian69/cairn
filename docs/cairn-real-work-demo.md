@@ -1,6 +1,6 @@
 # Real work: deepdiff issue #550
 
-Two AI agents, Val (Codex) and Spike (Claude), worked a real bug in the open-source [deepdiff](https://github.com/seperman/deepdiff) library, with an independent verifier (also Codex, in its own session). They shared one memory: Cairn. Every Cairn, Garden and Attic call was made by an agent; the harness only started each session with a goal-level prompt.
+Two AI agents, Val (Codex) and Spike (Claude), worked a real bug in the open-source [deepdiff](https://github.com/seperman/deepdiff) library, with an independent verifier (also Codex, in its own session). They shared one memory: Cairn. Every Cairn, Garden and Attic call in the story was made by an agent. The harness started each session with a goal-level prompt; outside the story, it also checked at startup that Garden answered, and after the last turn read the recorded evidence back from Attic for the automated checks.
 
 ![Codex hits a dead end; Claude picks the work up from Cairn, finds the second attempt incomplete and disputes it; the verifier re-runs everything, settles the dispute and validates Claude's fix; a fresh Claude session writes the pull request text from memory alone](assets/cairn-real-work-demo.gif)
 
@@ -33,7 +33,7 @@ The transcript lists every fact in full, every disagreement and resolution, ever
 - Cairn instance: `ed4a40af-b01c-44da-8cae-ac65048261ab` (disposable). Its catalogue uses a fixed test clock; CLI and Garden times are wall time.
 - deepdiff base revision: `79e4379278b1cfdd8e9e3dccac364956908e8989`. Venv lock SHA-256: `fb334fa6858516439466f0cddf7821c9916210ed5ef551cb7a702f5d29a325bc`.
 - Isolation: each session had a fresh clone, no tool network, and a local bare repository as its only remote.
-- Measured cost, as each CLI reports it: Claude USD 6.84 (T2 USD 5.41, T7 USD 1.43). Codex 6,021,636 tokens (T1 1,428,627; T3 2,655,835; T4 1,937,174).
+- Measured cost, as each CLI reports it: Claude USD 6.84 (T2 USD 5.41, T7 USD 1.43). Codex 3,100,972 input and output tokens (T1 735,056; T3 1,358,688; T4 1,007,228).
 - Wall time: T1 233.8 s, T2 504.5 s, T3 303.8 s, T4 247.6 s, T7 77.6 s.
 
 At publication, local paths, the directory names derived from them, the local account name and the disposable instance's bearer tokens are replaced by labelled placeholders. The publication fails closed if any provider credential appears in a published file.

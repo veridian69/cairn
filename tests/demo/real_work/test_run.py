@@ -248,3 +248,16 @@ def test_a_sandbox_that_failed_open_stops_the_run_after_that_turn(
     report = json.loads((out / "verification.json").read_text())
     eight = next(c for c in report["checks"] if c["number"] == 8)
     assert not eight["passed"] and report["evidence_valid"] is False
+
+
+def test_codex_cost_counts_input_and_output_once(tmp_path: Path) -> None:
+    # Capture 3's T1 event: cached and reasoning counts are parts of the input
+    # and output totals, not additions to them.
+    stdout = tmp_path / "t1.stdout.jsonl"
+    stdout.write_text(
+        '{"type":"turn.completed","usage":{"input_tokens":727571,'
+        '"cached_input_tokens":690688,"cache_write_input_tokens":0,'
+        '"output_tokens":7485,"reasoning_output_tokens":2883}}\n'
+        '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}\n'
+    )
+    assert run._cost(stdout) == {"claude_usd": 0.0, "codex_tokens": 735056 + 15}

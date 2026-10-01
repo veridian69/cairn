@@ -102,8 +102,10 @@ def _cost(stdout: Path) -> dict[str, Any]:
         if event.get("type") == "result":
             usd += float(event.get("total_cost_usd") or 0)
         if event.get("type") == "turn.completed":
+            # Cached input and reasoning output are parts of these two totals.
             usage = event.get("usage") or {}
-            tokens += sum(int(v) for v in usage.values() if isinstance(v, int))
+            tokens += int(usage.get("input_tokens") or 0)
+            tokens += int(usage.get("output_tokens") or 0)
     return {"claude_usd": round(usd, 4), "codex_tokens": tokens}
 
 

@@ -62,10 +62,10 @@ Re-verification of this same run directory, written after the capture under a la
 
 | Turn | Actor | Model requested | Wall s | Exit | Timed out | Cost |
 |---|---|---|---|---|---|---|
-| t1-val | val | gpt-6-sol | 233.8 | 0 | False | 1428627 Codex tokens |
+| t1-val | val | gpt-6-sol | 233.8 | 0 | False | 735056 Codex tokens |
 | t2-spike | spike | claude-fable-5-1 | 504.5 | 0 | False | USD 5.41 |
-| t3-val | val | gpt-6-sol | 303.8 | 0 | False | 2655835 Codex tokens |
-| t4-verifier | verifier | gpt-6-sol | 247.6 | 0 | False | 1937174 Codex tokens |
+| t3-val | val | gpt-6-sol | 303.8 | 0 | False | 1358688 Codex tokens |
+| t4-verifier | verifier | gpt-6-sol | 247.6 | 0 | False | 1007228 Codex tokens |
 | t5-spike-correction | spike | | | | | skipped |
 | t6-verifier-recheck | verifier | | | | | skipped |
 | t7-spike-cold | spike-cold | claude-fable-5-1 | 77.6 | 0 | False | USD 1.4298 |

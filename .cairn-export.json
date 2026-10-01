@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "3702061c567ccd801bb579315bc177745fd06f21",
+  "source_revision": "c124cbf18443b945df779915182954cc6e2d4a35",
   "release_configuration": {
-    "files.json": "94dc555fba7b43b3273a4f670bc5a04e5f8cd9e5a0776ddcb59e1b31db7edcbf",
+    "files.json": "06056d1c279531c97a37153277272c2ffcab22f6f895e0811a99288d56eb3e28",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "de3a58fe7baae3e93a34e956d418d4c931f84ce0925e189d3afcd680bc82dc23",
-    "overlay_set_sha256": "e2314d77c2023bb64e50b2aa75f040f26472e2210e46a7c2a73cc21e81943f9a"
+    "overlay_set_sha256": "01fc61397808eeb6967433382f093eccc6e167e972d0cb22861c12b9fb539757"
   },
   "files": {
     ".dockerignore": {
@@ -1646,11 +1646,11 @@
       "mode": 420
     },
     "docs/cairn-real-work-demo.md": {
-      "sha256": "9bf8406a13c5fb35c774870ec0e192fc805cf375714155102706035451d69a9b",
+      "sha256": "845b69803b060cd9166d2a90f8d2a36d7cd957377f2323622fb58c73eedb81e6",
       "mode": 420
     },
     "docs/cairn-real-work-demo/transcript.md": {
-      "sha256": "f5cbb13aa7d31770a90451b55f833ac58d6ae2c8fba63249a1cbe718975af96f",
+      "sha256": "37a925c6cfa0169b054ad73be1042222d2b7be0bfa74cd612412ca447a27db45",
       "mode": 420
     },
     "docs/cairn-real-work-demo/verification-ruling-a1.json": {
@@ -1982,7 +1982,7 @@
       "mode": 420
     },
     "scripts/real_work_demo/run.py": {
-      "sha256": "f4555c05e0ee75726619494ddbd2c54a92d6eefc8375ec77e5b537b54a99957f",
+      "sha256": "202f0aaa394fb625628b781785fb5a179e8038edc988b31185c45b07efa0e1f1",
       "mode": 420
     },
     "scripts/real_work_demo/storyboard.py": {
@@ -3374,7 +3374,7 @@
       "mode": 420
     },
     "tests/demo/real_work/test_run.py": {
-      "sha256": "ae3b6a9a628da57a46d7d01e8f30588ee02e7c33529aa8bb25662c8148e8c3cd",
+      "sha256": "5d4eb7dd5a9246f3767aa391881789bf8a6add0bc33b2687e68083d1564d7256",
       "mode": 420
     },
     "tests/demo/real_work/test_storyboard.py": {
