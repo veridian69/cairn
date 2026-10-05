@@ -8,6 +8,7 @@ from mcp.types import CallToolResult, Tool, ToolAnnotations
 from starlette.requests import Request
 
 from cairn.authority.gate import Actor
+from cairn.authority.memory_page_types import PageRejected
 from cairn.catalogue.transactions import (
     CatalogueContention,
     Rejected,
@@ -28,11 +29,13 @@ from cairn.transports.mcp.server import (
 from cairn.transports.memory.diagnostic_audit import argument_fingerprint
 from cairn.transports.memory.dispatch import MemoryDispatch
 from cairn.transports.memory.operations import (
+    AUDITED_READ_TOOL_NAMES,
     BY_TOOL,
     OPERATIONS,
     PROPOSAL_TOOL_NAMES,
     SESSION_TOOL_NAMES,
 )
+from cairn.transports.memory.page_failures import page_failure_result
 from cairn.transports.rest.middleware import OPERATION_STATE_KEY, OUTCOME_STATE_KEY
 from cairn.transports.v1.operations import OperationEntry
 from cairn.transports.v1.parsing import WireRejection
@@ -98,12 +101,17 @@ def build_server(dispatch: MemoryDispatch) -> Server:
                     forbid_idempotency_key(arguments)
                     body = arguments
                 value = await dispatch.run(name, body, actor, key, cid)
-                result = (
-                    failure_result(failure_envelope(value.failure))
-                    if isinstance(value, Rejected)
-                    else success_result(value)
-                )
+                if isinstance(value, PageRejected):
+                    result = page_failure_result(value)
+                elif isinstance(value, Rejected):
+                    result = failure_result(failure_envelope(value.failure))
+                else:
+                    result = success_result(value)
             except WireRejection as rejection:
+                if name in AUDITED_READ_TOOL_NAMES:
+                    await dispatch.audit_read_rejection(
+                        actor, cid, argument_fingerprint(arguments), name
+                    )
                 if name in PROPOSAL_TOOL_NAMES:
                     await dispatch.audit_proposal_rejection(
                         actor, cid, argument_fingerprint(arguments), name

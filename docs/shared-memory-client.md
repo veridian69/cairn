@@ -136,6 +136,215 @@ with existing callers. Scope-omitting legacy requests retain their existing
 grant-based behaviour; the Python host wrapper always opts into the additional
 exact-scope restriction. Frozen `/v1` request models are unchanged.
 
+## Ordered recall (`recall-page`)
+
+`POST /memory/v1/recall-page` and the MCP tool `recall-page` return recall
+results in a stated order and continue them across pages. Both are reads: they
+reject idempotency keys, need a live covering `retrieve` grant and do not create
+knowledge or strengthen trust. The Python client wraps them as
+`MemoryClient.recall_page` and `continue_recall`, and the CLI as `recall-page`.
+Legacy `recall` is unchanged: its frozen ordering and skip-to-fit accounting
+stay as they were. `recall-page` is separate because pages must not lose records:
+it stops before the first whole record that does not fit (a monotone prefix)
+instead of skipping it.
+
+```json
+{
+  "scope": {"realm": "cairn", "segments": []},
+  "query": "What labels should Acrid receipts receive?",
+  "order": "relevance",
+  "relevant_only": true,
+  "budget": 16384,
+  "limit": 20,
+  "trust_filters": []
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `order` | `relevance` (default), `newest` or `oldest`. |
+| `time_basis` | `source` (default) or `recorded`, for `newest`/`oldest` only. Omit it for `relevance`; supplying it, even null, is refused. |
+| `relevant_only` | Default `true`. Recency alone never selects a memory, even in a chronological order. |
+| `limit` | 1-100, default 20. |
+| `budget` | 1-1,048,576 canonical-record byte units, default 16,384. |
+| `trust_filters` | As for `recall`; empty is not the core API's validated-only rule. |
+
+A continuation sends exactly `scope`, `cursor`, `budget` and `limit`. The query,
+order, time basis, relevance and trust settings were bound when the cursor was
+issued and cannot change. The scope must match the original exactly. `cursor`
+is an opaque 43-character URL-safe token; do not parse it.
+
+Each hit is the `recall` fact plus `observed_at` (nullable),
+`source_time_status` (`available` or `unavailable`), `ordering_time_basis`
+(`source`, `recorded` or null for relevance) and `source_evidence_id`. The last
+is the Cairn-held evidence record of the fact's origin assertion, disclosed only
+when that origin is disclosable; null otherwise. Pass it to `evidence-window`
+(below) to read the exact source text around the fact. Source time is a caller-supplied
+observation claim, not custody time. Under the source basis, facts with an
+available source time come first in the requested direction; the rest follow,
+ordered by recorded time in the same direction. A withheld source time is indistinguishable from a
+missing one. Relevance order keeps the existing policy's comparison, and each
+`relevance_score` is the value computed when the snapshot was created.
+
+Besides the `recall` fields, a page carries:
+
+- `ordering`: `order`, `time_basis` and policy `memory-order/v1`. The top-level
+  `policy` is still the relevance or fallback policy actually used.
+- `snapshot_created_at` and `snapshot_expires_at`. The expiry is null when no
+  snapshot was published, that is when `next_cursor` is null on an initial page.
+- `next_cursor`: null when no cursor can be issued (see `facts_remaining`).
+- `facts_remaining`: another presently disclosable fact exists. If a snapshot
+  expired or was evicted before the next cursor could be issued, the page is
+  still returned with `facts_remaining: true` and `next_cursor: null`; it never
+  claims completion. Run a fresh query.
+- `context_incomplete`: permitted disagreement or resolution context was omitted
+  by its bounds. Use `history` for the rest.
+- `selection_complete`: false when more eligible matches existed than a
+  snapshot holds. It says nothing about recall quality or whole-archive
+  completeness; narrow the query or scope.
+
+`budget_exhausted` reports budget and context omissions, not the page count.
+
+### Operation-local failure
+
+Both refusals are HTTP 400, code `invalid_request`, retry `never`, with a
+`detail` that only this operation uses (the schema is `PageFailureEnvelope`):
+
+- `{"reason":"page_budget_too_small","minimum_budget":N}`: the first eligible
+  record (the whole paged record, including its time fields and the relationship
+  flags reserved at maximum length) needs N canonical bytes, 1 <= N <= 1,048,576. No fact is returned and
+  no cursor advances; resubmit with `budget` of at least N. A valid cursor stays
+  usable.
+- `{"reason":"continuation_unavailable"}`: the cursor is expired, unknown,
+  evicted, from another principal, instance or process, or from before a
+  restart; or the source-time projection of the snapshot changed. Nothing says
+  which. Start a fresh query.
+
+Other refusals, including request validation and `invalid_limit`, `invalid_scope`
+and `invalid_query`, keep the existing `FailureEnvelope`. The 400 schema for this
+path therefore allows either envelope.
+
+### Snapshots
+
+A snapshot is made only when a page has a `next_cursor`. It holds ranked fact
+identities, order keys and request bindings, never bodies, the raw query or
+credentials. It is process-local, dropped on shutdown and not backed up.
+
+| Limit | Value |
+| --- | --- |
+| Facts per snapshot | 4,096 |
+| Lifetime | 300 seconds, absolute |
+| Per principal | 4; a fifth evicts that principal's oldest |
+| Per process | 64 |
+| Metadata ceiling | 32 MiB |
+
+Past the process or metadata limit, after expired entries and the caller's own
+oldest snapshot are removed, the request fails with `dependency_unavailable`
+(`after-delay`); no other principal's snapshot is evicted. Every page re-checks
+authority, validity, corrections and provenance, and drops facts that are no
+longer eligible. Ranking and membership stay frozen, so new knowledge needs a
+new query. Restart a query after corrections or material new knowledge.
+
+## Evidence window (`evidence-window`)
+
+`POST /memory/v1/evidence-window` and the MCP tool `evidence-window` return one
+bounded, byte-exact window of a single Cairn-held evidence payload. They are
+reads: they reject idempotency keys, need a live covering `retrieve` grant and
+create no knowledge. This is an authenticated source read, not a fact or a trust
+assertion, and it does not depend on semantic readiness. The Python client
+wraps it as `MemoryClient.evidence_window(evidence_id, *, query=None,
+start=None, budget=16384)`, the CLI as `evidence-window` and the conversation
+adapter as the read-only `source_window` tool.
+
+The usual flow is `recall-page` hit, then its `source_evidence_id`, then
+`evidence-window`. A null `source_evidence_id` means there is no disclosable
+Cairn-held origin to read.
+
+```json
+{
+  "scope": {"realm": "cairn", "segments": []},
+  "evidence_id": "66666666-6666-4666-8666-666666666666",
+  "query": "port 8123",
+  "budget": 16384
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `evidence_id` | Canonical evidence UUID. |
+| `query` | 1-8,192 UTF-8 bytes, not whitespace-only, at most 32 distinct casefolded terms. Anchors a query window. |
+| `start` | UTF-8 byte offset, 0-1,048,576, on a character boundary. Default 0 when `query` is absent. |
+| `budget` | 1-1,048,576 canonical record bytes, metadata included; default 16,384. |
+
+`query` and `start` together are refused. Omit whichever is unused; do not send
+null.
+
+Each call repeats the `read-evidence` catalogue checks before touching Attic and
+verifies the whole payload's SHA-256, UTF-8 and length before disclosing any
+window. Unknown, inaccessible and external-reference evidence are
+indistinguishable (`not_found`); pending delivery, corruption and infrastructure
+failures keep their existing categories (`evidence_pending`, `evidence_corrupt`,
+`dependency_unavailable`). The query is secret-screened before any Attic read.
+
+### Locating a query: `literal-terms/v1`
+
+A local, deterministic literal locator, not FTS5 syntax or semantic matching:
+
+- The whole query (casefolded, leading and trailing whitespace stripped,
+  internal whitespace exact) is tried first and needs no word boundaries.
+- Otherwise each whitespace-separated, Unicode-casefolded term must occur as a
+  complete term: each neighbour is the text edge or a character that is neither
+  alphanumeric nor `_`.
+- The earliest original start wins. Ties go to the longest original span, then
+  the longest folded term, then codepoint order.
+- Neither text nor query is Unicode-normalised. Both match ends must fall on
+  whole original characters: `ss` may match a whole `ß`, but not half of it.
+- More than 32 distinct folded terms is refused. Offsets are always bytes of the
+  original UTF-8 payload, never of folded text.
+
+A query window starts at most two LF-delimited lines before the anchor line and
+runs to at most six lines from the anchor line, inclusive. A match spanning more
+lines stays whole. To fit the budget, preceding context is trimmed first, then
+following context; the matched span itself is never cut.
+
+### Result
+
+| Field | Meaning |
+| --- | --- |
+| `evidence_id`, `mode` | The record read; `query` or `offset`. |
+| `text` | Exact source text of the window. |
+| `start_byte`, `end_byte` | Window in payload bytes, end exclusive. |
+| `sha256`, `byte_length` | Whole-payload digest and length. |
+| `match_found` | `true` or `false` for a query; null for an offset read. |
+| `match_start_byte`, `match_end_byte` | The original matched span, inside the window. |
+| `prefix_omitted`, `suffix_omitted` | Whether payload text lies before or after the window. |
+| `next_start_byte` | `end_byte` while a suffix remains; null otherwise. |
+| `budget_consumed` | Canonical bytes of this record without `budget_consumed`. |
+
+A query without a match returns `match_found: false` with null `text`, window,
+match span, omission flags and `next_start_byte`; the digest and length are still
+reported, and this metadata still consumes budget. An offset read at the end of
+the payload returns empty text, `start_byte = end_byte = byte_length`,
+`prefix_omitted` true when the payload is non-empty, `suffix_omitted: false` and
+no continuation.
+
+Continue by repeating the request with `start: next_start_byte` and no query.
+Every call re-authorises and re-verifies the full digest; there is no server
+snapshot, and a continuation always makes progress. The client validates the
+exact keys, the variant shape, the byte arithmetic and that `budget_consumed`
+equals the record's canonical cost.
+
+If even the metadata and the whole match (or one character) cannot fit, the
+refusal is HTTP 400, `invalid_request`, `never`, with
+`{"reason":"page_budget_too_small","minimum_budget":N}` (`PageFailureEnvelope`);
+retry with a budget of at least N. Other refusals, such as a mid-character or
+out-of-range `start` or an invalid query, keep `FailureEnvelope`.
+
+This reads one stored payload. It does not parse JSON or dialogue, join turns
+across separately stored evidence records, or authenticate speaker identity; a
+role label inside the text is only text. Use `read-evidence` for the complete
+envelope.
+
 ## Where were we?
 
 Call `session.arrive` when entering a conversation or resuming a topic. The

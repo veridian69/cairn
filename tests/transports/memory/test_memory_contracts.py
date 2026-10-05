@@ -100,6 +100,8 @@ def test_all_contract_references_resolve_and_tool_schemas_are_closed() -> None:
             "diagnose",
             "remember",
             "recall",
+            "recall-page",
+            "evidence-window",
             "history",
             "suggest",
             "propose",
@@ -152,3 +154,28 @@ def test_missing_packaged_memory_contract_refuses_startup(
     monkeypatch.setattr(composition, "packaged_bytes", unavailable)
     with pytest.raises(FileNotFoundError):
         instance.application()
+
+
+def _failure_schema(document: dict[str, Any], path: str) -> dict[str, Any]:
+    schema: dict[str, Any] = document["paths"][path]["post"]["responses"]["400"][
+        "content"
+    ]["application/json"]["schema"]
+    return schema
+
+
+def test_new_operations_describe_their_operation_local_failure() -> None:
+    document = openapi_document()
+    for path in ("/memory/v1/recall-page", "/memory/v1/evidence-window"):
+        # Wire rejections and authority invalid_request refusals keep the
+        # legacy envelope; the page failure detail is the other alternative.
+        assert _failure_schema(document, path) == {
+            "oneOf": [
+                {"$ref": "#/components/schemas/FailureEnvelope"},
+                {"$ref": "#/components/schemas/PageFailureEnvelope"},
+            ]
+        }
+    assert _failure_schema(document, "/memory/v1/recall") == {
+        "$ref": "#/components/schemas/FailureEnvelope"
+    }
+    assert "PageFailureEnvelope" in document["components"]["schemas"]
+    assert document["info"]["version"] == "cairn.memory/v1"

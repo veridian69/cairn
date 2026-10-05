@@ -79,6 +79,25 @@ _RECALL_FIELDS = frozenset(
     }
 )
 
+_PAGED_FACT_FIELDS = _FACT_FIELDS | frozenset(
+    {"observed_at", "source_time_status", "ordering_time_basis", "source_evidence_id"}
+)
+_PAGE_FIELDS = _RECALL_FIELDS | frozenset(
+    {
+        "ordering",
+        "snapshot_created_at",
+        "snapshot_expires_at",
+        "next_cursor",
+        "facts_remaining",
+        "context_incomplete",
+        "selection_complete",
+    }
+)
+# Recall-page vocabulary, shared with the client methods and the CLI.
+ORDERS = frozenset({"relevance", "newest", "oldest"})
+TIME_BASES = frozenset({"source", "recorded"})
+CURSOR = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+
 
 def _canonical_size(value: object) -> int:
     return len(
@@ -181,8 +200,10 @@ def _source_type(value: object) -> str | None:
     return text
 
 
-def _fact(value: object) -> tuple[str, bool, bool]:
-    fact = _object(value, _FACT_FIELDS)
+def _fact(
+    value: object, fields: frozenset[str] = _FACT_FIELDS
+) -> tuple[str, bool, bool]:
+    fact = _object(value, fields)
     identity = _uuid(fact["fact_id"])
     assert identity is not None
     body = _text(fact["body"])
@@ -265,7 +286,15 @@ def _resolution(value: object) -> tuple[str, str, str | None]:
 
 def validate_recall(value: object, *, budget: int) -> dict[str, object]:
     """Validate the complete current recall packet without discarding fields."""
-    document = _object(value, _RECALL_FIELDS)
+    return _validate_packet(
+        _object(value, _RECALL_FIELDS), budget=budget, fact_fields=_FACT_FIELDS
+    )
+
+
+def _validate_packet(
+    document: dict[str, object], *, budget: int, fact_fields: frozenset[str]
+) -> dict[str, object]:
+    """Recall-packet checks shared by legacy recall and ordered pages."""
     consumed = document["budget_consumed"]
     if type(consumed) is not int or not 0 <= consumed <= budget:
         raise ValueError("invalid_budget_consumed")
@@ -277,7 +306,7 @@ def validate_recall(value: object, *, budget: int) -> dict[str, object]:
     if type(document["semantic_degraded"]) is not bool:
         raise ValueError("invalid_semantic_degraded")
 
-    facts = [_fact(item) for item in _list(document["hits"])]
+    facts = [_fact(item, fact_fields) for item in _list(document["hits"])]
     fact_ids = {identity for identity, _, _ in facts}
     if len(fact_ids) != len(facts):
         raise ValueError("duplicate_fact")
@@ -322,6 +351,155 @@ def validate_recall(value: object, *, budget: int) -> dict[str, object]:
     disclosed_size += sum(_canonical_size(item) for item in disagreement_values)
     disclosed_size += sum(_canonical_size(item) for item in resolution_values)
     if consumed != disclosed_size:
+        raise ValueError("invalid_budget_consumed")
+    return document
+
+
+def _choice(value: object, choices: frozenset[str], *, nullable: bool = False) -> None:
+    if value is None and nullable:
+        return
+    if type(value) is not str or value not in choices:
+        raise ValueError("invalid_choice")
+
+
+def validate_recall_page(
+    value: object, *, budget: int, limit: int
+) -> dict[str, object]:
+    """Validate a complete recall-page packet, including whole paged records.
+
+    Budget accounting is the legacy rule over the paged record: canonical
+    hits (with their time fields), disagreements and resolutions.
+    """
+    document = _object(value, _PAGE_FIELDS)
+    ordering = _object(
+        document["ordering"], frozenset({"order", "time_basis", "policy"})
+    )
+    _choice(ordering["order"], ORDERS)
+    _choice(ordering["time_basis"], TIME_BASES, nullable=True)
+    if ordering["policy"] != "memory-order/v1" or (
+        ordering["order"] == "relevance"
+    ) != (ordering["time_basis"] is None):
+        raise ValueError("invalid_ordering")
+    for name in ("facts_remaining", "context_incomplete", "selection_complete"):
+        if type(document[name]) is not bool:
+            raise ValueError(f"invalid_{name}")
+    _timestamp(document["snapshot_created_at"])
+    expires = _timestamp(document["snapshot_expires_at"], nullable=True)
+    cursor = document["next_cursor"]
+    if cursor is not None:
+        if type(cursor) is not str or CURSOR.match(cursor) is None:
+            raise ValueError("invalid_next_cursor")
+        if document["facts_remaining"] is not True:
+            raise ValueError("cursor_without_remaining_facts")
+        if expires is None:
+            raise ValueError("cursor_without_snapshot")
+    hits = _list(document["hits"])
+    if len(hits) > limit:
+        raise ValueError("page_limit_exceeded")
+    for hit in hits:
+        item = _object(hit, _PAGED_FACT_FIELDS)
+        observed = _timestamp(item["observed_at"], nullable=True)
+        _choice(item["source_time_status"], frozenset({"available", "unavailable"}))
+        if (item["source_time_status"] == "available") != (observed is not None):
+            raise ValueError("inconsistent_source_time")
+        if item["ordering_time_basis"] != ordering["time_basis"]:
+            raise ValueError("inconsistent_time_basis")
+        _uuid(item["source_evidence_id"], nullable=True)
+    return _validate_packet(document, budget=budget, fact_fields=_PAGED_FACT_FIELDS)
+
+
+_WINDOW_FIELDS = frozenset(
+    {
+        "evidence_id",
+        "mode",
+        "text",
+        "start_byte",
+        "end_byte",
+        "sha256",
+        "byte_length",
+        "match_found",
+        "match_start_byte",
+        "match_end_byte",
+        "prefix_omitted",
+        "suffix_omitted",
+        "next_start_byte",
+        "budget_consumed",
+    }
+)
+# Null in the query no-match variant; also null match fields in offset mode.
+_WINDOW_EXTENT = (
+    "text",
+    "start_byte",
+    "end_byte",
+    "prefix_omitted",
+    "suffix_omitted",
+    "next_start_byte",
+)
+
+
+def _count(value: object) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError("invalid_count")
+    return value
+
+
+def validate_evidence_window(value: object, *, budget: int) -> dict[str, object]:
+    """Validate one evidence-window record: exact keys, variant shape, byte
+    arithmetic and the canonical cost of the record without budget_consumed."""
+    document = _object(value, _WINDOW_FIELDS)
+    _uuid(document["evidence_id"])
+    _choice(document["mode"], frozenset({"query", "offset"}))
+    digest = document["sha256"]
+    if type(digest) is not str or _DIGEST.match(digest) is None:
+        raise ValueError("invalid_sha256")
+    length = _count(document["byte_length"])
+    found = document["match_found"]
+    query = document["mode"] == "query"
+    if query and found is False:
+        if any(
+            document[name] is not None
+            for name in (*_WINDOW_EXTENT, "match_start_byte", "match_end_byte")
+        ):
+            raise ValueError("invalid_no_match")
+    else:
+        if found is not (True if query else None):
+            raise ValueError("invalid_match_found")
+        text = _text(document["text"])
+        assert text is not None
+        start = _count(document["start_byte"])
+        end = _count(document["end_byte"])
+        if not start <= end <= length or len(text.encode("utf-8")) != end - start:
+            raise ValueError("invalid_window")
+        if document["prefix_omitted"] is not (start > 0):
+            raise ValueError("invalid_prefix_omitted")
+        suffix = document["suffix_omitted"]
+        if suffix is not (end < length):
+            raise ValueError("invalid_suffix_omitted")
+        following = document["next_start_byte"]
+        # Continuation must make progress; only the end of payload has none.
+        if (
+            type(following) is not int or following != end or end == start
+            if suffix
+            else following is not None
+        ):
+            raise ValueError("invalid_next_start_byte")
+        if query:
+            match_start = _count(document["match_start_byte"])
+            match_end = _count(document["match_end_byte"])
+            if not start <= match_start < match_end <= end:
+                raise ValueError("match_outside_window")
+        elif (
+            document["match_start_byte"] is not None
+            or document["match_end_byte"] is not None
+        ):
+            raise ValueError("offset_match_span")
+    consumed = document["budget_consumed"]
+    record = {key: item for key, item in document.items() if key != "budget_consumed"}
+    if (
+        type(consumed) is not int
+        or consumed != _canonical_size(record)
+        or consumed > budget
+    ):
         raise ValueError("invalid_budget_consumed")
     return document
 

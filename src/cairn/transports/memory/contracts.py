@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from pydantic.json_schema import JsonSchemaMode, models_json_schema
 
 from cairn.catalogue.transactions import FailureCode
+from cairn.transports.memory.models import PageFailureEnvelope
 from cairn.transports.memory.operations import OPERATIONS, PROPOSAL_TOOL_NAMES
 from cairn.transports.memory.server import PROPOSAL_KEY_SCHEMA, build_memory_tool
 from cairn.transports.rest.v1.openapi import _path_item, _success_name
@@ -16,6 +17,9 @@ from cairn.transports.v1.wire import FailureEnvelope
 
 OPENAPI_NAME = "cairn-memory-openapi-v1.json"
 MANIFEST_NAME = "cairn-memory-mcp-tools-v1.json"
+# Operations whose authority refusals can carry the operation-local page
+# failure detail (distinct from the wire-rejection audit set).
+PAGE_FAILURE_TOOL_NAMES = frozenset({"recall-page", "evidence-window"})
 
 
 def packaged_bytes(name: str) -> bytes:
@@ -26,7 +30,8 @@ def packaged_bytes(name: str) -> bytes:
 
 def openapi_document() -> dict[str, Any]:
     models: list[tuple[type[BaseModel], JsonSchemaMode]] = [
-        (FailureEnvelope, "serialization")
+        (FailureEnvelope, "serialization"),
+        (PageFailureEnvelope, "serialization"),
     ]
     for entry in OPERATIONS:
         assert entry.request is not None
@@ -51,6 +56,17 @@ def openapi_document() -> dict[str, Any]:
                 if parameter["name"] == "Idempotency-Key":
                     parameter["schema"] = dict(PROPOSAL_KEY_SCHEMA)
                     parameter["description"] = PROPOSAL_KEY_SCHEMA["description"]
+    for entry in OPERATIONS:
+        if entry.tool in PAGE_FAILURE_TOOL_NAMES:
+            content = paths[entry.path]["post"]["responses"]["400"]["content"][
+                "application/json"
+            ]
+            content["schema"] = {
+                "oneOf": [
+                    {"$ref": "#/components/schemas/FailureEnvelope"},
+                    {"$ref": "#/components/schemas/PageFailureEnvelope"},
+                ]
+            }
     return {
         "openapi": "3.1.0",
         "info": {"title": "Cairn shared memory", "version": "cairn.memory/v1"},

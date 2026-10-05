@@ -12,12 +12,25 @@ from cairn.catalogue.sqlite import canonical_timestamp
 
 
 def memory_value(value: object) -> object:
+    # Function-local only because a module-level import once tripped mypy's
+    # module resolution order ([attr-defined]); there is no runtime import cycle.
+    from cairn.authority.memory_page_types import PagedMemoryFact
+
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, datetime):
         return canonical_timestamp(value)
     if isinstance(value, Enum):
         return value.value
+    if isinstance(value, PagedMemoryFact):
+        record = cast(dict[str, object], memory_value(value.memory))
+        return {
+            **record,
+            "observed_at": memory_value(value.observed_at),
+            "source_time_status": value.source_time_status.value,
+            "ordering_time_basis": memory_value(value.ordering_time_basis),
+            "source_evidence_id": memory_value(value.source_evidence_id),
+        }
     if isinstance(value, MemoryFact):
         fact = cast(dict[str, object], memory_value(value.fact))
         del fact["provenance"]

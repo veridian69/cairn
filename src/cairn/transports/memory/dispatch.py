@@ -12,6 +12,7 @@ from cairn.authority.diagnostics import CairnDiagnostics, Diagnose, DiagnosticSn
 from cairn.authority.gate import Actor, fetch_from, instance_denial_draft, instance_id
 from cairn.authority.housekeeping_types import Suggest, SuggestionResult
 from cairn.authority.memory_codec import memory_value
+from cairn.authority.memory_page_types import PageRejected, RecallContinue
 from cairn.authority.mutations import CairnAuthority
 from cairn.authority.proposals import CairnProposals
 from cairn.authority.sessions import CairnSessions
@@ -30,13 +31,16 @@ from cairn.transports.memory.models import (
     DiagnoseBody,
     DiagnoseRequest,
     DisagreeRequest,
+    EvidenceWindowRequest,
     HistoryRequest,
+    RecallPageRequest,
     RecallRequest,
     RelationshipResult,
     RememberRequest,
     ResolveRequest,
 )
 from cairn.transports.memory.operations import (
+    AUDITED_READ_TOOL_NAMES,
     BY_TOOL,
     PROPOSAL_TOOL_NAMES,
     SESSION_TOOL_NAMES,
@@ -53,9 +57,13 @@ from cairn.transports.memory.suggestion_translation import (
 from cairn.transports.memory.translation import (
     correct_command,
     disagree_command,
+    evidence_window_command,
+    evidence_window_result,
     history_command,
     history_result,
     recall_command,
+    recall_page_command,
+    recall_page_result,
     recall_result,
     remember_command,
     resolve_command,
@@ -74,6 +82,7 @@ from cairn.transports.v1.wire import RULE_IDEMPOTENCY_KEY_MALFORMED, WireModel
 
 if TYPE_CHECKING:
     from cairn.authority.memory import CairnMemory
+    from cairn.authority.memory_pages import CairnMemoryPages
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +98,7 @@ class MemoryDispatch:
         *,
         authority: CairnAuthority,
         memory: "CairnMemory",
+        pages: "CairnMemoryPages",
         sessions: CairnSessions,
         proposals: CairnProposals,
         diagnostics: CairnDiagnostics,
@@ -149,6 +159,22 @@ class MemoryDispatch:
                 lambda b: recall_command(validated(RecallRequest, b)),
                 lambda a, c, k, cid: memory.recall(a, c, correlation_id=cid),
                 recall_result,
+            ),
+            "recall-page": Handler(
+                lambda b: recall_page_command(validated(RecallPageRequest, b)),
+                lambda a, c, k, cid: (
+                    pages.recall_continue(a, c, correlation_id=cid)
+                    if isinstance(c, RecallContinue)
+                    else pages.recall_page(a, c, correlation_id=cid)
+                ),
+                recall_page_result,
+            ),
+            "evidence-window": Handler(
+                lambda b: evidence_window_command(validated(EvidenceWindowRequest, b)),
+                lambda a, c, k, cid: authority.evidence_window(
+                    a, c, correlation_id=cid
+                ),
+                evidence_window_result,
             ),
             "history": Handler(
                 lambda b: history_command(validated(HistoryRequest, b)),
@@ -326,6 +352,12 @@ class MemoryDispatch:
             lambda body: session_command(validated(model, body)), invoke, session_result
         )
 
+    async def audit_read_rejection(
+        self, actor: Actor, correlation_id: UUID, fingerprint: bytes, name: str
+    ) -> None:
+        assert name in AUDITED_READ_TOOL_NAMES
+        await self._audit_wire_rejection(actor, correlation_id, fingerprint, name)
+
     async def audit_diagnostic_rejection(
         self, actor: Actor, correlation_id: UUID, fingerprint: bytes
     ) -> None:
@@ -372,7 +404,7 @@ class MemoryDispatch:
         actor: Actor,
         key: UUID | None,
         correlation_id: UUID,
-    ) -> WireModel | Rejected:
+    ) -> WireModel | Rejected | PageRejected:
         handler = self.handlers[name]
         command = handler.translate(body)
         mutation = BY_TOOL[name].mutation
@@ -399,7 +431,7 @@ class MemoryDispatch:
                 value = await anyio.to_thread.run_sync(execute)
         else:
             value = await anyio.to_thread.run_sync(execute)
-        if isinstance(value, Rejected):
+        if isinstance(value, Rejected | PageRejected):
             return value
         return (
             success_envelope(value, handler.render(value.value))

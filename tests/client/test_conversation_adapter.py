@@ -998,7 +998,7 @@ async def test_conversation_reads_retrieve_fixture_facts_with_fixed_byte_budget(
         budgets: list[int] = []
 
         async def record(request: httpx.Request) -> None:
-            if request.url.path.endswith(("/recall", "/history")):
+            if request.url.path.endswith(("/recall", "/recall-page", "/history")):
                 budgets.append(json.loads(request.content)["budget"])
 
         http.event_hooks["request"].append(record)
@@ -1100,6 +1100,7 @@ async def test_read_only_mcp_inventory_contains_only_nonmutating_tools(
             "sources",
             "recall",
             "history",
+            "source_window",
         }
         assert all(
             tool.annotations is not None and tool.annotations.readOnlyHint

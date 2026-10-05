@@ -183,6 +183,7 @@ class _ScriptedAttic:
         self.payload = payload
         self.search_raises = search_raises
         self.calls: list[tuple[str, int]] = []
+        self.fetches: list[UUID] = []
 
     def store(
         self, evidence_id: UUID, payload: bytes
@@ -192,6 +193,7 @@ class _ScriptedAttic:
     def fetch(
         self, evidence_id: UUID
     ) -> FetchedPayload | PayloadAbsent | PayloadCorrupt:
+        self.fetches.append(evidence_id)
         return FetchedPayload(payload=self.payload)
 
     def search(self, query: str, limit: int) -> tuple[UUID, ...]:
@@ -379,6 +381,21 @@ def _seed_outsider(data_path: Path) -> None:
 
 def _agent_actor() -> Actor:
     return Actor(principal_id=_AGENT_ID, credential_id=_AGENT_CREDENTIAL_ID)
+
+
+def _retrieved_fact(fact_id: UUID, *, recorded_at: datetime) -> RetrievedFact:
+    return RetrievedFact(
+        fact_id=fact_id,
+        body="body",
+        scope=_SCOPE,
+        classification=Classification.INTERNAL,
+        trust=TrustClass.CANDIDATE,
+        provenance=IngestedProvenance(assertion_id=fact_id),
+        valid_from=None,
+        valid_to=None,
+        recorded_at=recorded_at,
+        invalidated_at=None,
+    )
 
 
 def _outsider_actor() -> Actor:

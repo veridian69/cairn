@@ -60,26 +60,35 @@ class EvidenceReadResult:
     media_type: str = "text/plain; charset=utf-8"
 
 
-def read_evidence(
+@dataclass(frozen=True, slots=True)
+class _Verified:
+    text: str
+    digest_hex: str
+    length: int
+    grant_id: UUID
+
+
+def _read_verified(
     data_path: Path,
     transactions: CatalogueTransactions,
     actor: Actor,
-    command: ReadEvidence,
+    scope: Scope,
+    evidence_id: UUID,
     *,
+    action_code: str,
     correlation_id: UUID,
     clock: Callable[[], datetime],
     enabled: bool,
     attic: AtticAdapter | None,
     metrics: Metrics | None = None,
     logger: SafeLogger | None = None,
-) -> EvidenceReadResult | Rejected:
-    """Resolve catalogue authority before consulting the untrusted byte store.
+    admit: Callable[[], tuple[str, FailureCode] | None] | None = None,
+) -> _Verified | Rejected:
+    """Catalogue-first verified fetch shared by evidence readers.
 
-    Actor authentication belongs to the transport, as for retrieve. Grants are
-    read afresh on every call. Source evidence is not a validated fact: trust
-    and fact invalidation do not erase the source needed to inspect a claim.
+    ``admit`` runs after the grant and evidence-ID checks and before the
+    ``enabled`` check, the catalogue row and any Attic I/O.
     """
-    scope = command.scope
     grant_id: UUID | None = None
     with read_connection(data_path) as connection:
         fetch = fetch_from(connection)
@@ -95,7 +104,7 @@ def read_evidence(
                 if logger is not None:
                     logger.emit(
                         LogEvent.EVIDENCE_DIGEST_MISMATCH,
-                        evidence_id=command.evidence_id,
+                        evidence_id=evidence_id,
                         transport=None,
                     )
             messages = {
@@ -105,12 +114,15 @@ def read_evidence(
                 FailureCode.EVIDENCE_PENDING: "Evidence delivery is pending.",
                 FailureCode.EVIDENCE_CORRUPT: "Evidence integrity check failed.",
                 FailureCode.DEPENDENCY_UNAVAILABLE: "Dependency unavailable.",
+                FailureCode.SECRET_REJECTED: (
+                    "The request contains prohibited secret material."
+                ),
             }
             draft = (
                 instance_denial_draft(
                     instance_id(fetch),
                     actor,
-                    "read-evidence",
+                    action_code,
                     reason,
                     correlation_id,
                     action_kind=ActionKind.DATA,
@@ -121,7 +133,7 @@ def read_evidence(
                     actor=actor,
                     grant_id=grant_id,
                     action_kind=ActionKind.DATA,
-                    action_code="read-evidence",
+                    action_code=action_code,
                     requested_scope=scope,
                     outcome=Outcome.DENY,
                     reason_code=reason,
@@ -149,14 +161,18 @@ def read_evidence(
         if not covering:
             return reject("retrieve_grant_not_held", FailureCode.AUTHORISATION_DENIED)
         grant_id = covering[0].grant_id
-        if type(command.evidence_id) is not UUID or command.evidence_id.version != 4:
+        if type(evidence_id) is not UUID or evidence_id.version != 4:
             return reject("invalid_evidence_id")
+        if admit is not None:
+            refused = admit()
+            if refused is not None:
+                return reject(refused[0], refused[1])
         if not enabled:
             return reject("evidence_disabled")
         row = connection.execute(
             "SELECT realm_id, scope_segments, classification, payload_digest, "
             "payload_length, assertion_id FROM evidence_records WHERE evidence_id = ?",
-            (str(command.evidence_id),),
+            (str(evidence_id),),
         ).fetchone()
         if row is None:
             return reject("evidence_not_found", FailureCode.NOT_FOUND)
@@ -181,7 +197,7 @@ def read_evidence(
                 RetryClass.AFTER_DELAY,
             )
         try:
-            result = attic.fetch(command.evidence_id)
+            result = attic.fetch(evidence_id)
         except Exception:
             return reject(
                 "evidence_fetch_failed",
@@ -191,7 +207,7 @@ def read_evidence(
         if isinstance(result, PayloadAbsent):
             pending = connection.execute(
                 "SELECT 1 FROM evidence_outbox WHERE evidence_id = ? LIMIT 1",
-                (str(command.evidence_id),),
+                (str(evidence_id),),
             ).fetchone()
             if pending:
                 return reject(
@@ -217,18 +233,58 @@ def read_evidence(
             text = payload.decode("utf-8")
         except UnicodeDecodeError:
             return reject("evidence_corrupt", FailureCode.EVIDENCE_CORRUPT)
-        transactions.append_audit(
-            realm_draft(
-                realm_id=scope.realm,
-                actor=actor,
-                grant_id=grant_id,
-                action_kind=ActionKind.DATA,
-                action_code="read-evidence",
-                requested_scope=scope,
-                outcome=Outcome.ALLOW,
-                reason_code="evidence_read_completed",
-                correlation_id=correlation_id,
-                affected_evidence_ids=(command.evidence_id,),
-            )
+        return _Verified(text, digest.hex(), length, grant_id)
+
+
+def read_evidence(
+    data_path: Path,
+    transactions: CatalogueTransactions,
+    actor: Actor,
+    command: ReadEvidence,
+    *,
+    correlation_id: UUID,
+    clock: Callable[[], datetime],
+    enabled: bool,
+    attic: AtticAdapter | None,
+    metrics: Metrics | None = None,
+    logger: SafeLogger | None = None,
+) -> EvidenceReadResult | Rejected:
+    """Resolve catalogue authority before consulting the untrusted byte store.
+
+    Actor authentication belongs to the transport, as for retrieve. Grants are
+    read afresh on every call. Source evidence is not a validated fact: trust
+    and fact invalidation do not erase the source needed to inspect a claim.
+    """
+    verified = _read_verified(
+        data_path,
+        transactions,
+        actor,
+        command.scope,
+        command.evidence_id,
+        action_code="read-evidence",
+        correlation_id=correlation_id,
+        clock=clock,
+        enabled=enabled,
+        attic=attic,
+        metrics=metrics,
+        logger=logger,
+    )
+    if isinstance(verified, Rejected):
+        return verified
+    transactions.append_audit(
+        realm_draft(
+            realm_id=command.scope.realm,
+            actor=actor,
+            grant_id=verified.grant_id,
+            action_kind=ActionKind.DATA,
+            action_code="read-evidence",
+            requested_scope=command.scope,
+            outcome=Outcome.ALLOW,
+            reason_code="evidence_read_completed",
+            correlation_id=correlation_id,
+            affected_evidence_ids=(command.evidence_id,),
         )
-        return EvidenceReadResult(command.evidence_id, text, digest.hex(), length)
+    )
+    return EvidenceReadResult(
+        command.evidence_id, verified.text, verified.digest_hex, verified.length
+    )

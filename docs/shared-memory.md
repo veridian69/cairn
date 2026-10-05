@@ -86,6 +86,67 @@ omission warnings alongside the fact. History expansion is bounded and
 cycle-safe; an exhausted result is not proof that every related record was
 returned. Permanent deletion is a separate retention operation, not fading.
 
+## Ordered recall
+
+`recall-page` (`POST /memory/v1/recall-page`, MCP tool `recall-page`) is a read
+that returns recall results ordered by `relevance` (default), `newest` or
+`oldest`, and continues them with an opaque `cursor`. It needs `retrieve`,
+rejects idempotency keys and creates no knowledge. Legacy `recall` is unchanged;
+the new operation stops at the first whole record that does not fit, so pages
+lose nothing.
+
+- `time_basis` (`source` default, or `recorded`) is for chronological orders
+  only; omit it for `relevance`. Source time is a caller-supplied claim, and a
+  withheld source time looks the same as a missing one. Under the source basis,
+  facts without an available source time come last, ordered by recorded time in
+  the same direction.
+- `relevant_only` defaults to `true`; recency alone never selects a memory.
+  `limit` is 1-100 (default 20); `budget` is 1-1,048,576 (default 16,384).
+- A continuation sends exactly `scope`, `cursor`, `budget` and `limit`.
+- Each hit adds `observed_at`, `source_time_status`, `ordering_time_basis` and
+  `source_evidence_id`, the Cairn-held evidence record of the origin assertion,
+  disclosed only when that origin is disclosable.
+- `next_cursor` is null when no cursor can be issued. `facts_remaining` says
+  whether another presently disclosable fact exists. If a snapshot expired or was
+  evicted before the next cursor could be issued, the page is still returned with
+  `facts_remaining: true` and `next_cursor: null`; it never claims completion, so
+  start a fresh query. Preserve `context_incomplete` and `selection_complete`
+  too; `selection_complete: false` means narrow the query.
+- Refusals use HTTP 400 with `detail` of exactly
+  `{"reason":"page_budget_too_small","minimum_budget":N}` (N is the size of the
+  whole first eligible record; resubmit with at least that budget) or `{"reason":"continuation_unavailable"}` (start a fresh query).
+- Snapshots are process-local, hold at most 4,096 fact identities for 300
+  seconds, 4 per principal (the oldest of that principal is evicted), 64 per
+  process and 32 MiB in total. They do not survive a restart.
+
+## Evidence window
+
+`evidence-window` (`POST /memory/v1/evidence-window`, MCP tool `evidence-window`)
+reads one bounded, byte-exact excerpt of a single Cairn-held evidence payload,
+usually the `source_evidence_id` of a `recall-page` hit. It is a read: it needs
+`retrieve`, rejects idempotency keys and creates no knowledge. Every call repeats
+the evidence read's authorisation and verifies the whole payload's SHA-256 before
+disclosing anything. The conversation adapter exposes it as `source_window`.
+
+- Send `evidence_id` with either a literal `query` (1-8,192 UTF-8 bytes) or a
+  UTF-8 byte `start` offset (default 0), never both. `budget` is 1-1,048,576
+  canonical record bytes, metadata included (default 16,384).
+- `literal-terms/v1` tries the whole query (casefolded) first, then whole
+  casefolded terms on word boundaries. The earliest original start wins; ties go to the longest
+  span, then the longest term, then codepoint order. At most 32 distinct terms.
+  There is no Unicode normalisation and no FTS or semantic matching.
+- A query window holds up to two lines before the match and six from it; the
+  budget trims preceding context first and never cuts the match. Offsets are
+  original payload bytes.
+- No match is a separate result: `match_found: false`, no text, window or
+  continuation, but the digest and length are reported. An offset read at the
+  end of the payload returns empty text and no continuation.
+- Continue with `start: next_start_byte`. If even the match (or one character)
+  cannot fit, the refusal carries
+  `{"reason":"page_budget_too_small","minimum_budget":N}`.
+- It reads one payload. It does not parse dialogue, join turns across evidence
+  records or establish who said what.
+
 ## Reproduce the synthetic conversation
 
 ```sh

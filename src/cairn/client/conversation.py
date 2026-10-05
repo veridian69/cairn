@@ -9,14 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Annotated, cast
+import re
+from collections.abc import Mapping
+from typing import Annotated, Literal, cast
 from uuid import RFC_4122, UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
+from cairn.authority.evidence_window import MAX_START_BYTE
 from cairn.client.conversation_sources import SourceBundle, SourceError
 from cairn.client.durable_session import DurableMemorySession
-from cairn.client.errors import MemoryOperationFailure
+from cairn.client.errors import MemoryOperationFailure, RecallFailure
 from cairn.client.memory import MemoryClient
 from cairn.client.profiles import MemoryProfile
 from cairn.client.rendering import render_result
@@ -25,6 +35,8 @@ from cairn.client.types import ConnectionStatus, DurableObservation
 
 HISTORY_BUDGET = 131072
 READ_BUDGET = 16384
+# One oversized record may be retried up to this budget, never beyond it.
+RETRY_BUDGET_CEILING = 4 * READ_BUDGET
 WORKFLOW = "cairn.conversation/v1"
 CANONICAL_UUID_PATTERN = (
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -65,11 +77,17 @@ class Input(BaseModel):
             limit = 8192 if name == "query" else 4096
             if len(value.encode("utf-8")) > limit:
                 raise ValueError("input_too_large")
-            if name in {"fact_id", "visit_id", "idempotency_key", "source_id"}:
+            if name in {
+                "fact_id",
+                "visit_id",
+                "idempotency_key",
+                "source_id",
+                "evidence_id",
+            }:
                 identity = UUID(value)
                 if str(identity) != value or identity.variant != RFC_4122:
                     raise ValueError("invalid_uuid")
-                if name == "fact_id" and identity.version != 4:
+                if name in {"fact_id", "evidence_id"} and identity.version != 4:
                     raise ValueError("invalid_fact_id")
         return value
 
@@ -78,8 +96,54 @@ class Query(Input):
     query: str = Field(min_length=1, max_length=8192)
 
 
+class RecallInput(Input):
+    query: str | None = Field(default=None, min_length=1, max_length=8192)
+    order: Literal["relevance", "newest", "oldest"] | None = None
+    cursor: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
+
+    @model_validator(mode="after")
+    def query_or_cursor(self) -> RecallInput:
+        if self.query is None and self.cursor is None:
+            raise ValueError("query_or_cursor")
+        return self
+
+
+_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def supports_pages(diagnostic: Mapping[str, object]) -> bool:
+    """Discover recall-page support from the diagnosed product version (R8)."""
+    version = diagnostic.get("product_version")
+    match = _VERSION.match(version) if type(version) is str else None
+    return match is not None and tuple(int(p) for p in match.groups()) >= (0, 7, 13)
+
+
+def _minimum_budget(exc: RecallFailure) -> int | None:
+    detail = dict(exc.failure.detail or ())
+    minimum = detail.get("minimum_budget")
+    if (
+        detail.get("reason") == "page_budget_too_small"
+        and type(minimum) is int
+        and READ_BUDGET < minimum <= RETRY_BUDGET_CEILING
+    ):
+        return minimum
+    return None
+
+
 class History(Input):
     fact_id: CanonicalUUID4
+
+
+class SourceWindow(Input):
+    evidence_id: CanonicalUUID4
+    query: str | None = Field(default=None, min_length=1, max_length=8192)
+    start: int | None = Field(default=None, ge=0, le=MAX_START_BYTE)
+
+    @model_validator(mode="after")
+    def query_or_start(self) -> SourceWindow:
+        if self.query is not None and self.start is not None:
+            raise ValueError("query_or_start")
+        return self
 
 
 class Remember(Input):
@@ -103,8 +167,9 @@ class Acknowledge(Input):
 INPUTS: dict[str, type[Input]] = {
     "check": Input,
     "sources": Input,
-    "recall": Query,
+    "recall": RecallInput,
     "history": History,
+    "source_window": SourceWindow,
     "remember": Remember,
     "replace": Replace,
     "arrive": Query,
@@ -126,7 +191,7 @@ class WorkflowFailure(Exception):
         self.code = code
 
 
-READ_ONLY_TOOLS = frozenset({"check", "sources", "recall", "history"})
+READ_ONLY_TOOLS = frozenset({"check", "sources", "recall", "history", "source_window"})
 
 
 class ConversationAdapter:
@@ -329,6 +394,12 @@ class ConversationAdapter:
                 and value.expected_old_body == value.replacement_body
             ):
                 raise WorkflowFailure("unchanged_replacement")
+            if (
+                isinstance(value, RecallInput)
+                and value.cursor is not None
+                and (value.query is not None or value.order is not None)
+            ):
+                raise WorkflowFailure("cursor_requires_no_query")
             result["stage"] = "check"
             diagnostic = await self._check()
             if name == "check":
@@ -347,8 +418,75 @@ class ConversationAdapter:
             if isinstance(value, Remember | Replace):
                 return await self._write(value, result)
             result["stage"] = name
-            if name == "recall" and isinstance(value, Query):
-                packet = await self.client.recall(value.query, budget=READ_BUDGET)
+            if name == "recall" and isinstance(value, RecallInput):
+                if not supports_pages(diagnostic):
+                    if value.cursor is not None or value.order not in (
+                        None,
+                        "relevance",
+                    ):
+                        raise WorkflowFailure("ordering_unsupported")
+                    assert value.query is not None
+                    legacy = await self.client.recall(value.query, budget=READ_BUDGET)
+                    return {
+                        "status": "ok",
+                        "result": plain(legacy),
+                        "ordering": "legacy-fallback",
+                    }
+                if value.cursor is not None:
+                    try:
+                        packet = await self.client.continue_recall(
+                            value.cursor, budget=READ_BUDGET
+                        )
+                    except RecallFailure as exc:
+                        minimum = _minimum_budget(exc)
+                        if minimum is None:
+                            raise
+                        # Retry exactly once at the server's stated minimum.
+                        packet = await self.client.continue_recall(
+                            value.cursor, budget=minimum
+                        )
+                else:
+                    assert value.query is not None
+                    order = value.order or "relevance"
+                    try:
+                        packet = await self.client.recall_page(
+                            value.query, order=order, budget=READ_BUDGET
+                        )
+                    except RecallFailure as exc:
+                        minimum = _minimum_budget(exc)
+                        if minimum is None:
+                            raise
+                        # Retry exactly once at the server's stated minimum.
+                        packet = await self.client.recall_page(
+                            value.query, order=order, budget=minimum
+                        )
+                return {
+                    "status": "ok",
+                    "result": plain(packet),
+                    "ordering": "recall-page",
+                }
+            elif isinstance(value, SourceWindow):
+                if not supports_pages(diagnostic):
+                    raise WorkflowFailure("source_window_unsupported")
+                evidence_id = UUID(value.evidence_id)
+                try:
+                    packet = await self.client.evidence_window(
+                        evidence_id,
+                        query=value.query,
+                        start=value.start,
+                        budget=READ_BUDGET,
+                    )
+                except RecallFailure as exc:
+                    minimum = _minimum_budget(exc)
+                    if minimum is None:
+                        raise
+                    # Retry exactly once at the server's stated minimum.
+                    packet = await self.client.evidence_window(
+                        evidence_id,
+                        query=value.query,
+                        start=value.start,
+                        budget=minimum,
+                    )
             elif isinstance(value, History):
                 packet = await self.client.history(
                     UUID(value.fact_id), budget=READ_BUDGET

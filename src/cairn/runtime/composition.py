@@ -22,8 +22,10 @@ from cairn.administration.commands import CairnAdministration
 from cairn.authority.credentials import CredentialAuthenticator
 from cairn.authority.diagnostics import CairnDiagnostics
 from cairn.authority.memory import CairnMemory
+from cairn.authority.memory_pages import CairnMemoryPages
 from cairn.authority.mutations import CairnAuthority
 from cairn.authority.proposals import CairnProposals
+from cairn.authority.recall_snapshots import SnapshotStore
 from cairn.authority.sessions import CairnSessions
 from cairn.catalogue.extraction_cache import ExtractionCacheStore
 from cairn.catalogue.sqlite import (
@@ -412,6 +414,8 @@ def build_application(
             index.memory_evidence_source() if isinstance(index, GraphitiIndex) else None
         ),
     )
+    # Process-local continuation state: dropped, never persisted, on shutdown.
+    snapshots = SnapshotStore()
     memory_dispatch = MemoryDispatch(
         authority=authority,
         proposals=CairnProposals(
@@ -421,6 +425,7 @@ def build_application(
             config.paths.data, transactions, clock, uuid_factory, screen, authority
         ),
         memory=memory,
+        pages=CairnMemoryPages(memory, snapshots),
         diagnostics=CairnDiagnostics(config.paths.data, transactions, clock),
         product_version=__version__,
         contract_digest=memory_digest,
@@ -571,6 +576,8 @@ def build_application(
             if catalogue_state is not None:
                 await status.mark_stopping()
                 catalogue_state.close()
+            # Restart drops every continuation; cannot raise, so first.
+            snapshots.close()
             # After the delivery task group has exited, never before: the
             # loop projects through this adapter, and a pass already on a
             # worker thread runs to completion. Closing it underneath a

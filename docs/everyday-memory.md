@@ -97,6 +97,8 @@ Text limits are UTF-8 bytes. Query is
 | check | No stdin read | None |
 | arrive | query | budget, history_fact_ids (0..8 UUIDv4) |
 | recall | query | budget, relevant_only (boolean; default false) |
+| recall-page | Exactly one: query or cursor | With query: order, time_basis (newest/oldest only), relevant_only (default true), budget, limit (1..100; default 20). With cursor: budget, limit only |
+| evidence-window | evidence_id (UUIDv4, e.g. a recall-page source_evidence_id) | At most one of query (literal terms) or start (UTF-8 byte offset, default 0); budget (default 16384). Continue with start: next_start_byte |
 | acknowledge-visit | visit_id | None |
 | remember | turn_id, attempt_id, response, observations | replaces_turn_id |
 | status | None | turn_id |
