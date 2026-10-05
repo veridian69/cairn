@@ -7,6 +7,10 @@ from datetime import datetime
 from typing import BinaryIO
 from uuid import RFC_4122, UUID, uuid5
 
+from cairn.authority.evidence_window import DEFAULT_BUDGET as WINDOW_BUDGET
+from cairn.authority.evidence_window import MAX_QUERY_BYTES as WINDOW_QUERY_BYTES
+from cairn.authority.evidence_window import MAX_START_BYTE
+from cairn.authority.retrieval import MAX_BUDGET_BYTES
 from cairn.catalogue.audit import AuditValueError, Classification, Scope, ScopeSegment
 from cairn.catalogue.sqlite import (
     CatalogueStorageError,
@@ -21,12 +25,18 @@ from cairn.client.command_io import (
 )
 from cairn.client.profiles import MemoryProfile
 from cairn.client.types import DurableObservation, ModelTurn
+from cairn.client.validation import CURSOR, ORDERS, TIME_BASES
 from cairn.session_identity import MEMORY_REMEMBER_NAMESPACE
 
 FIELDS = {
     "check": (set(), set()),
     "arrive": ({"query"}, {"budget", "history_fact_ids"}),
     "recall": ({"query"}, {"budget", "relevant_only"}),
+    "recall-page": (
+        set(),
+        {"query", "order", "time_basis", "relevant_only", "budget", "limit", "cursor"},
+    ),
+    "evidence-window": ({"evidence_id"}, {"query", "start", "budget"}),
     "acknowledge-visit": ({"visit_id"}, set()),
     "remember": (
         {"turn_id", "attempt_id", "response", "observations"},
@@ -178,6 +188,10 @@ class Input:
     evidence_id: UUID | None = None
     target_classification: Classification | None = None
     after: UUID | None = None
+    order: str = "relevance"
+    time_basis: str | None = None
+    cursor: str | None = None
+    start: int | None = None
 
 
 def proposal_identity(value: object) -> UUID:
@@ -244,6 +258,72 @@ def proposal_input(command: str, document: dict[str, object]) -> Input:
     )
 
 
+def recall_page_input(document: dict[str, object]) -> Input:
+    """Exactly one of query or cursor, with recall-page's own defaults.
+
+    A continuation carries only cursor, budget and limit; the query, order,
+    time basis and relevance filter were bound when the cursor was issued.
+    """
+    if any(value is None for value in document.values()):
+        raise invalid()
+    budget = integer(document.get("budget", 16384), 1048576)
+    limit = integer(document.get("limit", 20), 100)
+    if "cursor" in document:
+        cursor = document["cursor"]
+        if (
+            document.keys() - {"cursor", "budget", "limit"}
+            or type(cursor) is not str
+            or CURSOR.match(cursor) is None
+        ):
+            raise invalid()
+        return Input(cursor=cursor, budget=budget, limit=limit)
+    if "query" not in document:
+        raise invalid()
+    order = document.get("order", "relevance")
+    if type(order) is not str or order not in ORDERS:
+        raise invalid()
+    time_basis = document.get("time_basis")
+    if time_basis is not None and (
+        order == "relevance"
+        or type(time_basis) is not str
+        or time_basis not in TIME_BASES
+    ):
+        raise invalid()
+    relevant_only = document.get("relevant_only", True)
+    if type(relevant_only) is not bool:
+        raise invalid()
+    return Input(
+        query=text(document["query"], 8192),
+        order=order,
+        time_basis=time_basis,
+        relevant_only=relevant_only,
+        budget=budget,
+        limit=limit,
+    )
+
+
+def evidence_window_input(document: dict[str, object]) -> Input:
+    """At most one of query or start (neither starts at byte 0)."""
+    if any(value is None for value in document.values()) or (
+        "query" in document and "start" in document
+    ):
+        raise invalid()
+    start = document.get("start")
+    if start is not None and (
+        type(start) is not int or not 0 <= start <= MAX_START_BYTE
+    ):
+        raise invalid()
+    query = text(document["query"], WINDOW_QUERY_BYTES) if "query" in document else ""
+    if "query" in document and not query.strip():
+        raise invalid()
+    return Input(
+        evidence_id=identity(document["evidence_id"], fact=True),
+        query=query,
+        start=start,
+        budget=integer(document.get("budget", WINDOW_BUDGET), MAX_BUDGET_BYTES),
+    )
+
+
 def parse(command: str, stream: BinaryIO) -> Input:
     if command == "check":
         return Input()
@@ -274,6 +354,10 @@ def parse(command: str, stream: BinaryIO) -> Input:
         )
     if command in PROPOSAL_COMMANDS:
         return proposal_input(command, document)
+    if command == "recall-page":
+        return recall_page_input(document)
+    if command == "evidence-window":
+        return evidence_window_input(document)
     if any(
         value is None and key not in {"replaces_turn_id", "superseded_by"}
         for key, value in document.items()

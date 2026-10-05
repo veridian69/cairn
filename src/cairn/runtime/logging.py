@@ -93,6 +93,8 @@ class Operation(StrEnum):
     MEMORY_REMEMBER = "memory_remember"
     MEMORY_RECALL = "memory_recall"
     MEMORY_HISTORY = "memory_history"
+    MEMORY_RECALL_PAGE = "memory_recall_page"
+    MEMORY_EVIDENCE_WINDOW = "memory_evidence_window"
     MEMORY_SUGGEST = "memory_suggest"
     MEMORY_PROPOSE = "memory_propose"
     MEMORY_PROPOSAL_LIST = "memory_proposal_list"

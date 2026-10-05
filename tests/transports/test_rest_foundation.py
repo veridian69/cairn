@@ -253,6 +253,8 @@ def test_the_registered_routes_are_exactly_the_expected_set(tmp_path: Path) -> N
         "/memory/v1/diagnose",
         "/memory/v1/remember",
         "/memory/v1/recall",
+        "/memory/v1/recall-page",
+        "/memory/v1/evidence-window",
         "/memory/v1/history",
         "/memory/v1/disagree",
         "/memory/v1/resolve",

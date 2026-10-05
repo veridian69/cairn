@@ -127,6 +127,8 @@ from cairn.screening import (
 
 if TYPE_CHECKING:
     from cairn.authority.evidence_read import EvidenceReadResult, ReadEvidence
+    from cairn.authority.evidence_window import EvidenceWindow, EvidenceWindowResult
+    from cairn.authority.memory_page_types import PageRejected
     from cairn.authority.retrieval import RetrievalResult, Retrieve
 
 _AUTHORITY_SCHEMA = "cairn.authority/v1"
@@ -1171,6 +1173,34 @@ class CairnAuthority:
             clock=self._clock,
             enabled=self._exact_evidence_enabled,
             attic=self._attic,
+            metrics=self._metrics,
+            logger=self._logger,
+        )
+
+    def evidence_window(
+        self,
+        actor: Actor,
+        command: "EvidenceWindow",
+        *,
+        correlation_id: UUID,
+    ) -> "EvidenceWindowResult | Rejected | PageRejected":
+        """A bounded window of catalogue-authorised exact source evidence.
+
+        Synchronous and CPU-bound on up to 1 MiB payloads: transports must
+        run it off the event loop (``anyio.to_thread``), as for read-evidence.
+        """
+        from cairn.authority.evidence_window import evidence_window
+
+        return evidence_window(
+            self._data_path,
+            self._transactions,
+            actor,
+            command,
+            correlation_id=correlation_id,
+            clock=self._clock,
+            enabled=self._exact_evidence_enabled,
+            attic=self._attic,
+            screen=self._screen,
             metrics=self._metrics,
             logger=self._logger,
         )

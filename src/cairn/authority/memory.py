@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -332,6 +332,27 @@ def _flag_context(
     return result
 
 
+@dataclass(slots=True)
+class _Candidates:
+    admitted: dict[UUID, RetrievedFact]
+    allowed: set[UUID]
+    catalogue_ids: tuple[UUID, ...]
+    semantic_ids: set[UUID]
+    ranks: dict[UUID, semantic_ranking.Rank]
+    graded: bool
+    semantic_degraded: bool
+
+
+def _policy(
+    graded: bool, relevant_only: bool, degraded: bool, semantic_configured: bool
+) -> str:
+    """The actual relevance policy, including the marked lexical fallback."""
+    if graded:
+        return GRADED_RELEVANT_POLICY if relevant_only else GRADED_POLICY
+    policy = RELEVANT_POLICY if relevant_only else POLICY
+    return policy + SEMANTIC_UNAVAILABLE if semantic_configured and degraded else policy
+
+
 class CairnMemory:
     def __init__(
         self,
@@ -460,7 +481,14 @@ class CairnMemory:
         if (
             first_finding(
                 self._screen,
-                (("query" if action == "memory-recall" else "reason", text),),
+                (
+                    (
+                        "query"
+                        if action in {"memory-recall", "memory-recall-page"}
+                        else "reason",
+                        text,
+                    ),
+                ),
             )
             is not None
         ):
@@ -643,6 +671,114 @@ class CairnMemory:
                 )
         return disagreements, resolutions, False
 
+    def _candidates(
+        self,
+        fetch: Fetch,
+        scope: Scope,
+        query: str,
+        ceiling: int,
+        now: datetime,
+        trust_filters: frozenset[TrustClass],
+    ) -> _Candidates:
+        """Admitted, trust-filtered candidates and their legacy ranking inputs."""
+        # Query every ancestral partition, never a recency-limited prefix.
+        # Only identities are materialised here; the shared loader chunks SQL.
+        segments = tuple(
+            canonical_segments_json(scope.segments[:n])
+            for n in range(len(scope.segments) + 1)
+        )
+        placeholders = ",".join("?" for _ in segments)
+        ids = tuple(
+            UUID(cast(str, row[0]))
+            for row in fetch(
+                f"SELECT fact_id FROM facts WHERE realm_id = ? AND scope_segments IN ({placeholders})",
+                (scope.realm, *segments),
+            )
+        )
+        semantic_ids: set[UUID] = set()
+        semantic_degraded = False
+        advice: SemanticEvidence | None = None
+        catalogue_ids = ids
+        if self._semantic_evidence is not None:
+            try:
+                partitions = _ancestry_partitions(scope)
+                advice = semantic_ranking.validate(
+                    self._semantic_evidence.search_with_evidence(
+                        query, 256, partitions
+                    ),
+                    query,
+                    partitions,
+                )
+                semantic_ids.update(advice.candidate_ids)
+            except Exception:
+                semantic_degraded = True
+        elif self._index is not None:
+            try:
+                semantic_ids.update(
+                    self._index.search(query, 256, _ancestry_partitions(scope))
+                )
+            except Exception:
+                # The external accelerator cannot make catalogue memory unavailable.
+                semantic_degraded = True
+        grade_ids = (
+            ()
+            if advice is None
+            else tuple(g.fact_id for p in advice.partitions for g in p.grades)
+        )
+        ids = tuple(dict.fromkeys((*ids, *semantic_ids, *grade_ids)))
+        loaded, _ = _load_candidates(fetch, ids)
+        admitted = {
+            f.fact_id: f
+            for f in loaded
+            if _admitted(
+                f,
+                scope,
+                ceiling,
+                _ALL_TRUST,
+                now,
+            )
+        }
+        allowed = {
+            identity
+            for identity, f in admitted.items()
+            if not trust_filters or f.trust in trust_filters
+        }
+        grades: dict[UUID, float] = {}
+        if advice is not None:
+            try:
+                grades = semantic_ranking.reconcile(
+                    advice,
+                    {identity: admitted[identity] for identity in allowed},
+                )
+            except Exception:
+                advice = None
+                semantic_ids.clear()
+                semantic_degraded = True
+                allowed.intersection_update(catalogue_ids)
+        graded = advice is not None
+        ranks = (
+            {
+                identity: semantic_ranking.rank(
+                    admitted[identity],
+                    query,
+                    grades.get(identity),
+                    identity in semantic_ids,
+                )
+                for identity in allowed
+            }
+            if graded
+            else {}
+        )
+        return _Candidates(
+            admitted,
+            allowed,
+            catalogue_ids,
+            semantic_ids,
+            ranks,
+            graded,
+            semantic_degraded,
+        )
+
     def recall(
         self,
         actor: Actor,
@@ -704,97 +840,19 @@ class CairnMemory:
                     action,
                     scope=command.scope,
                 )
-                # Query every ancestral partition, never a recency-limited prefix.
-                # Only identities are materialised here; the shared loader chunks SQL.
-                segments = tuple(
-                    canonical_segments_json(command.scope.segments[:n])
-                    for n in range(len(command.scope.segments) + 1)
+                found = self._candidates(
+                    fetch,
+                    command.scope,
+                    command.query,
+                    ceiling,
+                    now,
+                    command.trust_filters,
                 )
-                placeholders = ",".join("?" for _ in segments)
-                ids = tuple(
-                    UUID(cast(str, row[0]))
-                    for row in fetch(
-                        f"SELECT fact_id FROM facts WHERE realm_id = ? AND scope_segments IN ({placeholders})",
-                        (command.scope.realm, *segments),
-                    )
-                )
-                semantic_ids: set[UUID] = set()
-                semantic_degraded = False
-                advice: SemanticEvidence | None = None
-                catalogue_ids = ids
-                if self._semantic_evidence is not None:
-                    try:
-                        partitions = _ancestry_partitions(command.scope)
-                        advice = semantic_ranking.validate(
-                            self._semantic_evidence.search_with_evidence(
-                                command.query, 256, partitions
-                            ),
-                            command.query,
-                            partitions,
-                        )
-                        semantic_ids.update(advice.candidate_ids)
-                    except Exception:
-                        semantic_degraded = True
-                elif self._index is not None:
-                    try:
-                        semantic_ids.update(
-                            self._index.search(
-                                command.query, 256, _ancestry_partitions(command.scope)
-                            )
-                        )
-                    except Exception:
-                        # The external accelerator cannot make catalogue memory unavailable.
-                        semantic_degraded = True
-                grade_ids = (
-                    ()
-                    if advice is None
-                    else tuple(g.fact_id for p in advice.partitions for g in p.grades)
-                )
-                ids = tuple(dict.fromkeys((*ids, *semantic_ids, *grade_ids)))
-                loaded, _ = _load_candidates(fetch, ids)
-                admitted = {
-                    f.fact_id: f
-                    for f in loaded
-                    if _admitted(
-                        f,
-                        command.scope,
-                        ceiling,
-                        _ALL_TRUST,
-                        now,
-                    )
-                }
-                allowed = {
-                    identity
-                    for identity, f in admitted.items()
-                    if not command.trust_filters or f.trust in command.trust_filters
-                }
+                admitted, allowed = found.admitted, found.allowed
+                semantic_ids = found.semantic_ids
+                semantic_degraded = found.semantic_degraded
+                graded, ranks = found.graded, found.ranks
                 candidate_exhausted = False
-                grades: dict[UUID, float] = {}
-                if advice is not None:
-                    try:
-                        grades = semantic_ranking.reconcile(
-                            advice,
-                            {identity: admitted[identity] for identity in allowed},
-                        )
-                    except Exception:
-                        advice = None
-                        semantic_ids.clear()
-                        semantic_degraded = True
-                        allowed.intersection_update(catalogue_ids)
-                graded = advice is not None
-                ranks = (
-                    {
-                        identity: semantic_ranking.rank(
-                            admitted[identity],
-                            command.query,
-                            grades.get(identity),
-                            identity in semantic_ids,
-                        )
-                        for identity in allowed
-                    }
-                    if graded
-                    else {}
-                )
                 if graded:
                     ranked_ids = sorted(
                         (
@@ -914,15 +972,12 @@ class CairnMemory:
                     + sum(_size(link) for link in disclosed_links)
                     + sum(_size(resolution) for resolution in disclosed_resolutions)
                 )
-                policy = RELEVANT_POLICY if command.relevant_only else POLICY
-                if graded:
-                    policy = (
-                        GRADED_RELEVANT_POLICY
-                        if command.relevant_only
-                        else GRADED_POLICY
-                    )
-                elif self._semantic_evidence is not None and semantic_degraded:
-                    policy += SEMANTIC_UNAVAILABLE
+                policy = _policy(
+                    graded,
+                    command.relevant_only,
+                    semantic_degraded,
+                    self._semantic_evidence is not None,
+                )
                 result = RecallResult(
                     tuple(hits),
                     consumed,

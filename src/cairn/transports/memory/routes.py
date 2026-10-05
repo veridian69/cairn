@@ -11,15 +11,18 @@ from starlette.responses import JSONResponse, Response
 
 from cairn.authority.credentials import CredentialAuthenticator
 from cairn.authority.gate import Actor
+from cairn.authority.memory_page_types import PageRejected
 from cairn.catalogue.audit import ActionKind
 from cairn.catalogue.transactions import Rejected
 from cairn.transports.memory.diagnostic_audit import fingerprinted_request
 from cairn.transports.memory.dispatch import MemoryDispatch
 from cairn.transports.memory.operations import (
+    AUDITED_READ_TOOL_NAMES,
     OPERATIONS,
     PROPOSAL_TOOL_NAMES,
     SESSION_TOOL_NAMES,
 )
+from cairn.transports.memory.page_failures import page_failure_response
 from cairn.transports.rest.v1.errors import failure_response, wire_rejection_response
 from cairn.transports.rest.v1.parsing import (
     forbid_idempotency_key,
@@ -60,6 +63,7 @@ def register_routes(
                 entry.tool in {"diagnose", "suggest"}
                 or entry.tool in SESSION_TOOL_NAMES
                 or entry.tool in PROPOSAL_TOOL_NAMES
+                or entry.tool in AUDITED_READ_TOOL_NAMES
             ):
                 admission_request, fingerprint = fingerprinted_request(request)
             try:
@@ -71,6 +75,11 @@ def register_routes(
                     forbid_idempotency_key(request.headers)
                 result = await dispatch.run(entry.tool, body, actor, key, cid)
             except WireRejection as rejection:
+                if entry.tool in AUDITED_READ_TOOL_NAMES:
+                    assert fingerprint is not None
+                    await dispatch.audit_read_rejection(
+                        actor, cid, fingerprint.digest(), entry.tool
+                    )
                 if entry.tool in PROPOSAL_TOOL_NAMES:
                     assert fingerprint is not None
                     await dispatch.audit_proposal_rejection(
@@ -92,6 +101,8 @@ def register_routes(
                         actor, cid, fingerprint.digest(), entry.tool
                     )
                 return wire_rejection_response(rejection, cid)
+            if isinstance(result, PageRejected):
+                return page_failure_response(result, request=request)
             if isinstance(result, Rejected):
                 return failure_response(result.failure, request=request)
             return JSONResponse(result.model_dump(mode="json"))

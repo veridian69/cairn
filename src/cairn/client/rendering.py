@@ -21,6 +21,8 @@ _COMMANDS = frozenset(
         "check",
         "arrive",
         "recall",
+        "recall-page",
+        "evidence-window",
         "acknowledge-visit",
         "remember",
         "status",

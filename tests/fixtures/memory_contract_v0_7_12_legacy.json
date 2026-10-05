@@ -1,0 +1,1181 @@
+{
+  "paths": {
+    "/memory/v1/history": {
+      "post": {
+        "description": "This is a read: supplying an Idempotency-Key header is invalid_request. The header is required on all eight mutations and refused on both reads.",
+        "operationId": "memory_history",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryBody"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read bounded, currently authorised facts and correction history. Use returned fact objects to verify exact fact_id/body mappings after remember and before correct; do not infer mappings from array order. After a replacement, read the OLD fact's history and verify its corrections entry explicitly names the new superseded_by ID before claiming a replacement link. Preserve omissions and candidate attribution; a missing or partial result does not establish that no history exists."
+      }
+    },
+    "/memory/v1/recall": {
+      "post": {
+        "description": "This is a read: supplying an Idempotency-Key header is invalid_request. The header is required on all eight mutations and refused on both reads.",
+        "operationId": "memory_recall",
+        "parameters": [
+          {
+            "description": "A caller-supplied UUIDv4 is adopted; any other value is ignored in favour of a fresh one, never rejected. Echoed on every response.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallBody"
+                }
+              }
+            },
+            "description": "The operation's result.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request, secret_rejected.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authentication_failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: authorisation_denied.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: not_found.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: idempotency_conflict.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: invalid_request.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: instance_mismatch.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: evidence_corrupt, internal_error.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureEnvelope"
+                }
+              }
+            },
+            "description": "Failure: dependency_unavailable, evidence_pending, index_pending, stale_index.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Correlation-ID": {
+                "description": "The correlation identifier for this request.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Recall authorised, attributed memories with deterministic fading."
+      }
+    }
+  },
+  "schemas": {
+    "CorrectionBody": {
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "invalidated_at": {
+          "title": "Invalidated At",
+          "type": "string"
+        },
+        "principal_id": {
+          "title": "Principal Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "superseded_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Superseded By"
+        }
+      },
+      "required": [
+        "fact_id",
+        "superseded_by",
+        "principal_id",
+        "reason",
+        "invalidated_at"
+      ],
+      "title": "CorrectionBody",
+      "type": "object"
+    },
+    "DisagreementBody": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "enum": [
+            "public",
+            "internal",
+            "restricted"
+          ],
+          "title": "Classification",
+          "type": "string"
+        },
+        "left_fact_id": {
+          "title": "Left Fact Id",
+          "type": "string"
+        },
+        "principal_id": {
+          "title": "Principal Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "recorded_at": {
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "relationship_id": {
+          "title": "Relationship Id",
+          "type": "string"
+        },
+        "right_fact_id": {
+          "title": "Right Fact Id",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/components/schemas/ScopeBody"
+        }
+      },
+      "required": [
+        "relationship_id",
+        "scope",
+        "left_fact_id",
+        "right_fact_id",
+        "classification",
+        "principal_id",
+        "reason",
+        "recorded_at"
+      ],
+      "title": "DisagreementBody",
+      "type": "object"
+    },
+    "FailureBody": {
+      "additionalProperties": false,
+      "description": "The I-26 stable failure on the wire.\n\nField order matches the foundation middleware's ``internal_error``\nbody, so a ``/v1`` failure and the middleware's catch-all are the same\nshape; ``detail`` is absent unless one of the two licensed forms rides\nalong.",
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "authentication_failed",
+            "authorisation_denied",
+            "secret_rejected",
+            "not_found",
+            "idempotency_conflict",
+            "evidence_pending",
+            "evidence_corrupt",
+            "index_pending",
+            "stale_index",
+            "dependency_unavailable",
+            "instance_mismatch",
+            "internal_error"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "correlation_id": {
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/InvalidRequestDetail"
+            },
+            {
+              "$ref": "#/components/schemas/SecretRejectedDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "retry": {
+          "enum": [
+            "never",
+            "same-request",
+            "after-delay"
+          ],
+          "title": "Retry",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retry",
+        "correlation_id"
+      ],
+      "title": "FailureBody",
+      "type": "object"
+    },
+    "FailureEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "failure": {
+          "$ref": "#/components/schemas/FailureBody"
+        }
+      },
+      "required": [
+        "failure"
+      ],
+      "title": "FailureEnvelope",
+      "type": "object"
+    },
+    "HistoryBody": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_consumed": {
+          "title": "Budget Consumed",
+          "type": "integer"
+        },
+        "budget_exhausted": {
+          "title": "Budget Exhausted",
+          "type": "boolean"
+        },
+        "corrections": {
+          "items": {
+            "$ref": "#/components/schemas/CorrectionBody"
+          },
+          "title": "Corrections",
+          "type": "array"
+        },
+        "disagreements": {
+          "items": {
+            "$ref": "#/components/schemas/DisagreementBody"
+          },
+          "title": "Disagreements",
+          "type": "array"
+        },
+        "facts": {
+          "items": {
+            "$ref": "#/components/schemas/MemoryFactBody"
+          },
+          "title": "Facts",
+          "type": "array"
+        },
+        "resolutions": {
+          "items": {
+            "$ref": "#/components/schemas/ResolutionBody"
+          },
+          "title": "Resolutions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "facts",
+        "corrections",
+        "disagreements",
+        "resolutions",
+        "budget_consumed",
+        "budget_exhausted"
+      ],
+      "title": "HistoryBody",
+      "type": "object"
+    },
+    "HistoryRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "budget": {
+          "default": 16384,
+          "description": "UTF-8 byte budget (1\u20131048576) for the sum of canonical JSON disclosed records, including attribution, reasons and relationships. Envelope punctuation is excluded. Facts are admitted before bounded relationship context; per-fact flags identify visible disagreement and omitted context.",
+          "maximum": 1048576,
+          "minimum": 1,
+          "title": "Budget",
+          "type": "integer"
+        },
+        "fact_id": {
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/components/schemas/ScopeBody"
+        }
+      },
+      "required": [
+        "scope",
+        "fact_id"
+      ],
+      "title": "HistoryRequest",
+      "type": "object"
+    },
+    "InvalidRequestDetail": {
+      "additionalProperties": false,
+      "description": "The ``detail`` form I-72 licenses on an adapter-raised\n``invalid_request`` \u2014 the rejected field path and the wire rule.",
+      "properties": {
+        "field_path": {
+          "title": "Field Path",
+          "type": "string"
+        },
+        "rule": {
+          "enum": [
+            "body_not_object",
+            "body_too_large",
+            "duplicate_json_key",
+            "idempotency_key_duplicated",
+            "idempotency_key_forbidden",
+            "idempotency_key_malformed",
+            "idempotency_key_missing",
+            "invalid_content_type",
+            "invalid_encoding",
+            "invalid_value",
+            "malformed_json",
+            "method_not_allowed",
+            "missing_field",
+            "unknown_field"
+          ],
+          "title": "Rule",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_path",
+        "rule"
+      ],
+      "title": "InvalidRequestDetail",
+      "type": "object"
+    },
+    "MemoryFactBody": {
+      "additionalProperties": false,
+      "properties": {
+        "assertion_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assertion Id"
+        },
+        "body": {
+          "title": "Body",
+          "type": "string"
+        },
+        "classification": {
+          "enum": [
+            "public",
+            "internal",
+            "restricted"
+          ],
+          "title": "Classification",
+          "type": "string"
+        },
+        "derived_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Derived From"
+        },
+        "disagreement_context_incomplete": {
+          "title": "Disagreement Context Incomplete",
+          "type": "boolean"
+        },
+        "evidence_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Id"
+        },
+        "fact_id": {
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "has_disagreement": {
+          "title": "Has Disagreement",
+          "type": "boolean"
+        },
+        "invalidated_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Invalidated At"
+        },
+        "promoted_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Promoted By"
+        },
+        "recorded_at": {
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "relevance_score": {
+          "title": "Relevance Score",
+          "type": "number"
+        },
+        "scope": {
+          "$ref": "#/components/schemas/ScopeBody"
+        },
+        "source_principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Principal Id"
+        },
+        "source_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "enum": [
+            "agent-claim",
+            "verified-check",
+            "human",
+            null
+          ],
+          "title": "Source Type"
+        },
+        "trust": {
+          "enum": [
+            "candidate",
+            "validated",
+            "failed-approach"
+          ],
+          "title": "Trust",
+          "type": "string"
+        },
+        "valid_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid From"
+        },
+        "valid_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid To"
+        }
+      },
+      "required": [
+        "fact_id",
+        "body",
+        "scope",
+        "classification",
+        "trust",
+        "recorded_at",
+        "source_principal_id",
+        "source_type",
+        "relevance_score",
+        "has_disagreement",
+        "disagreement_context_incomplete"
+      ],
+      "title": "MemoryFactBody",
+      "type": "object"
+    },
+    "RecallBody": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_consumed": {
+          "title": "Budget Consumed",
+          "type": "integer"
+        },
+        "budget_exhausted": {
+          "title": "Budget Exhausted",
+          "type": "boolean"
+        },
+        "disagreements": {
+          "items": {
+            "$ref": "#/components/schemas/DisagreementBody"
+          },
+          "title": "Disagreements",
+          "type": "array"
+        },
+        "hits": {
+          "items": {
+            "$ref": "#/components/schemas/MemoryFactBody"
+          },
+          "title": "Hits",
+          "type": "array"
+        },
+        "policy": {
+          "title": "Policy",
+          "type": "string"
+        },
+        "resolutions": {
+          "items": {
+            "$ref": "#/components/schemas/ResolutionBody"
+          },
+          "title": "Resolutions",
+          "type": "array"
+        },
+        "semantic_degraded": {
+          "default": false,
+          "title": "Semantic Degraded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hits",
+        "disagreements",
+        "resolutions",
+        "budget_consumed",
+        "budget_exhausted",
+        "policy"
+      ],
+      "title": "RecallBody",
+      "type": "object"
+    },
+    "RecallRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "budget": {
+          "default": 16384,
+          "description": "UTF-8 byte budget (1\u20131048576) for the sum of canonical JSON disclosed records, including attribution, reasons and relationships. Envelope punctuation is excluded. Facts are admitted before bounded relationship context; per-fact flags identify visible disagreement and omitted context.",
+          "maximum": 1048576,
+          "minimum": 1,
+          "title": "Budget",
+          "type": "integer"
+        },
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "relevant_only": {
+          "default": false,
+          "description": "Require a lexical or semantic relevance signal; recency alone does not select a memory.",
+          "title": "Relevant Only",
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/components/schemas/ScopeBody"
+        },
+        "trust_filters": {
+          "items": {
+            "enum": [
+              "candidate",
+              "validated",
+              "failed-approach"
+            ],
+            "type": "string"
+          },
+          "title": "Trust Filters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scope",
+        "query"
+      ],
+      "title": "RecallRequest",
+      "type": "object"
+    },
+    "ResolutionBody": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "enum": [
+            "public",
+            "internal",
+            "restricted"
+          ],
+          "title": "Classification",
+          "type": "string"
+        },
+        "disagreement_id": {
+          "title": "Disagreement Id",
+          "type": "string"
+        },
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "principal_id": {
+          "title": "Principal Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "recorded_at": {
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "relationship_id": {
+          "title": "Relationship Id",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/components/schemas/ScopeBody"
+        },
+        "selected_fact_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Selected Fact Id"
+        }
+      },
+      "required": [
+        "relationship_id",
+        "scope",
+        "disagreement_id",
+        "evidence_id",
+        "selected_fact_id",
+        "classification",
+        "principal_id",
+        "reason",
+        "recorded_at"
+      ],
+      "title": "ResolutionBody",
+      "type": "object"
+    },
+    "ScopeBody": {
+      "additionalProperties": false,
+      "properties": {
+        "realm": {
+          "title": "Realm",
+          "type": "string"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/components/schemas/SegmentBody"
+          },
+          "title": "Segments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "realm",
+        "segments"
+      ],
+      "title": "ScopeBody",
+      "type": "object"
+    },
+    "SecretRejectedDetail": {
+      "additionalProperties": false,
+      "description": "The ``detail`` form I-72 licenses on ``secret_rejected`` \u2014 policy\nversion, rule identity and field path, and nothing else.\n\nNeither ``policy`` nor ``rule`` publishes an enumeration, unlike the\nwire rules above: I-31 versions the secret policy apart from the API,\nso pinning its rule vocabulary into the ``/v1`` contract would make\nevery policy release a contract change I-29 does not license.",
+      "properties": {
+        "field_path": {
+          "title": "Field Path",
+          "type": "string"
+        },
+        "policy": {
+          "title": "Policy",
+          "type": "string"
+        },
+        "rule": {
+          "title": "Rule",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy",
+        "rule",
+        "field_path"
+      ],
+      "title": "SecretRejectedDetail",
+      "type": "object"
+    }
+  }
+}

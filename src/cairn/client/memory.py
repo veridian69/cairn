@@ -11,6 +11,9 @@ from uuid import UUID
 import httpx
 
 from cairn.authority.custody import MAX_BATCH_FACTS, CustodyValueError, validate_reason
+from cairn.authority.evidence_window import DEFAULT_BUDGET as WINDOW_BUDGET
+from cairn.authority.evidence_window import MAX_QUERY_BYTES as WINDOW_QUERY_BYTES
+from cairn.authority.evidence_window import MAX_START_BYTE
 from cairn.authority.retrieval import MAX_BUDGET_BYTES, MAX_QUERY_BYTES
 from cairn.catalogue.audit import Classification, Scope
 from cairn.catalogue.sqlite import canonical_timestamp
@@ -36,9 +39,14 @@ from cairn.client.types import (
     freeze_object,
 )
 from cairn.client.validation import (
+    CURSOR,
+    ORDERS,
+    TIME_BASES,
     validate_correction_success,
+    validate_evidence_window,
     validate_history,
     validate_recall,
+    validate_recall_page,
     validate_remember_success,
 )
 from cairn.transports.v1.wire import FailureEnvelope
@@ -677,6 +685,245 @@ class MemoryClient:
             raise RecallFailure("recall", _transport_failure()) from None
         except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
             raise RecallFailure("recall", _invalid_response(status_code)) from None
+
+    async def recall_page(
+        self,
+        query: str,
+        *,
+        order: str = "relevance",
+        time_basis: str | None = None,
+        relevant_only: bool = True,
+        budget: int = 16384,
+        limit: int = 20,
+    ) -> RecalledMemory:
+        """Ordered, paged recall; never falls back silently to legacy recall.
+
+        Unset optional fields are omitted: ``time_basis`` is sent only when
+        given, and the server refuses it (even null) with relevance order.
+        """
+        if (
+            type(order) is not str
+            or order not in ORDERS
+            or (
+                time_basis is not None
+                and (
+                    order == "relevance"
+                    or type(time_basis) is not str
+                    or time_basis not in TIME_BASES
+                )
+            )
+        ):
+            raise RecallFailure(
+                "recall-page",
+                _local_failure("invalid_order", "Recall order is invalid."),
+            )
+        if type(relevant_only) is not bool:
+            raise RecallFailure(
+                "recall-page",
+                _local_failure(
+                    "invalid_relevance_filter", "Recall relevance filter is invalid."
+                ),
+            )
+        query_size = 0
+        if type(query) is str:
+            try:
+                query_size = len(query.encode("utf-8"))
+            except UnicodeError:
+                query_size = 0
+        if not 1 <= query_size <= MAX_QUERY_BYTES:
+            raise RecallFailure(
+                "recall-page",
+                _local_failure("invalid_query", "Recall query is invalid."),
+            )
+        request: dict[str, object] = {
+            "scope": self._scope_json,
+            "query": query,
+            "order": order,
+            "relevant_only": relevant_only,
+            "budget": budget,
+            "limit": limit,
+        }
+        if time_basis is not None:
+            request["time_basis"] = time_basis
+        expected: dict[str, object] = {
+            "order": order,
+            "time_basis": None if order == "relevance" else time_basis or "source",
+        }
+        return await self._page_request(
+            request, budget=budget, limit=limit, ordering=expected
+        )
+
+    async def continue_recall(
+        self, cursor: str, *, budget: int = 16384, limit: int = 20
+    ) -> RecalledMemory:
+        """Continue a recall-page snapshot: exactly scope, cursor, budget, limit."""
+        if type(cursor) is not str or CURSOR.match(cursor) is None:
+            raise RecallFailure(
+                "recall-page",
+                _local_failure("invalid_cursor", "Recall cursor is invalid."),
+            )
+        return await self._page_request(
+            {
+                "scope": self._scope_json,
+                "cursor": cursor,
+                "budget": budget,
+                "limit": limit,
+            },
+            budget=budget,
+            limit=limit,
+            ordering=None,
+        )
+
+    async def _page_request(
+        self,
+        request: dict[str, object],
+        *,
+        budget: int,
+        limit: int,
+        ordering: dict[str, object] | None,
+    ) -> RecalledMemory:
+        from cairn.client.recall_io import read_recall
+
+        if type(budget) is not int or not 1 <= budget <= MAX_BUDGET_BYTES:
+            raise RecallFailure(
+                "recall-page",
+                _local_failure("invalid_budget", "Recall budget is invalid."),
+            )
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise RecallFailure(
+                "recall-page",
+                _local_failure("invalid_limit", "Recall limit is invalid."),
+            )
+        if self._http.base_url != self._base_url:
+            raise RecallFailure(
+                "recall-page",
+                _local_failure(
+                    "client_context_changed", "Cairn memory client context changed."
+                ),
+            )
+        status_code: int | None = None
+        try:
+            async with self._http.stream(
+                "POST",
+                self._base_url.join("/memory/v1/recall-page"),
+                json=request,
+                headers={"Accept-Encoding": "identity"},
+                follow_redirects=False,
+            ) as response:
+                status_code = response.status_code
+                document = await read_recall(
+                    response,
+                    budget=budget,
+                    operation="recall-page",
+                    page_failures=True,
+                )
+            decoded = validate_recall_page(document, budget=budget, limit=limit)
+            returned = cast(dict[str, object], decoded["ordering"])
+            if ordering is not None and any(
+                returned[key] != value for key, value in ordering.items()
+            ):
+                raise ValueError("unrequested_ordering")
+            return RecalledMemory(freeze_object(decoded))
+        except httpx.HTTPError:
+            raise RecallFailure("recall-page", _transport_failure()) from None
+        except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
+            raise RecallFailure("recall-page", _invalid_response(status_code)) from None
+
+    async def evidence_window(
+        self,
+        evidence_id: UUID,
+        *,
+        query: str | None = None,
+        start: int | None = None,
+        budget: int = WINDOW_BUDGET,
+    ) -> RecalledMemory:
+        """Read one bounded, byte-exact window of a Cairn-held evidence payload.
+
+        A literal ``query`` anchors the window; otherwise it starts at the
+        UTF-8 byte offset ``start`` (default 0). Unset fields are omitted.
+        Continue with the returned ``next_start_byte``.
+        """
+        from cairn.client.recall_io import read_recall
+
+        operation = "evidence-window"
+        if type(evidence_id) is not UUID or evidence_id.version != 4:
+            raise RecallFailure(
+                operation,
+                _local_failure("invalid_evidence_id", "Evidence identity is invalid."),
+            )
+        if query is not None and start is not None:
+            raise RecallFailure(
+                operation,
+                _local_failure(
+                    "invalid_query", "Evidence query and start are exclusive."
+                ),
+            )
+        if query is not None:
+            query_size = 0
+            if type(query) is str and query.strip():
+                try:
+                    query_size = len(query.encode("utf-8"))
+                except UnicodeError:
+                    query_size = 0
+            if not 1 <= query_size <= WINDOW_QUERY_BYTES:
+                raise RecallFailure(
+                    operation,
+                    _local_failure("invalid_query", "Evidence query is invalid."),
+                )
+        if start is not None and (
+            type(start) is not int or not 0 <= start <= MAX_START_BYTE
+        ):
+            raise RecallFailure(
+                operation,
+                _local_failure("invalid_offset", "Evidence offset is invalid."),
+            )
+        if type(budget) is not int or not 1 <= budget <= MAX_BUDGET_BYTES:
+            raise RecallFailure(
+                operation,
+                _local_failure("invalid_budget", "Evidence budget is invalid."),
+            )
+        if self._http.base_url != self._base_url:
+            raise RecallFailure(
+                operation,
+                _local_failure(
+                    "client_context_changed", "Cairn memory client context changed."
+                ),
+            )
+        request: dict[str, object] = {
+            "scope": self._scope_json,
+            "evidence_id": str(evidence_id),
+            "budget": budget,
+        }
+        if query is not None:
+            request["query"] = query
+        if start is not None:
+            request["start"] = start
+        status_code: int | None = None
+        try:
+            async with self._http.stream(
+                "POST",
+                self._base_url.join("/memory/v1/evidence-window"),
+                json=request,
+                headers={"Accept-Encoding": "identity"},
+                follow_redirects=False,
+            ) as response:
+                status_code = response.status_code
+                document = await read_recall(
+                    response, budget=budget, operation=operation, page_failures=True
+                )
+            decoded = validate_evidence_window(document, budget=budget)
+            # The record must answer this request, not another one.
+            if (
+                decoded["evidence_id"] != str(evidence_id)
+                or decoded["mode"] != ("offset" if query is None else "query")
+                or (query is None and decoded["start_byte"] != (start or 0))
+            ):
+                raise ValueError("unrequested_window")
+            return RecalledMemory(freeze_object(decoded))
+        except httpx.HTTPError:
+            raise RecallFailure(operation, _transport_failure()) from None
+        except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
+            raise RecallFailure(operation, _invalid_response(status_code)) from None
 
     async def disagree(
         self,

@@ -15,6 +15,9 @@ class FailureMetadata:
     retry: str
     correlation_id: str | None
     status_code: int | None
+    # Operation-local detail (recall-page and evidence-window only): frozen
+    # pairs sorted by key.
+    detail: tuple[tuple[str, str | int], ...] | None = None
 
 
 class MemoryOperationFailure(Exception):

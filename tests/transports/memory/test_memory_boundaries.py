@@ -62,6 +62,8 @@ async def test_exact_mounts_and_independent_tool_inventories(tmp_path: Path) -> 
                     "diagnose",
                     "remember",
                     "recall",
+                    "recall-page",
+                    "evidence-window",
                     "history",
                     "suggest",
                     "propose",

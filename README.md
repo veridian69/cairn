@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.7.12.md"><img alt="Release v0.7.12" src="https://img.shields.io/badge/release-v0.7.12-b68235"></a>
+  <a href="docs/releases/v0.7.13.md"><img alt="Release v0.7.13" src="https://img.shields.io/badge/release-v0.7.13-b68235"></a>
   <a href="LICENSE.md"><img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-555"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-Linux%20%C2%B7%20Docker%20%C2%B7%20k8s-555">
   <img alt="REST and MCP" src="https://img.shields.io/badge/API-REST%20%2B%20MCP-555">
@@ -144,7 +144,7 @@ make check
 
 The locked gate covers formatting, linting, typing, tests, generated contracts, deployment renders and dependency audit. The hosted check runs on demand: **Actions → Check → Run workflow**, or `gh workflow run check.yml --ref BRANCH`. GitHub excludes the marked Bubblewrap/namespace tests and says so in the run summary — run `make check` locally for the complete suite.
 
-[Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md) · [v0.7.12 release notes](docs/releases/v0.7.12.md) · [macOS native installation](docs/operations/macos-native.md)
+[Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md) · [v0.7.13 release notes](docs/releases/v0.7.13.md) · [macOS native installation](docs/operations/macos-native.md)
 
 Apache-2.0 ([license](LICENSE.md) · [notices](NOTICE.md)). Cairn is the memory service behind [Drystane](https://github.com/veridian69/drystane), the control plane that prompted its design.
 
