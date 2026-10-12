@@ -22,10 +22,11 @@ import (
 
 func TestMeasureColdLiveStartsRelayAndMeasuresCall(t *testing.T) {
 	options := Options{
-		UpstreamURL:        "https://cairn.example/mcp",
-		LocalTokenPath:     "/tmp/relay-token",
-		CFClientIDPath:     "/tmp/client-id",
-		CFClientSecretPath: "/tmp/client-secret",
+		UpstreamURL:         "https://cairn.example/mcp",
+		LocalTokenPath:      "/tmp/relay-token",
+		CFClientIDPath:      "/tmp/client-id",
+		CFClientSecretPath:  "/tmp/client-secret",
+		CairnCredentialPath: "/tmp/cairn-credential",
 	}
 	factory := func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 		command := exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=TestColdBenchmarkHelperProcess", "--"}, arguments...)...)
@@ -44,10 +45,11 @@ func TestMeasureColdLiveStartsRelayAndMeasuresCall(t *testing.T) {
 
 func TestMeasureColdLiveFailsFastAndReportsChildDiagnostic(t *testing.T) {
 	options := Options{
-		UpstreamURL:        "https://cairn.example/mcp",
-		LocalTokenPath:     "/tmp/relay-token",
-		CFClientIDPath:     "/tmp/client-id",
-		CFClientSecretPath: "/tmp/client-secret",
+		UpstreamURL:         "https://cairn.example/mcp",
+		LocalTokenPath:      "/tmp/relay-token",
+		CFClientIDPath:      "/tmp/client-id",
+		CFClientSecretPath:  "/tmp/client-secret",
+		CairnCredentialPath: "/tmp/cairn-credential",
 	}
 	factory := func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 		return helperCommand(ctx, "exit", arguments)
@@ -72,10 +74,11 @@ func TestMeasureColdLiveFailsFastAndReportsChildDiagnostic(t *testing.T) {
 
 func TestMeasureColdLiveRetriesWhenChildLosesThePortRace(t *testing.T) {
 	options := Options{
-		UpstreamURL:        "https://cairn.example/mcp",
-		LocalTokenPath:     "/tmp/relay-token",
-		CFClientIDPath:     "/tmp/client-id",
-		CFClientSecretPath: "/tmp/client-secret",
+		UpstreamURL:         "https://cairn.example/mcp",
+		LocalTokenPath:      "/tmp/relay-token",
+		CFClientIDPath:      "/tmp/client-id",
+		CFClientSecretPath:  "/tmp/client-secret",
+		CairnCredentialPath: "/tmp/cairn-credential",
 	}
 	var attempts atomic.Int32
 	factory := func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
@@ -118,6 +121,9 @@ func TestColdBenchmarkHelperProcess(t *testing.T) {
 	port := argumentValue(os.Args, "--port")
 	if _, err := strconv.Atoi(port); err != nil {
 		os.Exit(2)
+	}
+	if argumentValue(os.Args, "--cairn-credential-path") != "/tmp/cairn-credential" {
+		os.Exit(3)
 	}
 	server := &http.Server{
 		Addr: "127.0.0.1:" + port,
@@ -499,6 +505,7 @@ func TestParseOptionsAcceptsExplicitLiveInputs(t *testing.T) {
 		"--local-token-path", "/tmp/relay-token",
 		"--cf-client-id-path", "/tmp/client-id",
 		"--cf-client-secret-path", "/tmp/client-secret",
+		"--cairn-credential-path", "/tmp/cairn-credential",
 		"--binary", "/tmp/cairn-mcp",
 	})
 	if err != nil {
@@ -508,7 +515,8 @@ func TestParseOptionsAcceptsExplicitLiveInputs(t *testing.T) {
 		options.UpstreamURL != "https://cairn.example/mcp" ||
 		options.BinaryPath != "/tmp/cairn-mcp" ||
 		options.CFClientIDPath != "/tmp/client-id" ||
-		options.CFClientSecretPath != "/tmp/client-secret" {
+		options.CFClientSecretPath != "/tmp/client-secret" ||
+		options.CairnCredentialPath != "/tmp/cairn-credential" {
 		t.Fatalf("unexpected live options: %+v", options)
 	}
 }
@@ -533,6 +541,9 @@ func TestParseOptionsDefaultsComeFromTheConfigPackage(t *testing.T) {
 	}
 	if want := filepath.Join(configDir, "cf-access-client-secret"); options.CFClientSecretPath != want {
 		t.Fatalf("CFClientSecretPath = %q, want %q", options.CFClientSecretPath, want)
+	}
+	if want := filepath.Join(configDir, "cairn-credential"); options.CairnCredentialPath != want {
+		t.Fatalf("CairnCredentialPath = %q, want %q", options.CairnCredentialPath, want)
 	}
 }
 

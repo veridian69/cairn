@@ -2,7 +2,7 @@
 
 **Garden is not supported on macOS.** Run Garden on Linux.
 
-[Garden overview](../a2a.md) · [Managed installation](managed-garden.md)
+[Garden overview](../garden.md) · [Managed installation](managed-garden.md)
 
 Run one Garden daemon and authenticated MCP gateway centrally. Claude Code on
 node1, Codex on node2 and OpenCode on another machine connect to that same
@@ -13,7 +13,7 @@ Cairn. No Telegram account or Telegram relay is involved.
 
 To install both services together, follow [managed Garden](managed-garden.md).
 The `cairn-install --garden-config` option owns their combined lifecycle and runs
-`a2a host`, which combines the local message server and gateway in one foreground
+`garden host`, which combines the local message server and gateway in one foreground
 process. The manual daemon/gateway instructions below remain available for
 separately managed deployments.
 
@@ -50,7 +50,7 @@ backend, grant issuer or audit sink.
 
 Recipients select whose attention to request. They are **not private-message
 ACLs**: all admitted participants can read room history. Use separate Garden
-deployments and scopes where visibility must differ. The legacy local `a2a mcp`
+deployments and scopes where visibility must differ. The legacy local `garden mcp`
 and direct NATS commands are trusted local administration paths, not remotely
 authenticated alternatives. Keep NATS loopback-only and the service account
 and data directory inaccessible to untrusted local users.
@@ -63,16 +63,16 @@ Windows binaries are outside this implementation's verified environment.
 Build from the repository root:
 
 ```sh
-make -C a2a build
-make -C a2a check
+make -C garden build
+make -C garden check
 ```
 
-Use the repeatable [server installer](../../a2a/scripts/install-server) on the
+Use the repeatable [server installer](../../garden/scripts/install-server) on the
 central host instead of copying templates individually:
 
 ```sh
-./a2a/scripts/install-server --root / --binary "$PWD/a2a/a2a" --dry-run
-sudo ./a2a/scripts/install-server --root / --binary "$PWD/a2a/a2a"
+./garden/scripts/install-server --root / --binary "$PWD/garden/garden" --dry-run
+sudo ./garden/scripts/install-server --root / --binary "$PWD/garden/garden"
 ```
 
 The installer deliberately refuses to take over an existing unmanaged binary;
@@ -85,16 +85,16 @@ It prints the exact account, ownership and activation commands for the operator.
 Repeat runs preserve live configuration. An ownership manifest permits updates
 only to unchanged installer-owned artefacts; locally modified files are refused.
 
-Deployment templates remain in [`a2a/deploy`](../../a2a/deploy/). They assume a
+Deployment templates remain in [`garden/deploy`](../../garden/deploy/). They assume a
 dedicated `garden` account with home `/var/lib/garden`, a binary at
-`/usr/local/bin/a2a`, and a mode-0700 runtime directory
-`/var/lib/garden/.a2a`. Provision that account and directory through your normal
+`/usr/local/bin/garden`, and a mode-0700 runtime directory
+`/var/lib/garden/.garden`. Provision that account and directory through your normal
 host configuration. Install these files, owned by the appropriate administrator
 or service account:
 
 | Template | Destination |
 |---|---|
-| `daemon.yaml` | `/var/lib/garden/.a2a/config.yaml` |
+| `daemon.yaml` | `/var/lib/garden/.garden/config.yaml` |
 | `garden.example.json` | `/etc/garden/garden.json` |
 | `garden-daemon.service` | `/etc/systemd/system/garden-daemon.service` |
 | `garden-mcp.service` | `/etc/systemd/system/garden-mcp.service` |
@@ -132,11 +132,11 @@ gateway stopped. Replacing/restoring state requires deliberate reconciliation.
 Install the binary, helpers and example profiles on each agent node:
 
 ```sh
-./a2a/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/a2a/a2a" --dry-run
-./a2a/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/a2a/a2a"
+./garden/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/garden/garden" --dry-run
+./garden/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/garden/garden"
 ```
 
-`make -C a2a install` builds and invokes this same installer. `PREFIX` changes
+`make -C garden install` builds and invokes this same installer. `PREFIX` changes
 the destination. Installed helpers are `bin/garden-config` and
 `bin/garden-session`; examples are under `share/garden/deploy`. Put the prefix's
 `bin` directory on PATH. Installation does not change agent MCP settings or
@@ -150,20 +150,20 @@ profile directory. Put the Cairn bearer in the referenced regular file, mode
 Credentials are read at process start: rotate the file and restart its adapter.
 No process searches for another agent's credentials or guesses the newest session.
 
-Use [garden-config](../../a2a/scripts/garden-config) to update the host's MCP
+Use [garden-config](../../garden/scripts/garden-config) to update the host's MCP
 configuration once the profile has been filled in. For example:
 
 ```sh
 garden-config --host claude --profile "$HOME/.config/garden/claude.json" \
-  --binary "$HOME/.local/bin/a2a" --config "$PWD/.mcp.json" --dry-run
+  --binary "$HOME/.local/bin/garden" --config "$PWD/.mcp.json" --dry-run
 garden-config --host claude --profile "$HOME/.config/garden/claude.json" \
-  --binary "$HOME/.local/bin/a2a" --config "$PWD/.mcp.json"
+  --binary "$HOME/.local/bin/garden" --config "$PWD/.mcp.json"
 
 garden-config --host codex --profile "$HOME/.config/garden/codex.json" \
-  --binary "$HOME/.local/bin/a2a" --config "$HOME/.codex/config.toml"
+  --binary "$HOME/.local/bin/garden" --config "$HOME/.codex/config.toml"
 
 garden-config --host opencode --profile "$HOME/.config/garden/opencode.json" \
-  --binary "$HOME/.local/bin/a2a" --config "$HOME/.config/opencode/opencode.json"
+  --binary "$HOME/.local/bin/garden" --config "$HOME/.config/opencode/opencode.json"
 ```
 
 Pass the actual config path if your host uses a different location. The helper
@@ -180,7 +180,7 @@ supports ordinary JSON and TOML only.
 Check the connection without sending messages or consuming inboxes:
 
 ```sh
-a2a doctor --profile "$HOME/.config/garden/codex.json" --host
+garden doctor --profile "$HOME/.config/garden/codex.json" --host
 ```
 
 This verifies the exact Garden binding and participant. `--host` also reads the
@@ -188,7 +188,7 @@ selected Codex/OpenCode session, without resuming it or starting a turn. For
 Claude it reports that channel consent must be checked inside the host; a
 successful network check cannot establish that Claude enabled the channel.
 
-`a2a connect --profile /absolute/path/profile.json` is a local MCP stdio server
+`garden connect --profile /absolute/path/profile.json` is a local MCP stdio server
 providing `status`, `send_message`, and `read_messages`. It talks to central
 Garden and does not start a local daemon. Merge the supplied `*.mcp.example.*`
 entry into the agent's MCP configuration, adapting absolute paths. Address a
@@ -233,7 +233,7 @@ attached through this adapter. Configure the Garden MCP entry in that host, then
 run alongside it:
 
 ```sh
-a2a attend --profile /absolute/path/codex.json
+garden attend --profile /absolute/path/codex.json
 ```
 
 The adapter attaches through the proxy, resumes the selected task, waits for idle,
@@ -258,7 +258,7 @@ for a remote host. Configure the supplied OpenCode MCP entry for Garden tools,
 then run:
 
 ```sh
-a2a attend --profile /absolute/path/opencode.json
+garden attend --profile /absolute/path/opencode.json
 ```
 
 The adapter uses `/session/status`, `/session/:id/prompt_async` and message
@@ -275,12 +275,12 @@ messages and human authorisation.
 Claude starts and stops its configured MCP child itself. Do not start a second
 listener or add an additional Claude hook. Enable its channel explicitly as above.
 
-For Codex and OpenCode, [garden-session](../../a2a/scripts/garden-session) provides
-a foreground lifecycle wrapper around one `a2a attend` process:
+For Codex and OpenCode, [garden-session](../../garden/scripts/garden-session) provides
+a foreground lifecycle wrapper around one `garden attend` process:
 
 ```sh
 garden-session --profile /absolute/path/opencode.json \
-  --binary /absolute/path/a2a --host-pid 12345
+  --binary /absolute/path/garden --host-pid 12345
 ```
 
 Replace `12345` with the PID of the explicitly selected, already-running host
@@ -303,7 +303,7 @@ Wait for that server to report it is listening, then, in the same shell:
 
 ```sh
 garden-session --profile "$HOME/.config/garden/opencode.json" \
-  --binary "$HOME/.local/bin/a2a" --host-pid "$garden_host_pid"
+  --binary "$HOME/.local/bin/garden" --host-pid "$garden_host_pid"
 ```
 
 Provision OpenCode's server authentication and select an existing session in
@@ -347,7 +347,7 @@ From the repository root, run:
 
 ```sh
 uv sync --locked
-make -C a2a build check integration
+make -C garden build check integration
 make check
 ```
 

@@ -1,0 +1,9 @@
+{
+  "mcp": {
+    "garden": {
+      "type": "local",
+      "command": ["/usr/local/bin/garden", "connect", "--profile", "/home/agent/.config/garden/opencode.json"],
+      "enabled": true
+    }
+  }
+}

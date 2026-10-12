@@ -236,7 +236,7 @@ def load_options(path: Path | str, mode: str) -> dict[str, Any]:
 
 
 def source_version(source: Path) -> str:
-    """Release version from pyproject.toml; every built a2a binary reports it."""
+    """Release version from pyproject.toml; every built garden binary reports it."""
     pyproject = source / "pyproject.toml"
     try:
         project = tomllib.loads(pyproject.read_text(encoding="utf-8"))
@@ -645,7 +645,7 @@ def profiles(ctx: Context) -> None:
             )
         filename = adapter + ".profile.example.json"
         write_json_config(ctx, directory / filename, profile)
-        command = "/REPLACE/WITH/INSTALLED/a2a"
+        command = "/REPLACE/WITH/INSTALLED/garden"
         arguments = ["connect", "--profile", "/REPLACE/WITH/BUNDLE/profile.json"]
         if adapter == "codex":
             ctx.write_file(
@@ -677,19 +677,19 @@ def profiles(ctx: Context) -> None:
             setup = (
                 "Copy claude.profile.example.json to profile.json; it needs no edits. "
                 "In claude.mcp.example.json, replace the REPLACE paths with the installed "
-                "a2a binary and this bundle's profile.json. "
+                "garden binary and this bundle's profile.json. "
             )
         elif adapter == "codex":
             setup = (
                 "Copy codex.profile.example.json to profile.json and replace its REPLACE "
                 "task and control-socket values. In codex.mcp.example.toml, replace the "
-                "REPLACE paths with the installed a2a binary and this bundle's profile.json. "
+                "REPLACE paths with the installed garden binary and this bundle's profile.json. "
             )
         else:
             setup = (
                 "Copy opencode.profile.example.json to profile.json and replace its REPLACE "
                 "host-session values. In opencode.mcp.example.json, replace the REPLACE paths "
-                "with the installed a2a binary and this bundle's profile.json. Explicitly configure "
+                "with the installed garden binary and this bundle's profile.json. Explicitly configure "
                 "the local server endpoint and protected password file. "
             )
         ctx.write_file(
@@ -698,20 +698,20 @@ def profiles(ctx: Context) -> None:
             "Copy only this participant's directory to its agent machine, using a secure channel.\n"
             "Keep agent.token mode 0600 and this directory mode 0700. Do not distribute installer "
             "administrator credentials, issuance captures or other participants' directories.\n\n"
-            "Install the a2a binary and helper scripts on this machine with "
-            "`a2a/scripts/install-user` from the Cairn source checkout. "
+            "Install the garden binary and helper scripts on this machine with "
+            "`garden/scripts/install-user` from the Cairn source checkout. "
             + setup
             + "Then merge the completed profile into the host's MCP configuration with "
             f"`garden-config --host {adapter} --profile /absolute/path/profile.json "
-            "--binary /absolute/path/a2a --config /absolute/path/to/host-mcp-config`; "
+            "--binary /absolute/path/garden --config /absolute/path/to/host-mcp-config`; "
             "the example files above show the resulting shape if you prefer to edit by hand. "
             "No host session is created.\n\n"
-            "Run `a2a doctor --profile /absolute/path/profile.json` to verify the Garden "
+            "Run `garden doctor --profile /absolute/path/profile.json` to verify the Garden "
             "binding, then "
-            "`a2a connect --profile /absolute/path/profile.json` for the MCP stdio bridge. "
-            "Configure the agent's MCP command to this a2a connect invocation; no bearer belongs in argv.\n\n"
-            "For Claude use a2a connect as its MCP server. For Codex/OpenCode run "
-            "`a2a attend --profile /absolute/path/profile.json` alongside the MCP bridge. "
+            "`garden connect --profile /absolute/path/profile.json` for the MCP stdio bridge. "
+            "Configure the agent's MCP command to this garden connect invocation; no bearer belongs in argv.\n\n"
+            "For Claude use garden connect as its MCP server. For Codex/OpenCode run "
+            "`garden attend --profile /absolute/path/profile.json` alongside the MCP bridge. "
             "Only one attention consumer may own this participant. The profile pins the deployment "
             "identity and scope; tokens remain subject to Cairn revocation and expiry.\n\n"
             "For Claude's unlisted development channel, use the MCP server name garden and "

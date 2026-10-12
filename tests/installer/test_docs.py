@@ -156,4 +156,4 @@ def test_managed_garden_documents_recovery_and_native_build_boundaries() -> None
     assert "There is no in-place re-issue path" in garden
     assert "instance/garden/go-build" in garden
     assert "telemetry directory" in garden
-    assert "`a2a/scripts/install-user`" in garden
+    assert "`garden/scripts/install-user`" in garden

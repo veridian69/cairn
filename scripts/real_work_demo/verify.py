@@ -645,7 +645,7 @@ def verify(out: Path, build_venv: bool = True) -> dict[str, Any]:
         for text in (f["body"], payloads.get(evidence.get(f["fact_id"], ""), ""))
     ]  # fmt: skip
     # Garden: the harness writes the agents' Garden profiles and uses one only for
-    # `a2a doctor`, which never sends (a2a/cmd/attention.go). Every message is an
+    # `garden doctor`, which never sends (garden/cmd/attention.go). Every message is an
     # agent's own send_message; the verifier (T4, T6) and the cold session (T7) send none.
     stray = [t["prefix"] for t in meta["turns"] if t["actor"] in ("verifier", "spike-cold")
              for c in calls.get(t["prefix"], []) if c.name == "garden.send_message"]  # fmt: skip

@@ -98,9 +98,9 @@ From the trusted Cairn checkout, choose one:
   --garden-config "$HOME/garden-tls/garden.json"
 ```
 
-Native mode builds Garden from the included `a2a` Go module and needs its Go
+Native mode builds Garden from the included `garden` Go module and needs its Go
 toolchain dependencies. The build stamps the release version from
-`pyproject.toml` (`instance/garden/bin/a2a --version`), and keeps Go's build
+`pyproject.toml` (`instance/garden/bin/garden --version`), and keeps Go's build
 and module caches under `instance/garden/go-build` and
 `instance/garden/go-mod` in the installation state directory, so `blitz`
 removes them with everything else. The Go toolchain's own telemetry directory
@@ -130,7 +130,7 @@ staged into the eligible nodes' containerd caches. Both paths require an
 immutable image digest. `--kube-preloaded-image` controls Cairn only; Garden's
 local path requires its own `--kube-garden-receipt`.
 
-For a registry, build `a2a/Dockerfile` with `a2a/` as its context, publish through
+For a registry, build `garden/Dockerfile` with `garden/` as its context, publish through
 your normal image pipeline, and arrange node pull access. Without a Garden
 receipt the installer uses `imagePullPolicy: Always`.
 
@@ -161,7 +161,7 @@ fi
 garden_version="$(uv run --locked python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
 docker build --build-arg VERSION="$garden_version" \
   --build-arg REVISION="$(git rev-parse HEAD)" \
-  --tag cairn-garden:local --file a2a/Dockerfile a2a
+  --tag cairn-garden:local --file garden/Dockerfile garden
 garden_digest="$(docker image inspect cairn-garden:local --format '{{.Id}}')"
 garden_tag="cairn.local/garden:build-${garden_digest#sha256:}"
 garden_image="cairn.local/garden@$garden_digest"
@@ -322,9 +322,9 @@ directory. Give each agent machine only its participant's profile/token and
 required CA material through your existing secure transfer mechanism. Keep
 tokens private. Do not copy the server TLS key or Cairn administrator token.
 
-Install the `a2a` binary and helper scripts on each agent machine using
-`a2a/scripts/install-user`, then follow the generated bundle README. Only native
-installation supplies a host-side binary at `instance/garden/bin/a2a` under the
+Install the `garden` binary and helper scripts on each agent machine using
+`garden/scripts/install-user`, then follow the generated bundle README. Only native
+installation supplies a host-side binary at `instance/garden/bin/garden` under the
 named installation state directory. Docker and Kubernetes installations run
 Garden in a container; install the adapter binary separately on the machine
 where you run the verification command, including the installation host if
@@ -353,12 +353,12 @@ Create the working profile in the participant bundle directory before running
 cd /absolute/path/to/participant-bundle
 cp claude.profile.example.json profile.json
 chmod 600 profile.json
-a2a doctor --profile "$PWD/profile.json"
+garden doctor --profile "$PWD/profile.json"
 ```
 
 For Codex or OpenCode, copy the corresponding generated profile example and
 complete the local host details as directed by that bundle's README.
-`a2a doctor --profile /absolute/path/profile.json` verifies the authenticated
+`garden doctor --profile /absolute/path/profile.json` verifies the authenticated
 Garden binding. Add `--host` only when testing the local attention attachment;
 that form requires a live local agent host. An `agent host rejected delivery`
 result can represent Garden authentication or attachment rejection, so confirm
@@ -381,7 +381,7 @@ credentials. It uses the original pinned options and copied TLS material;
 passing changed options is refused. `rollback` stops/removes owned runtime
 resources while retaining Garden history, inbox state, credentials and config.
 Resume can recreate the owned runtime against that retained data.
-Legacy `a2a` snapshot/reset commands do not manage this Garden deployment.
+Legacy `garden` snapshot/reset commands do not manage this Garden deployment.
 
 ### Recovery
 

@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts.real_work_demo import agents  # noqa: E402
 
-A2A = Path("/x/a2a")
+GARDEN_BIN = Path("/x/garden")
 
 
 def turn(prefix: str) -> agents.Turn:
@@ -78,7 +78,9 @@ def test_claude_sandbox_settings_deny_network(tmp_path: Path) -> None:
 
 
 def test_codex_toml_limits_tools_and_garden() -> None:
-    text = agents.codex_toml(turn("t4-verifier"), "http://c", Path("/g.json"), A2A)
+    text = agents.codex_toml(
+        turn("t4-verifier"), "http://c", Path("/g.json"), GARDEN_BIN
+    )
     assert 'sandbox_mode = "workspace-write"' in text
     assert "network_access = false" in text
     assert '"promote"' in text and '"retrieve"' not in text
@@ -101,12 +103,12 @@ def test_origin_is_the_only_extra_writable_root(tmp_path: Path) -> None:
         str(origin),
     ]
     text = agents.codex_toml(
-        turn("t2-spike"), "http://c", Path("/g.json"), A2A, writable=(origin,)
+        turn("t2-spike"), "http://c", Path("/g.json"), GARDEN_BIN, writable=(origin,)
     )
     assert f'writable_roots = ["{origin}"]' in text
 
 
 def test_codex_does_not_get_tmp_for_free() -> None:
-    text = agents.codex_toml(turn("t1-val"), "http://c", Path("/g.json"), A2A)
+    text = agents.codex_toml(turn("t1-val"), "http://c", Path("/g.json"), GARDEN_BIN)
     assert "exclude_slash_tmp = true" in text
     assert "exclude_tmpdir_env_var = true" in text

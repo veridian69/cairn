@@ -14,7 +14,9 @@ import httpx2
 import pytest
 from graphiti_core.driver import falkordb_driver
 from graphiti_core.driver.falkordb_driver import FalkorDriver
+from graphiti_core.llm_client.config import ModelSize
 from graphiti_core.prompts.models import Message
+from graphiti_core.search.search_config import EdgeReranker, EpisodeReranker
 from openai import (
     DEFAULT_TIMEOUT,
     APIConnectionError,
@@ -77,9 +79,9 @@ def test_all_provider_roles_share_one_httpx2_pool_with_the_accepted_policy(
         assert embedder.client is shared
         assert reranker.client is shared
         assert llm_client.config.model == "gpt-5.4-nano"
-        assert llm_client.config.small_model == "gpt-4.1-nano"
+        assert llm_client.config.small_model == "gpt-5.6-luna"
         assert llm_client.reasoning == "none"
-        assert reranker.config.model == "gpt-4.1-nano"
+        assert reranker.config.model == "gpt-5.6-luna"
     finally:
         asyncio.run(shared.close())
 
@@ -239,7 +241,55 @@ def test_all_three_graphiti_roles_parse_openai3_responses(
     ]
     assert requests[0][1]["model"] == "gpt-5.4-nano"
     assert requests[0][1]["reasoning"] == {"effort": "none"}
-    assert requests[2][1]["model"] == "gpt-4.1-nano"
+    assert requests[2][1]["model"] == "gpt-5.6-luna"
+
+
+def test_small_model_request_is_reasoning_shaped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[str, dict[str, Any]]] = []
+
+    async def serve(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        requests.append((request.url.path, body))
+        return _response(_parsed_response(body["model"]))
+
+    shared, llm_client, _embedder, _reranker = _clients_with_transport(
+        monkeypatch, serve
+    )
+
+    async def exercise() -> None:
+        try:
+            answer = await llm_client.generate_response(
+                [Message(role="user", content="return the accepted answer")],
+                _Answer,
+                model_size=ModelSize.small,
+            )
+        finally:
+            await shared.close()
+        assert answer == {"answer": "accepted"}
+
+    asyncio.run(exercise())
+
+    [(path, body)] = requests
+    assert path == "/v1/responses"
+    assert body["model"] == "gpt-5.6-luna"
+    assert body["reasoning"] == {"effort": "none"}
+    assert "max_output_tokens" in body
+    assert "temperature" not in body
+    assert "max_tokens" not in body
+
+
+def test_search_never_selects_the_cross_encoder() -> None:
+    # gpt-5.6-luna rejects OpenAIRerankerClient's request shape; the
+    # reranker stays safe only while search reranks by RRF.
+    config = graphiti_module._SEARCH_CONFIG
+    assert config.edge_config is not None
+    assert config.edge_config.reranker == EdgeReranker.rrf
+    assert config.episode_config is not None
+    assert config.episode_config.reranker == EpisodeReranker.rrf
+    assert config.node_config is None
+    assert config.community_config is None
 
 
 @pytest.mark.parametrize(

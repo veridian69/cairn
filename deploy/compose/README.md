@@ -37,7 +37,7 @@ recovery procedure.
 
 ## Image and contract boundary
 
-`CAIRN_IMAGE=cairn:v0.7.13` in `../images.lock` is a local build tag, not a
+`CAIRN_IMAGE=cairn:v0.7.14` in `../images.lock` is a local build tag, not a
 published image. Use the reviewed local build produced below or a separately
 reviewed registry digest and record its exact identity.
 
@@ -149,8 +149,8 @@ repository root, verify the contracts, build the image named by
 ```sh
 (cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-make image IMAGE=cairn:v0.7.13
-docker image inspect --format '{{.Id}}' cairn:v0.7.13
+make image IMAGE=cairn:v0.7.14
+docker image inspect --format '{{.Id}}' cairn:v0.7.14
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
@@ -174,7 +174,7 @@ removes an object only when both still match.
 set -eu
 set -o pipefail
 
-preflight_image='cairn:v0.7.13'
+preflight_image='cairn:v0.7.14'
 preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 preflight_label_key='io.cairn.compose-preflight'
 preflight_network="cairn-preflight-$preflight_id"
@@ -855,6 +855,62 @@ services:
     environment:
       HTTPS_PROXY: http://proxy.internal:3128
 ```
+
+## Optional edge mapper for browser connectors
+
+`compose.edge.yaml` adds `cairn-edge`, which validates the Cloudflare Access
+assertion on the browser-connector paths and forwards each to Cairn's memory
+MCP mount as its own workload principal. It is an explicit identity
+mapping; nothing about it makes Cairn trust the edge.
+
+Prepare, as the same host user that owns the Cairn configuration:
+
+1. `edge.json`, mode 0600, with `team_domain`, `audience` (the Access
+   application's AUD tag for the browser paths), `allowed_email`,
+   `upstream_url` set to `http://cairn:8000/memory/v1/mcp`,
+   `allow_http_upstream: true`, and `routes` mapping each inbound path to a
+   credential file under the secrets directory. The `routes` values are
+   in-container paths under `/var/run/secrets/cairn-edge/`.
+2. One credential file per route, mode 0600, each holding the plaintext
+   from `issue-credential` for that route's workload principal.
+3. `.env` entries `CAIRN_EDGE_UID`, `CAIRN_EDGE_GID`, `CAIRN_EDGE_HOST_PORT`,
+   `CAIRN_EDGE_CONFIG_FILE` and `CAIRN_EDGE_SECRETS_DIR`.
+
+Build the edge image with the tag `deploy/images.lock` pins (`make image-edge`
+runs from the repository root and requires `VERSION`):
+
+```sh
+(cd ../.. && make image-edge VERSION=0.7.14 EDGE_IMAGE=cairn-edge:v0.7.14)
+docker image inspect --format '{{.Id}}' cairn-edge:v0.7.14
+```
+
+Validate before starting:
+
+    docker compose --env-file ../images.lock --env-file .env \
+      -f compose.yaml -f compose.edge.yaml run --rm --no-deps cairn-edge \
+      check --config /etc/cairn-edge/edge.json
+
+Start it:
+
+    docker compose --env-file ../images.lock --env-file .env \
+      -f compose.yaml -f compose.edge.yaml up -d --wait cairn-edge
+
+Use both files on every later command, and point cloudflared's ingress
+rules for the browser paths at `127.0.0.1:${CAIRN_EDGE_HOST_PORT}`. Rotate a
+route credential by replacing its file and sending `SIGHUP` to the
+container's process:
+
+    docker compose --env-file ../images.lock --env-file .env \
+      -f compose.yaml -f compose.edge.yaml kill -s HUP cairn-edge
+
+Changing `edge.json` needs a container restart; `SIGHUP` reloads route
+credentials only. See [the edge runbook](../../docs/operations/cairn-edge.md).
+
+If semantic retrieval is also enabled, every command for this instance names
+all three files: add `-f compose.graphiti.yaml` to the edge commands above and
+`-f compose.edge.yaml` to the semantic, status, stop and `down` commands
+below. A command sees only the services in the files it names, so leaving
+one out leaves FalkorDB or the edge running.
 
 ## Normal operation, reboot and cleanup
 

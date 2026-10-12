@@ -31,10 +31,11 @@ func main() {
 }
 
 type stdioOptions struct {
-	endpoint         string
-	clientIDPath     string
-	clientSecretPath string
-	httpClient       *http.Client
+	endpoint            string
+	clientIDPath        string
+	clientSecretPath    string
+	cairnCredentialPath string
+	httpClient          *http.Client
 }
 
 func run(ctx context.Context, argv []string, stdin io.ReadCloser, stdout, stderr io.Writer) int {
@@ -96,7 +97,7 @@ func runWithBenchmark(
 	}
 
 	if command == "check" {
-		if _, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath); err != nil {
+		if _, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath); err != nil {
 			fmt.Fprintln(stderr, "configuration invalid")
 			return 1
 		}
@@ -107,10 +108,11 @@ func runWithBenchmark(
 		client := relay.NewHTTPClient(cfg, 0)
 		defer client.CloseIdleConnections()
 		err := runStdio(ctx, stdin, stdout, stdioOptions{
-			endpoint:         cfg.UpstreamURL,
-			clientIDPath:     cfg.CFClientIDPath,
-			clientSecretPath: cfg.CFClientSecretPath,
-			httpClient:       client,
+			endpoint:            cfg.UpstreamURL,
+			clientIDPath:        cfg.CFClientIDPath,
+			clientSecretPath:    cfg.CFClientSecretPath,
+			cairnCredentialPath: cfg.CairnCredentialPath,
+			httpClient:          client,
 		})
 		if err != nil {
 			line := fmt.Sprintf("stdio error: %v", err)
@@ -121,7 +123,7 @@ func runWithBenchmark(
 		return 0
 	}
 
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "configuration invalid")
 		return 1
@@ -185,7 +187,7 @@ func newRelayHTTPServer(cfg config.RelayConfig, handler http.Handler, logger *lo
 }
 
 func runStdio(ctx context.Context, stdin io.ReadCloser, stdout io.Writer, opts stdioOptions) error {
-	store, err := credentials.NewAccessStore(opts.clientIDPath, opts.clientSecretPath)
+	store, err := credentials.NewAccessStore(opts.clientIDPath, opts.clientSecretPath, opts.cairnCredentialPath)
 	if err != nil {
 		return err
 	}
@@ -246,11 +248,12 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "options:")
 	fmt.Fprintln(w, "  --bind-host string (default 127.0.0.1)")
 	fmt.Fprintln(w, "  --port int (default 8765)")
-	fmt.Fprintln(w, "  --upstream-url string (default https://cairn.example.invalid/mcp)")
+	fmt.Fprintln(w, "  --upstream-url string (default https://cairn.example.invalid/memory/v1/mcp)")
 	fmt.Fprintln(w, "  --allow-http-upstream")
 	fmt.Fprintln(w, "  --local-token-path string (default ~/.config/cairn/relay-token; serve and check only)")
 	fmt.Fprintln(w, "  --cf-client-id-path string (default ~/.config/cairn/cf-access-client-id)")
 	fmt.Fprintln(w, "  --cf-client-secret-path string (default ~/.config/cairn/cf-access-client-secret)")
+	fmt.Fprintln(w, "  --cairn-credential-path string (default ~/.config/cairn/cairn-credential)")
 	fmt.Fprintln(w, "  --connect-timeout float (seconds; upstream TCP connect, default 5)")
 	fmt.Fprintln(w, "  --header-read-timeout float (seconds; inbound request headers, default 30)")
 	fmt.Fprintln(w, "  --write-stall-timeout float (seconds; one stalled write to the client, default 30)")

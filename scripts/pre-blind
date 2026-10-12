@@ -263,10 +263,10 @@ prereqs() {
     record "garden names resolve" "$GARDEN_ADDRESS" "$(getent hosts "$first_host" | awk '{print $1}')"
 
     # Adapter binary for participant verification (managed-garden guide).
-    run_step a2a-build make -C a2a build
-    run_step a2a-install ./a2a/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/a2a/a2a"
-    record "a2a reports release version" "a2a version $(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" \
-      "$("$HOME/.local/bin/a2a" --version)"
+    run_step garden-build make -C garden build
+    run_step garden-install ./garden/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/garden/garden"
+    record "garden reports release version" "garden version $(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" \
+      "$("$HOME/.local/bin/garden" --version)"
 
     if has_config kube-garden; then
       if [[ $PRE_BLIND_REUSE_BUILDS == 1 && -n $(ls -d build/garden-image-stage.* 2>/dev/null | head -1) ]]; then
@@ -655,7 +655,7 @@ removal() {
     for name in $PRE_BLIND_CONFIGS; do
       [[ $(config_feature "$name") == garden ]] && rm -rf "$(config_garden_dir "$name")"
     done
-    rm -f "$HOME/.local/bin/a2a" "$HOME/.local/bin/garden-config" "$HOME/.local/bin/garden-session"
+    rm -f "$HOME/.local/bin/garden" "$HOME/.local/bin/garden-config" "$HOME/.local/bin/garden-session"
     rm -rf "$HOME/.local/share/garden"
   fi
   record "provider key file untouched" "0600 regular" "$(stat -c '%a' "$PROVIDER_KEY_FILE" | sed 's/^600$/0600/') regular"

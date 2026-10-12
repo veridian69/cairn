@@ -896,10 +896,10 @@ def test_bundle_readme_points_at_install_user_and_garden_config(
     assert set(readmes) == {"val", "spike", "helper"}
     for name, adapter in ctx.state["garden"]["options"]["participants"].items():
         readme = readmes[name]
-        assert "`a2a/scripts/install-user`" in readme
+        assert "`garden/scripts/install-user`" in readme
         assert f"`garden-config --host {adapter} --profile" in readme
-        assert "--binary /absolute/path/a2a --config" in readme
-        assert "Install a2a. " not in readme
+        assert "--binary /absolute/path/garden --config" in readme
+        assert "Install garden. " not in readme
 
 
 @pytest.mark.parametrize("outage", ["http_503", "tool_unavailable"])

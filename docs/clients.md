@@ -399,6 +399,8 @@ particular SDK's generated types.
 
 For the Cloudflare-fronted Cairn service, use the local `cairn-mcp` relay
 rather than placing Cloudflare credentials in an MCP client. Its local bearer
-token authenticates the loopback relay and is not a Cairn credential. Follow
+token authenticates the loopback relay. The relay carries a separate Cairn credential from `~/.config/cairn/cairn-credential`, which is the principal every request from that host acts as. Follow
 the [relay operations guide](operations/cairn-mcp-relay.md) for its STDIO and
 HTTP configurations, credential-file rules and rotation procedure.
+
+Browser connectors do not use the relay. They reach the memory MCP mount through the edge mapper described in [the edge runbook](operations/cairn-edge.md) and are set up per [the browser connector guide](operations/browser-connectors.md).

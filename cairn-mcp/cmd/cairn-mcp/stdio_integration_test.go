@@ -111,6 +111,7 @@ func TestStdioEndToEnd(t *testing.T) {
 			"--upstream-url", server.URL,
 			"--cf-client-id-path", writeMode0600(t, "client-id", clientID),
 			"--cf-client-secret-path", writeMode0600(t, "client-secret", clientSecret),
+			"--cairn-credential-path", writeMode0600(t, "cairn-credential", "cairn1.test.token"),
 		}, stdin, stdoutWriter, &stderr)
 		_ = stdoutWriter.Close()
 		commandDone <- code

@@ -68,3 +68,35 @@ func writeSecret(t *testing.T, base, name string, value []byte, mode os.FileMode
 	}
 	return path
 }
+
+func TestRelayStoreLoadsCairnToken(t *testing.T) {
+	base := t.TempDir()
+	idPath := writeSecret(t, base, "cf-access-client-id", []byte("client-id\n"), 0o600)
+	secretPath := writeSecret(t, base, "cf-access-client-secret", []byte("client-secret\n"), 0o600)
+	cairnPath := writeSecret(t, base, "cairn-credential", []byte("cairn1.abc.def\n"), 0o600)
+	tokenPath := writeSecret(t, base, "relay-token", []byte("local\n"), 0o600)
+	store, err := NewRelayStore(idPath, secretPath, cairnPath, tokenPath)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	snapshot := store.Snapshot()
+	if string(snapshot.CairnToken) != "cairn1.abc.def" {
+		t.Fatalf("CairnToken = %q", snapshot.CairnToken)
+	}
+	access := store.AccessSnapshot()
+	if string(access.CairnToken) != "cairn1.abc.def" {
+		t.Fatalf("AccessSnapshot().CairnToken = %q", access.CairnToken)
+	}
+}
+
+func TestAccessStoreRequiresCairnCredential(t *testing.T) {
+	base := t.TempDir()
+	idPath := writeSecret(t, base, "cf-access-client-id", []byte("client-id\n"), 0o600)
+	secretPath := writeSecret(t, base, "cf-access-client-secret", []byte("client-secret\n"), 0o600)
+	if _, err := NewAccessStore(idPath, secretPath, filepath.Join(base, "missing")); err == nil {
+		t.Fatal("expected an error for a missing Cairn credential")
+	}
+	if _, err := NewAccessStore(idPath, secretPath, ""); err == nil {
+		t.Fatal("expected an error for an empty Cairn credential path")
+	}
+}

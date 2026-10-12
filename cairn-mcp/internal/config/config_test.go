@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ func TestParseConfigDefaults(t *testing.T) {
 	if got, want := cfg.Port, 8765; got != want {
 		t.Fatalf("port %d, want %d", got, want)
 	}
-	if got, want := cfg.UpstreamURL, "https://cairn.example.invalid/mcp"; got != want {
+	if got, want := cfg.UpstreamURL, "https://cairn.example.invalid/memory/v1/mcp"; got != want {
 		t.Fatalf("upstream %q, want %q", got, want)
 	}
 	if got, want := cfg.ConnectTimeout, 5*time.Second; got != want {
@@ -188,5 +189,34 @@ func TestParseConfigAllowsHTTPWithFlag(t *testing.T) {
 	}
 	if cfg.UpstreamURL != "http://127.0.0.1/mcp" {
 		t.Fatalf("upstream %q, want %q", cfg.UpstreamURL, "http://127.0.0.1/mcp")
+	}
+}
+
+func TestParseConfigDefaultsCairnCredentialPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	command, cfg, err := ParseConfig([]string{"serve"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if command != "serve" {
+		t.Fatalf("command = %q", command)
+	}
+	want := filepath.Join(os.Getenv("HOME"), ".config", "cairn", CairnCredentialFileName)
+	if cfg.CairnCredentialPath != want {
+		t.Fatalf("CairnCredentialPath = %q, want %q", cfg.CairnCredentialPath, want)
+	}
+	if cfg.UpstreamURL != "https://cairn.example.invalid/memory/v1/mcp" {
+		t.Fatalf("UpstreamURL = %q", cfg.UpstreamURL)
+	}
+}
+
+func TestParseConfigOverridesCairnCredentialPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, cfg, err := ParseConfig([]string{"stdio", "--cairn-credential-path", "/elsewhere/token"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.CairnCredentialPath != "/elsewhere/token" {
+		t.Fatalf("CairnCredentialPath = %q", cfg.CairnCredentialPath)
 	}
 }

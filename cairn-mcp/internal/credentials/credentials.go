@@ -28,11 +28,13 @@ type CredentialSnapshot struct {
 	LocalToken     []byte
 	CFClientID     string
 	CFClientSecret string
+	CairnToken     []byte
 }
 
 type AccessCredentials struct {
 	ClientID     string
 	ClientSecret string
+	CairnToken   []byte
 }
 
 type CredentialStore struct {
@@ -45,24 +47,32 @@ type CredentialStore struct {
 type Store = CredentialStore
 
 func NewCredentialStore(cfg config.RelayConfig) (*CredentialStore, error) {
-	return NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	return NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 }
 
-func NewAccessStore(clientIDPath, clientSecretPath string) (*Store, error) {
+func NewAccessStore(clientIDPath, clientSecretPath, cairnCredentialPath string) (*Store, error) {
+	if cairnCredentialPath == "" {
+		return nil, &CredentialError{msg: "Cairn credential path is required"}
+	}
 	return newStore(config.RelayConfig{
-		CFClientIDPath:     clientIDPath,
-		CFClientSecretPath: clientSecretPath,
+		CFClientIDPath:      clientIDPath,
+		CFClientSecretPath:  clientSecretPath,
+		CairnCredentialPath: cairnCredentialPath,
 	})
 }
 
-func NewRelayStore(clientIDPath, clientSecretPath, localTokenPath string) (*Store, error) {
+func NewRelayStore(clientIDPath, clientSecretPath, cairnCredentialPath, localTokenPath string) (*Store, error) {
 	if localTokenPath == "" {
 		return nil, &CredentialError{msg: "local token path is required"}
 	}
+	if cairnCredentialPath == "" {
+		return nil, &CredentialError{msg: "Cairn credential path is required"}
+	}
 	return newStore(config.RelayConfig{
-		CFClientIDPath:     clientIDPath,
-		CFClientSecretPath: clientSecretPath,
-		LocalTokenPath:     localTokenPath,
+		CFClientIDPath:      clientIDPath,
+		CFClientSecretPath:  clientSecretPath,
+		CairnCredentialPath: cairnCredentialPath,
+		LocalTokenPath:      localTokenPath,
 	})
 }
 
@@ -91,6 +101,7 @@ func (store *CredentialStore) AccessSnapshot() AccessCredentials {
 	return AccessCredentials{
 		ClientID:     store.snapshot.CFClientID,
 		ClientSecret: store.snapshot.CFClientSecret,
+		CairnToken:   bytes.Clone(store.snapshot.CairnToken),
 	}
 }
 
@@ -113,6 +124,7 @@ func cloneSnapshot(snapshot CredentialSnapshot) CredentialSnapshot {
 		LocalToken:     cloned,
 		CFClientID:     snapshot.CFClientID,
 		CFClientSecret: snapshot.CFClientSecret,
+		CairnToken:     bytes.Clone(snapshot.CairnToken),
 	}
 }
 
@@ -137,6 +149,10 @@ func loadSnapshot(cfg config.RelayConfig, expectedUID int) (CredentialSnapshot, 
 	if err != nil {
 		return CredentialSnapshot{}, err
 	}
+	cairnToken, err := ReadSecretFile(cfg.CairnCredentialPath, "Cairn credential", expectedUID, MaxSecretBytes)
+	if err != nil {
+		return CredentialSnapshot{}, err
+	}
 	if !utf8.ValidString(string(clientID)) {
 		return CredentialSnapshot{}, &CredentialError{msg: "Cloudflare credential must be UTF-8"}
 	}
@@ -147,6 +163,7 @@ func loadSnapshot(cfg config.RelayConfig, expectedUID int) (CredentialSnapshot, 
 		LocalToken:     localToken,
 		CFClientID:     string(clientID),
 		CFClientSecret: string(clientSecret),
+		CairnToken:     cairnToken,
 	}, nil
 }
 

@@ -1814,7 +1814,7 @@ def test_garden_receipt_probes_every_node_and_constrains_combined_probe(
                 "name": "garden-cache-probe",
                 "image": GARDEN_IMAGE,
                 "imagePullPolicy": "Never",
-                "command": ["/usr/local/bin/a2a", "--version"],
+                "command": ["/usr/local/bin/garden", "--version"],
                 "securityContext": {
                     "allowPrivilegeEscalation": False,
                     "readOnlyRootFilesystem": True,
@@ -1975,7 +1975,7 @@ def test_garden_initial_prepare_does_not_start_before_enrolment(
         pod["spec"]["containers"][1]["image"] == ctx.state["garden"]["options"]["image"]
     )
     assert pod["spec"]["containers"][1]["command"] == [
-        "/usr/local/bin/a2a",
+        "/usr/local/bin/garden",
         "host",
         "--help",
     ]
@@ -1995,7 +1995,7 @@ def test_garden_attachment_binds_tls_loopback_auth_and_owned_storage(
     garden = pod["containers"][1]
     assert garden["ports"][0]["containerPort"] == 9443
     assert garden["command"] == [
-        "/usr/local/bin/a2a",
+        "/usr/local/bin/garden",
         "host",
         "--config",
         "/etc/garden/host.json",

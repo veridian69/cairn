@@ -106,7 +106,7 @@ def sidecar_template(
             "image": options["image"],
             "imagePullPolicy": image_policy,
             "command": [
-                "/usr/local/bin/a2a",
+                "/usr/local/bin/garden",
                 "host",
                 "--config",
                 "/etc/garden/host.json",

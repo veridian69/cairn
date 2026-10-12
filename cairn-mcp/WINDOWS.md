@@ -19,7 +19,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup-windows.ps1
 ```
 
 The setup script installs the binary, prompts without echo for missing
-Cloudflare Access credentials and restricts the credential and installation
+Cloudflare Access credentials and the Cairn credential and restricts the credential and installation
 paths. Existing credential values are preserved and validated locally. The
 test/setup validation uses a disposable loopback upstream and sends no MCP
 request to a live Cairn service.
@@ -29,14 +29,18 @@ The credential files are:
 ```text
 %USERPROFILE%\.config\cairn\cf-access-client-id
 %USERPROFILE%\.config\cairn\cf-access-client-secret
+%USERPROFILE%\.config\cairn\cairn-credential
 ```
 
+The Cairn credential is the bearer credential issued for this host's workload
+principal. Custom credential paths must also be passed to the relay with
+`--cf-client-id-path`, `--cf-client-secret-path` and `--cairn-credential-path`.
 No credentials are included. Use values and an exact proxy-facing MCP URL from
 the operator of your Cairn deployment. The reserved example below does not
 resolve:
 
 ```powershell
-codex mcp add cairn -- "$env:LOCALAPPDATA\Programs\Cairn\cairn-mcp.exe" stdio --upstream-url https://cairn.example.invalid/mcp
+codex mcp add cairn -- "$env:LOCALAPPDATA\Programs\Cairn\cairn-mcp.exe" stdio --upstream-url https://cairn.example.invalid/memory/v1/mcp
 ```
 
 If the `cairn` entry already exists, update `%USERPROFILE%\.codex\config.toml`
@@ -45,7 +49,7 @@ and substitute your actual Windows profile path and trusted upstream:
 ```toml
 [mcp_servers.cairn]
 command = 'C:\Users\YOUR_USERNAME\AppData\Local\Programs\Cairn\cairn-mcp.exe'
-args = ['stdio', '--upstream-url', 'https://cairn.example.invalid/mcp']
+args = ['stdio', '--upstream-url', 'https://cairn.example.invalid/memory/v1/mcp']
 ```
 
 Restart Codex, then inspect `/mcp`. STDIO does not need a local relay token.
@@ -68,7 +72,7 @@ pointing at the same installed binary and trusted upstream:
         "C:\\Users\\YOUR_USERNAME\\AppData\\Local\\Programs\\Cairn\\cairn-mcp.exe",
         "stdio",
         "--upstream-url",
-        "https://cairn.example.invalid/mcp"
+        "https://cairn.example.invalid/memory/v1/mcp"
       ],
       "enabled": true
     }

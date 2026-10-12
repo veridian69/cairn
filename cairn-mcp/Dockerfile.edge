@@ -1,0 +1,26 @@
+# Build with cairn-mcp/ as the context. Only the edge binary ships; the
+# client relay is installed from source on each host, never from an image.
+ARG GO_IMAGE=golang:1.26.8-bookworm@sha256:dc9ad6c05acc7a88e5b71bde60a5fe3bd4b9f0db209011711b464107438a8107
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+FROM ${GO_IMAGE} AS builder
+ARG VERSION
+RUN test -n "${VERSION}" || { echo 'build argument VERSION is required' >&2; exit 1; }
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cairn-edge ./cmd/cairn-edge
+
+FROM ${RUNTIME_IMAGE}
+ARG VERSION
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="Cairn edge mapper" \
+      org.opencontainers.image.source="https://github.com/veridian69/cairn" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
+COPY --from=builder /out/cairn-edge /usr/local/bin/cairn-edge
+USER 65532:65532
+EXPOSE 8790
+ENTRYPOINT ["/usr/local/bin/cairn-edge"]
+CMD ["serve", "--config", "/etc/cairn-edge/edge.json", "--bind-host", "0.0.0.0", "--port", "8790"]

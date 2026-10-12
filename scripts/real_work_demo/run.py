@@ -61,7 +61,7 @@ import tempfile  # noqa: E402
 import threading  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-A2A = ROOT / "a2a" / "a2a"
+GARDEN_BIN = ROOT / "garden" / "garden"
 # Not /tmp: Codex refuses to create its helper binaries (sandbox, apply_patch)
 # under a temporary directory, which would leave agents without apply_patch.
 RUNTIME_PARENT = Path.home() / ".cache" / "cairn-real-work-demo"
@@ -154,7 +154,7 @@ def _garden(
     }))  # fmt: skip
     log = (out / "garden-host.log").open("xb")
     env = {"HOME": str(runtime), "PATH": "/usr/bin:/bin"}
-    host = subprocess.Popen([str(A2A), "host", "--config", str(config)], stdout=log,
+    host = subprocess.Popen([str(GARDEN_BIN), "host", "--config", str(config)], stdout=log,
                             stderr=subprocess.STDOUT, env=env)  # fmt: skip
     log.close()  # the child holds its own descriptor
     profiles: dict[str, Path] = {}
@@ -167,7 +167,7 @@ def _garden(
             "classification": "internal", "participant": name, "adapter": "stdio",
         }))  # fmt: skip
     deadline = time.monotonic() + 20
-    while subprocess.run([str(A2A), "doctor", "--profile", str(profiles["spike"])],
+    while subprocess.run([str(GARDEN_BIN), "doctor", "--profile", str(profiles["spike"])],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env).returncode:  # fmt: skip
         if host.poll() is not None or time.monotonic() > deadline:
             raise RuntimeError("Garden did not start")
@@ -285,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                     mcp,
                     json.dumps(
                         agents.claude_mcp(
-                            turn, endpoint, actor.token, garden_profile, A2A
+                            turn, endpoint, actor.token, garden_profile, GARDEN_BIN
                         )
                     ),
                 )
@@ -302,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
                 config = base / ".codex"
                 config.mkdir(mode=0o700)
                 toml = agents.codex_toml(
-                    turn, endpoint, garden_profile, A2A, writable=writable
+                    turn, endpoint, garden_profile, GARDEN_BIN, writable=writable
                 )
                 _private(config / "config.toml", toml)
                 shutil.copyfile(

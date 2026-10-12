@@ -157,10 +157,11 @@ func TestStdioDoesNotRequireLocalToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer server.Close()
 	opts := stdioOptions{
-		endpoint:         server.URL,
-		clientIDPath:     writeMode0600(t, "client-id", "id"),
-		clientSecretPath: writeMode0600(t, "client-secret", "secret"),
-		httpClient:       server.Client(),
+		endpoint:            server.URL,
+		clientIDPath:        writeMode0600(t, "client-id", "id"),
+		clientSecretPath:    writeMode0600(t, "client-secret", "secret"),
+		cairnCredentialPath: writeMode0600(t, "cairn-credential", "cairn1.test.token"),
+		httpClient:          server.Client(),
 	}
 	stdin, stdinWriter := io.Pipe()
 	stdinWriter.Close()
@@ -196,6 +197,7 @@ func TestCheckSuccessUsesStdout(t *testing.T) {
 		"check",
 		"--cf-client-id-path", writeMode0600(t, "client-id", "test-client-id"),
 		"--cf-client-secret-path", writeMode0600(t, "client-secret", "test-client-secret"),
+		"--cairn-credential-path", writeMode0600(t, "cairn-credential", "cairn1.test.token"),
 		"--local-token-path", writeMode0600(t, "local-token", "test-local-token"),
 	}, io.NopCloser(strings.NewReader("")), &stdout, &stderr)
 	if code != 0 || stdout.String() != "configuration valid\n" || stderr.Len() != 0 {

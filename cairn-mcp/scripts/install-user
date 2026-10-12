@@ -60,6 +60,7 @@ fi
 validate_secret_file "$token_path" "local relay token" required
 validate_secret_file "$config_dir/cf-access-client-id" "Cloudflare client ID" required
 validate_secret_file "$config_dir/cf-access-client-secret" "Cloudflare client secret" required
+validate_secret_file "$config_dir/cairn-credential" "Cairn credential" required
 
 (cd "$source_dir" && go build -o "$binary_path" ./cmd/cairn-mcp)
 "$binary_path" check

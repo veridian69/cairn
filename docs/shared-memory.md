@@ -107,7 +107,7 @@ lose nothing.
   `source_evidence_id`, the Cairn-held evidence record of the origin assertion,
   disclosed only when that origin is disclosable.
 - `next_cursor` is null when no cursor can be issued. `facts_remaining` says
-  whether another presently disclosable fact exists. If a snapshot expired or was
+  whether another presently disclosable snapshot fact exists. If a snapshot expired or was
   evicted before the next cursor could be issued, the page is still returned with
   `facts_remaining: true` and `next_cursor: null`; it never claims completion, so
   start a fresh query. Preserve `context_incomplete` and `selection_complete`

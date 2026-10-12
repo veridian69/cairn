@@ -44,7 +44,7 @@ func Authorised(headers http.Header, token []byte) bool {
 	return credentials.TokenMatches(token, []byte(value[7:]))
 }
 
-func UpstreamHeaders(raw http.Header, snapshot credentials.CredentialSnapshot) http.Header {
+func filterRequest(raw http.Header) http.Header {
 	filtered := make(http.Header)
 	for name, values := range raw {
 		lower := strings.ToLower(name)
@@ -56,8 +56,25 @@ func UpstreamHeaders(raw http.Header, snapshot credentials.CredentialSnapshot) h
 			filtered.Add(canonical, value)
 		}
 	}
+	return filtered
+}
+
+// UpstreamHeaders is the relay's outbound set: allowlisted client headers,
+// then the Cloudflare pair and the Cairn bearer, set last so a client can
+// neither spoof nor strip them.
+func UpstreamHeaders(raw http.Header, snapshot credentials.CredentialSnapshot) http.Header {
+	filtered := filterRequest(raw)
 	filtered.Set("CF-Access-Client-Id", snapshot.CFClientID)
 	filtered.Set("CF-Access-Client-Secret", snapshot.CFClientSecret)
+	filtered.Set("Authorization", "Bearer "+string(snapshot.CairnToken))
+	return filtered
+}
+
+// BearerHeaders is the edge's outbound set: allowlisted client headers and
+// one Cairn bearer. No Cloudflare header survives, by allowlist.
+func BearerHeaders(raw http.Header, token []byte) http.Header {
+	filtered := filterRequest(raw)
+	filtered.Set("Authorization", "Bearer "+string(token))
 	return filtered
 }
 

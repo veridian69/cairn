@@ -48,10 +48,8 @@ def test_supports_pages_treats_missing_or_non_string_version_as_unsupported() ->
 
 @pytest.mark.anyio
 async def test_adapter_recall_defaults_to_relevant_recall_page(
-    tmp_path: Path, memory_support: ModuleType, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, memory_support: ModuleType
 ) -> None:
-    # The in-repo server still reports 0.7.12 (no version bump in this work).
-    monkeypatch.setattr(conversation, "supports_pages", lambda diagnostic: True)
     instance = memory_support.Instance(tmp_path)
     principal, token = instance.add_actor()
     async with memory_support.serve(instance) as http:

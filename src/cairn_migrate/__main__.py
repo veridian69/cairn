@@ -49,6 +49,12 @@ from cairn_migrate.mapping import (
     write_plan,
     write_subset_plan,
 )
+from cairn_migrate.overlay import (
+    OVERLAY_ERROR_CODES,
+    OVERLAY_PLAN_PROFILE,
+    OverlayError,
+    write_overlay_plan,
+)
 from cairn_migrate.report import write_report
 from cairn_migrate.snapshot import GraphQuery, SnapshotError, falkordb_query
 from cairn_migrate.verify import (
@@ -76,8 +82,14 @@ Restore procedure (P-72), run before this command:
       -C /tmp/cairn-restore
   docker run --rm --detach --name cairn-legacy-restore \\
       --publish 127.0.0.1:6399:6379 \\
-      --volume /tmp/cairn-restore:/data \\
+      --volume /tmp/cairn-restore:/var/lib/falkordb/data \\
       <restore-image>@<restore-image-digest>
+  docker exec cairn-legacy-restore redis-cli GRAPH.LIST
+
+With its default configuration, the FalkorDB image reads its data from
+/var/lib/falkordb/data; a dump mounted anywhere else starts an empty
+server. Require the expected graph
+name in GRAPH.LIST before exporting.
 
 Take the image and its digest from the frozen legacy
 docker-compose.yml and pass both here: they identify what read the
@@ -134,6 +146,24 @@ The subset is deterministic by construction:
 """
 
 
+_OVERLAY_EPILOGUE = """\
+overlay is pure and offline: it applies a curation rulings file to a full
+plan and materialises the curated plan. Every input is pinned by SHA-256.
+
+- base plan operations are carried byte-verbatim;
+- source graph episodes the covered plan also holds are dropped and counted
+  (the base represents them); newer graph episodes are accepted unruled;
+- ruled Attic turns become curated facts that keep the turn's store, legacy
+  id and idempotency key; unruled Attic turns and conversations are
+  rejected and counted.
+
+Over the freeze plan, pass the staged plan as --prior-plan: every identity
+it carries is emitted from it byte for byte, so apply resumes those records
+from the staging receipts, and a fresh rebuild that differs is counted as
+prior_drifted rather than carried.
+"""
+
+
 _VERIFY_EPILOGUE = """\
 verify samples retrieval, replays the same idempotency keys, and reads the
 root audit chain. The named credential therefore needs both the data grant
@@ -171,6 +201,7 @@ CLI_ERROR_CODES = (
     )
     | APPLY_ERROR_CODES
     | MAPPING_ERROR_CODES
+    | OVERLAY_ERROR_CODES
     | VERIFY_ERROR_CODES
 )
 
@@ -229,6 +260,23 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help=("SHA-256 of the full source plan's ``manifest.json``"),
     )
+    overlay = commands.add_parser(
+        "overlay",
+        allow_abbrev=False,
+        description="Apply curation rulings to a full plan as a curated plan.",
+        epilog=_OVERLAY_EPILOGUE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    for name in ("source-plan", "base-plan", "covered-plan"):
+        overlay.add_argument(f"--{name}", type=Path, required=True)
+        overlay.add_argument(
+            f"--expected-{name.removesuffix('-plan')}-manifest-sha256", required=True
+        )
+    overlay.add_argument("--rulings", type=Path, required=True)
+    overlay.add_argument("--expected-rulings-sha256", required=True)
+    overlay.add_argument("--prior-plan", type=Path)
+    overlay.add_argument("--expected-prior-manifest-sha256")
+    overlay.add_argument("--output", type=Path, required=True)
     apply = commands.add_parser(
         "apply",
         allow_abbrev=False,
@@ -273,6 +321,8 @@ def main(
         return _map(arguments)
     if arguments.command == "subset":
         return _subset(arguments)
+    if arguments.command == "overlay":
+        return _overlay(arguments)
     if arguments.command == "apply":
         return _apply(arguments, client_factory)
     if arguments.command == "verify":
@@ -545,6 +595,46 @@ def _subset(arguments: argparse.Namespace) -> int:
                     "additional_turns": SUBSET_PLAN_REQUIRED_ADDITIONAL_TURN_COUNT,
                 },
                 "ranking_algorithm": SUBSET_PLAN_RANKING_ALGORITHM,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _overlay(arguments: argparse.Namespace) -> int:
+    if (arguments.prior_plan is None) != (
+        arguments.expected_prior_manifest_sha256 is None
+    ):
+        return _refuse("arguments_invalid")
+    try:
+        summary = write_overlay_plan(
+            source_plan=arguments.source_plan.resolve(),
+            expected_source_manifest_sha256=arguments.expected_source_manifest_sha256,
+            base_plan=arguments.base_plan.resolve(),
+            expected_base_manifest_sha256=arguments.expected_base_manifest_sha256,
+            covered_plan=arguments.covered_plan.resolve(),
+            expected_covered_manifest_sha256=(
+                arguments.expected_covered_manifest_sha256
+            ),
+            rulings_path=arguments.rulings.resolve(),
+            expected_rulings_sha256=arguments.expected_rulings_sha256,
+            output_path=arguments.output.resolve(),
+            checkout_root=_CHECKOUT_ROOT,
+            prior_plan=(
+                None if arguments.prior_plan is None else arguments.prior_plan.resolve()
+            ),
+            expected_prior_manifest_sha256=arguments.expected_prior_manifest_sha256,
+        )
+    except (MappingError, OverlayError) as error:
+        return _refuse(error.code, detail=error.detail)
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "plan": str(summary.plan),
+                "profile": OVERLAY_PLAN_PROFILE,
+                "counts": dict(summary.counts),
             },
             sort_keys=True,
         )

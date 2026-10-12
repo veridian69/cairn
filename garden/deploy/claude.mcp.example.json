@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "garden": {
+      "command": "/usr/local/bin/garden",
+      "args": ["connect", "--profile", "/home/agent/.config/garden/claude.json"]
+    }
+  }
+}

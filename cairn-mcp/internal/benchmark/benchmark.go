@@ -52,18 +52,20 @@ const (
 	controlledClientID     = "benchmark-client-id"
 	controlledClientSecret = "benchmark-client-secret"
 	controlledLocalToken   = "benchmark-local-token"
+	controlledCairnToken   = "benchmark-cairn-token"
 )
 
 type Options struct {
-	Mode               string
-	Samples            int
-	ConfirmLive        bool
-	RelayURL           string
-	UpstreamURL        string
-	LocalTokenPath     string
-	CFClientIDPath     string
-	CFClientSecretPath string
-	BinaryPath         string
+	Mode                string
+	Samples             int
+	ConfirmLive         bool
+	RelayURL            string
+	UpstreamURL         string
+	LocalTokenPath      string
+	CFClientIDPath      string
+	CFClientSecretPath  string
+	CairnCredentialPath string
+	BinaryPath          string
 }
 
 type Environment struct {
@@ -112,6 +114,7 @@ func PrintUsage(writer io.Writer) {
 	fmt.Fprintln(writer, "  --local-token-path path")
 	fmt.Fprintln(writer, "  --cf-client-id-path path")
 	fmt.Fprintln(writer, "  --cf-client-secret-path path")
+	fmt.Fprintln(writer, "  --cairn-credential-path path")
 	fmt.Fprintln(writer, "  --binary path (live mode; defaults to the running executable)")
 }
 
@@ -131,6 +134,7 @@ func ParseOptions(argv []string) (Options, error) {
 	parser.StringVar(&options.LocalTokenPath, "local-token-path", filepath.Join(configDir, config.RelayTokenFileName), "Local bearer token path")
 	parser.StringVar(&options.CFClientIDPath, "cf-client-id-path", filepath.Join(configDir, config.CFClientIDFileName), "Cloudflare client ID path")
 	parser.StringVar(&options.CFClientSecretPath, "cf-client-secret-path", filepath.Join(configDir, config.CFClientSecretFileName), "Cloudflare client secret path")
+	parser.StringVar(&options.CairnCredentialPath, "cairn-credential-path", filepath.Join(configDir, config.CairnCredentialFileName), "Cairn bearer credential path")
 	parser.StringVar(&options.BinaryPath, "binary", "", "cairn-mcp binary for cold starts (live mode; defaults to the running executable)")
 	if err := parser.Parse(argv); err != nil {
 		return Options{}, fmt.Errorf("cannot parse benchmark flags")
@@ -176,7 +180,7 @@ func validateLiveOptions(options Options) error {
 	if err := config.ValidateUpstream(options.UpstreamURL, false); err != nil {
 		return fmt.Errorf("live upstream URL must be absolute HTTPS")
 	}
-	for _, path := range []string{options.LocalTokenPath, options.CFClientIDPath, options.CFClientSecretPath, options.BinaryPath} {
+	for _, path := range []string{options.LocalTokenPath, options.CFClientIDPath, options.CFClientSecretPath, options.CairnCredentialPath, options.BinaryPath} {
 		if !filepath.IsAbs(path) {
 			return fmt.Errorf("live benchmark paths must be absolute")
 		}
@@ -245,6 +249,7 @@ func coldStartAttempt(ctx context.Context, options Options, token []byte, newCom
 		"--local-token-path", options.LocalTokenPath,
 		"--cf-client-id-path", options.CFClientIDPath,
 		"--cf-client-secret-path", options.CFClientSecretPath,
+		"--cairn-credential-path", options.CairnCredentialPath,
 	}
 	command := newCommand(ctx, options.BinaryPath, arguments...)
 	start := time.Now()
@@ -405,6 +410,10 @@ func runControlled(ctx context.Context, samples int) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	cairnCredentialPath, err := writeSecret(tempDir, "cairn-credential", controlledCairnToken)
+	if err != nil {
+		return Report{}, err
+	}
 	localTokenPath, err := writeSecret(tempDir, "local-token", controlledLocalToken)
 	if err != nil {
 		return Report{}, err
@@ -426,13 +435,14 @@ func runControlled(ctx context.Context, samples int) (Report, error) {
 		LocalTokenPath:       localTokenPath,
 		CFClientIDPath:       clientIDPath,
 		CFClientSecretPath:   clientSecretPath,
+		CairnCredentialPath:  cairnCredentialPath,
 		ConnectTimeout:       2 * time.Second,
 		HeaderReadTimeout:    2 * time.Second,
 		ReadTimeout:          2 * time.Second,
 		PoolTimeout:          2 * time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(clientIDPath, clientSecretPath, localTokenPath)
+	store, err := credentials.NewRelayStore(clientIDPath, clientSecretPath, cairnCredentialPath, localTokenPath)
 	if err != nil {
 		return Report{}, fmt.Errorf("load benchmark credentials")
 	}
