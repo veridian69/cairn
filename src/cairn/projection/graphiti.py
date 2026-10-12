@@ -132,7 +132,12 @@ _PROVIDER_KEEPALIVE_EXPIRY: float | None = None
 _PROVIDER_MAX_CONNECTIONS = 1000
 _PROVIDER_MAX_KEEPALIVE_CONNECTIONS = 100
 _PROVIDER_MEDIUM_MODEL = "gpt-5.4-nano"
-_PROVIDER_SMALL_MODEL = "gpt-4.1-nano"
+# gpt-4.1-nano shuts down 23 October 2026; OpenAI names gpt-5.6-luna as its
+# replacement. The reranker inherits it but cannot drive it: a live probe
+# (10 October 2026) rejected max_tokens and temperature=0. No Cairn path
+# selects a cross-encoder config (_SEARCH_CONFIG reranks by RRF), so it is
+# never called.
+_PROVIDER_SMALL_MODEL = "gpt-5.6-luna"
 
 
 def _openai_provider_clients() -> tuple[

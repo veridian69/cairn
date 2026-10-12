@@ -151,6 +151,9 @@ func TestRelayAppForwardsRequestAndInjectsHeaders(t *testing.T) {
 	if got := http.Header(captured.headers).Get("CF-Access-Client-Secret"); got != "client-secret" {
 		t.Fatalf("CF secret header %q", got)
 	}
+	if got := http.Header(captured.headers).Values("Authorization"); len(got) != 1 || got[0] != "Bearer cairn1.test.token" {
+		t.Fatalf("upstream Authorization = %v", got)
+	}
 	if _, ok := captured.headers["X-Ignored"]; ok {
 		t.Fatalf("unexpected header X-Ignored forwarded upstream")
 	}
@@ -342,13 +345,14 @@ func TestRelayAppFlushesAndKeepsGETStreamBeyondReadTimeout(t *testing.T) {
 		LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 		CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ConnectTimeout:       time.Second,
 		ReadTimeout:          40 * time.Millisecond,
 		HeaderReadTimeout:    time.Second,
 		PoolTimeout:          time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,6 +427,7 @@ func assertWedgedClientIsDisconnected(t *testing.T, contentType string) {
 		LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 		CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ConnectTimeout:       time.Second,
 		ReadTimeout:          10 * time.Second,
 		HeaderReadTimeout:    time.Second,
@@ -430,7 +435,7 @@ func assertWedgedClientIsDisconnected(t *testing.T, contentType string) {
 		PoolTimeout:          time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,6 +491,7 @@ func TestRelayAppKeepsIdleSSEStreamBeyondWriteStallTimeout(t *testing.T) {
 		LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 		CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ConnectTimeout:       time.Second,
 		ReadTimeout:          10 * time.Second,
 		HeaderReadTimeout:    time.Second,
@@ -493,7 +499,7 @@ func TestRelayAppKeepsIdleSSEStreamBeyondWriteStallTimeout(t *testing.T) {
 		PoolTimeout:          time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,6 +552,7 @@ func TestRelayAppEndsGETStreamThatGoesSilent(t *testing.T) {
 		LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 		CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ConnectTimeout:       time.Second,
 		ReadTimeout:          10 * time.Second,
 		HeaderReadTimeout:    time.Second,
@@ -554,7 +561,7 @@ func TestRelayAppEndsGETStreamThatGoesSilent(t *testing.T) {
 		PoolTimeout:          time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,6 +628,7 @@ func TestRelayAppKeepsProducingGETStreamBeyondStreamIdleTimeout(t *testing.T) {
 		LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 		CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ConnectTimeout:       time.Second,
 		ReadTimeout:          10 * time.Second,
 		HeaderReadTimeout:    time.Second,
@@ -629,7 +637,7 @@ func TestRelayAppKeepsProducingGETStreamBeyondStreamIdleTimeout(t *testing.T) {
 		PoolTimeout:          time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -720,6 +728,7 @@ func TestRelayAppDeliversResponsesWrittenAfterASlowUpstream(t *testing.T) {
 				LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 				CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 				CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+				CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 				ConnectTimeout:       time.Second,
 				ReadTimeout:          400 * time.Millisecond,
 				HeaderReadTimeout:    time.Second,
@@ -727,7 +736,7 @@ func TestRelayAppDeliversResponsesWrittenAfterASlowUpstream(t *testing.T) {
 				PoolTimeout:          time.Second,
 				ShutdownGraceSeconds: time.Second,
 			}
-			store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+			store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -791,6 +800,7 @@ func TestRelayAppBoundsResponsesThatSkipTheBodyCopy(t *testing.T) {
 		LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 		CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ConnectTimeout:       time.Second,
 		ReadTimeout:          2 * time.Second,
 		HeaderReadTimeout:    time.Second,
@@ -798,7 +808,7 @@ func TestRelayAppBoundsResponsesThatSkipTheBodyCopy(t *testing.T) {
 		PoolTimeout:          time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,6 +873,7 @@ func TestRelayAppBoundsEmptyBodyResponses(t *testing.T) {
 				LocalTokenPath:       writeSecret(t, base, "token", "relay-token"),
 				CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 				CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+				CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 				ConnectTimeout:       time.Second,
 				ReadTimeout:          2 * time.Second,
 				HeaderReadTimeout:    time.Second,
@@ -870,7 +881,7 @@ func TestRelayAppBoundsEmptyBodyResponses(t *testing.T) {
 				PoolTimeout:          time.Second,
 				ShutdownGraceSeconds: time.Second,
 			}
-			store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+			store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -924,6 +935,7 @@ func TestRelayAppReloadsCredentials(t *testing.T) {
 		LocalTokenPath:       tokenPath,
 		CFClientIDPath:       writeSecret(t, base, "client-id", "client-id"),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", "client-secret"),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ReadTimeout:          2 * time.Second,
 		ConnectTimeout:       2 * time.Second,
 		HeaderReadTimeout:    2 * time.Second,
@@ -937,7 +949,7 @@ func TestRelayAppReloadsCredentials(t *testing.T) {
 	defer upstream.Close()
 	cfg.UpstreamURL = upstream.URL
 
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatalf("NewRelayStore() unexpected error: %v", err)
 	}
@@ -991,13 +1003,14 @@ func newRelayTestServerWithLogger(t *testing.T, upstream, token, clientID, clien
 		LocalTokenPath:       writeSecret(t, base, "token", token),
 		CFClientIDPath:       writeSecret(t, base, "client-id", clientID),
 		CFClientSecretPath:   writeSecret(t, base, "client-secret", clientSecret),
+		CairnCredentialPath:  writeSecret(t, base, "cairn-credential", "cairn1.test.token"),
 		ConnectTimeout:       2 * time.Second,
 		ReadTimeout:          2 * time.Second,
 		HeaderReadTimeout:    2 * time.Second,
 		PoolTimeout:          time.Second,
 		ShutdownGraceSeconds: time.Second,
 	}
-	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.LocalTokenPath)
+	store, err := credentials.NewRelayStore(cfg.CFClientIDPath, cfg.CFClientSecretPath, cfg.CairnCredentialPath, cfg.LocalTokenPath)
 	if err != nil {
 		t.Fatalf("NewRelayStore() unexpected error: %v", err)
 	}

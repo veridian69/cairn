@@ -16,13 +16,14 @@ import (
 // DefaultUpstreamURL is the canonical Cairn MCP endpoint. Every command and the
 // benchmark resolve their upstream default from here, so a retarget is a
 // one-line change rather than a hunt through duplicated constants.
-const DefaultUpstreamURL = "https://cairn.example.invalid/mcp"
+const DefaultUpstreamURL = "https://cairn.example.invalid/memory/v1/mcp"
 
 // Credential file names inside the configuration directory.
 const (
-	RelayTokenFileName     = "relay-token"
-	CFClientIDFileName     = "cf-access-client-id"
-	CFClientSecretFileName = "cf-access-client-secret"
+	RelayTokenFileName      = "relay-token"
+	CFClientIDFileName      = "cf-access-client-id"
+	CFClientSecretFileName  = "cf-access-client-secret"
+	CairnCredentialFileName = "cairn-credential"
 )
 
 // commands is the single authority on the commands ParseConfig accepts, in the
@@ -49,6 +50,7 @@ type RelayConfig struct {
 	LocalTokenPath       string
 	CFClientIDPath       string
 	CFClientSecretPath   string
+	CairnCredentialPath  string
 	ConnectTimeout       time.Duration
 	HeaderReadTimeout    time.Duration
 	WriteStallTimeout    time.Duration
@@ -81,6 +83,7 @@ func ParseConfig(argv []string) (string, RelayConfig, error) {
 		localTokenPath = ""
 		cfIDPath       string
 		cfSecretPath   string
+		cairnPath      string
 		connectTimeout float64
 		headerRead     float64
 		writeStall     float64
@@ -102,6 +105,7 @@ func ParseConfig(argv []string) (string, RelayConfig, error) {
 	parser.StringVar(&localTokenPath, "local-token-path", localTokenPath, "Local bearer token path")
 	parser.StringVar(&cfIDPath, "cf-client-id-path", filepath.Join(configDir, CFClientIDFileName), "Cloudflare client id path")
 	parser.StringVar(&cfSecretPath, "cf-client-secret-path", filepath.Join(configDir, CFClientSecretFileName), "Cloudflare client secret path")
+	parser.StringVar(&cairnPath, "cairn-credential-path", filepath.Join(configDir, CairnCredentialFileName), "Cairn bearer credential path")
 	parser.Float64Var(&connectTimeout, "connect-timeout", 5.0, "Upstream TCP connect timeout (seconds)")
 	parser.Float64Var(&headerRead, "header-read-timeout", 30.0, "Time allowed to read an inbound request's headers (seconds)")
 	parser.Float64Var(&writeStall, "write-stall-timeout", 30.0, "Maximum time a single write to the client may stall (seconds)")
@@ -161,6 +165,7 @@ func ParseConfig(argv []string) (string, RelayConfig, error) {
 		LocalTokenPath:       localTokenPath,
 		CFClientIDPath:       cfIDPath,
 		CFClientSecretPath:   cfSecretPath,
+		CairnCredentialPath:  cairnPath,
 		ConnectTimeout:       connect,
 		HeaderReadTimeout:    header,
 		WriteStallTimeout:    stall,

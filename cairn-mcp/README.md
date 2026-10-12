@@ -14,7 +14,7 @@ Use the exact proxy-facing MCP URL supplied by the operator of your Cairn
 deployment. Public examples deliberately use a non-resolving reserved name:
 
 ```text
---upstream-url https://cairn.example.invalid/mcp
+--upstream-url https://cairn.example.invalid/memory/v1/mcp
 ```
 
 Do not rely on the binary's compiled default. The URL must be absolute HTTP(S)
@@ -36,11 +36,13 @@ instead install the packaged build using [Windows setup](WINDOWS.md).
 
 ## Credential files
 
-The relay reads Cloudflare Access service credentials from:
+The relay reads Cloudflare Access service credentials and the Cairn bearer
+credential from:
 
 ```text
 $HOME/.config/cairn/cf-access-client-id
 $HOME/.config/cairn/cf-access-client-secret
+$HOME/.config/cairn/cairn-credential
 ```
 
 Each must be a non-empty regular file owned by the current user, mode `0600`,
@@ -52,6 +54,7 @@ or Git:
 install -d -m 0700 "$HOME/.config/cairn"
 install -m 0600 /path/to/client-id "$HOME/.config/cairn/cf-access-client-id"
 install -m 0600 /path/to/client-secret "$HOME/.config/cairn/cf-access-client-secret"
+install -m 0600 /path/to/cairn-credential "$HOME/.config/cairn/cairn-credential"
 ```
 
 ## STDIO mode
@@ -62,7 +65,7 @@ the relay with the intended upstream. For Codex:
 ```toml
 [mcp_servers.cairn]
 command = "/absolute/path/to/cairn-mcp"
-args = ["stdio", "--upstream-url", "https://cairn.example.invalid/mcp"]
+args = ["stdio", "--upstream-url", "https://cairn.example.invalid/memory/v1/mcp"]
 ```
 
 STDIO reads the Cloudflare files directly and exits when its standard input
@@ -81,7 +84,7 @@ For OpenCode, in `~/.config/opencode/opencode.json` or a project
         "/absolute/path/to/cairn-mcp",
         "stdio",
         "--upstream-url",
-        "https://cairn.example.invalid/mcp"
+        "https://cairn.example.invalid/memory/v1/mcp"
       ],
       "enabled": true
     }
@@ -106,7 +109,7 @@ Before starting it, create an override with the exact trusted upstream:
 ```ini
 [Service]
 ExecStart=
-ExecStart=%h/.local/share/bin/cairn-mcp serve --upstream-url https://cairn.example.invalid/mcp
+ExecStart=%h/.local/share/bin/cairn-mcp serve --upstream-url https://cairn.example.invalid/memory/v1/mcp
 ```
 
 ```sh
@@ -130,7 +133,7 @@ credential.
 ## Checks and operation
 
 ```sh
-"$HOME/.local/share/bin/cairn-mcp" check --upstream-url https://cairn.example.invalid/mcp
+"$HOME/.local/share/bin/cairn-mcp" check --upstream-url https://cairn.example.invalid/memory/v1/mcp
 curl --silent --show-error --fail http://127.0.0.1:8765/healthz
 systemctl --user restart cairn-mcp.service
 journalctl --user -u cairn-mcp.service --since "15 minutes ago" --no-pager

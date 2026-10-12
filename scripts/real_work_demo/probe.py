@@ -198,7 +198,7 @@ def check_codex_configs(binary: str, runtime: Path) -> dict[str, bool]:
     garden = runtime / "garden.json"
     configs = {
         t.prefix: agents.codex_toml(
-            t, "http://127.0.0.1:9", garden if t.garden else None, Path("/nonexistent/a2a"),
+            t, "http://127.0.0.1:9", garden if t.garden else None, Path("/nonexistent/garden"),
             writable=(runtime / "origin.git", runtime / "tmp"),
         )
         for t in agents.TURNS if t.provider == "codex"

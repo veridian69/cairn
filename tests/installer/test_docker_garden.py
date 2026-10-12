@@ -25,8 +25,8 @@ def garden_context(tmp_path: Path) -> FakeContext:
             "image": None,
         }
     }
-    (ctx.source / "a2a").mkdir()
-    (ctx.source / "a2a" / "Dockerfile").write_text("FROM scratch\n")
+    (ctx.source / "garden").mkdir()
+    (ctx.source / "garden" / "Dockerfile").write_text("FROM scratch\n")
     for name in ("server.crt", "server.key"):
         ctx.write_file(
             ctx.root / "garden" / "tls" / name,
@@ -86,7 +86,7 @@ def test_initial_prepare_builds_owned_garden_image_without_starting_profile(
     ]
     assert {command[-1] for command in builds} == {
         str(ctx.source),
-        str(ctx.source / "a2a"),
+        str(ctx.source / "garden"),
     }
     assert ctx.state["resources"]["docker"]["garden_image"]["id"] == "sha256:image"
     assert not any("--profile" in command for command, _, _ in ctx.commands)

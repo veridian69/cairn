@@ -309,7 +309,7 @@ if (Test-Path -LiteralPath $configDir) {
     Assert-ProtectedConfigAcl $configDir $true
 }
 
-foreach ($name in @('cf-access-client-id', 'cf-access-client-secret')) {
+foreach ($name in @('cf-access-client-id', 'cf-access-client-secret', 'cairn-credential')) {
     $path = Join-Path $configDir $name
     Assert-NotReparsePoint $path
     if (Test-Path -LiteralPath $path) {
@@ -361,7 +361,7 @@ if (Test-Path -LiteralPath $installedBinary -PathType Leaf) {
 # unreachable loopback upstream so this check cannot contact productive Cairn.
 $checkInfo = [Diagnostics.ProcessStartInfo]::new()
 $checkInfo.FileName = $binary
-$checkInfo.Arguments = 'stdio --allow-http-upstream --upstream-url http://127.0.0.1:1/mcp --cf-client-id-path "' + (Join-Path $configDir 'cf-access-client-id') + '" --cf-client-secret-path "' + (Join-Path $configDir 'cf-access-client-secret') + '"'
+$checkInfo.Arguments = 'stdio --allow-http-upstream --upstream-url http://127.0.0.1:1/mcp --cf-client-id-path "' + (Join-Path $configDir 'cf-access-client-id') + '" --cf-client-secret-path "' + (Join-Path $configDir 'cf-access-client-secret') + '" --cairn-credential-path "' + (Join-Path $configDir 'cairn-credential') + '"'
 $checkInfo.UseShellExecute = $false
 $checkInfo.RedirectStandardInput = $true
 $checkInfo.RedirectStandardOutput = $true
@@ -394,4 +394,4 @@ if (-not (Test-Path -LiteralPath $installedBinary -PathType Leaf)) {
 [IO.File]::SetAccessControl($installedBinary, (New-ProtectedInstallFileAcl))
 Assert-ProtectedInstallAcl $installedBinary $false
 Write-Host 'Installed. Set $cairnUpstreamUrl to the HTTPS MCP endpoint supplied by your operator, then register:'
-Write-Host ('codex mcp add cairn -- "' + $installedBinary + '" stdio --upstream-url "$cairnUpstreamUrl"')
+Write-Host ('codex mcp add cairn -- "' + $installedBinary + '" stdio --upstream-url "$cairnUpstreamUrl" --cf-client-id-path "' + (Join-Path $configDir 'cf-access-client-id') + '" --cf-client-secret-path "' + (Join-Path $configDir 'cf-access-client-secret') + '" --cairn-credential-path "' + (Join-Path $configDir 'cairn-credential') + '"')

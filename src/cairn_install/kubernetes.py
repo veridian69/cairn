@@ -700,7 +700,7 @@ class Backend:
                     "imagePullPolicy": (
                         "Never" if isinstance(self.garden_receipt, dict) else "Always"
                     ),
-                    "command": ["/usr/local/bin/a2a", "host", "--help"],
+                    "command": ["/usr/local/bin/garden", "host", "--help"],
                     "securityContext": {
                         "allowPrivilegeEscalation": False,
                         "readOnlyRootFilesystem": True,
@@ -763,7 +763,7 @@ class Backend:
                     == self.garden_receipt["image"]
                     and garden_containers[0].get("imagePullPolicy") == "Never"
                     and garden_containers[0].get("command")
-                    == ["/usr/local/bin/a2a", "host", "--help"]
+                    == ["/usr/local/bin/garden", "host", "--help"]
                 )
             if (
                 not garden_attested
@@ -981,7 +981,7 @@ class Backend:
                             "name": "garden-cache-probe",
                             "image": image,
                             "imagePullPolicy": "Never",
-                            "command": ["/usr/local/bin/a2a", "--version"],
+                            "command": ["/usr/local/bin/garden", "--version"],
                             "securityContext": {
                                 "allowPrivilegeEscalation": False,
                                 "readOnlyRootFilesystem": True,
@@ -1008,7 +1008,7 @@ class Backend:
                     or containers[0].get("image") != image
                     or containers[0].get("imagePullPolicy") != "Never"
                     or containers[0].get("command")
-                    != ["/usr/local/bin/a2a", "--version"]
+                    != ["/usr/local/bin/garden", "--version"]
                     or len(statuses) != 1
                     or statuses[0].get("name") != "garden-cache-probe"
                     or not str(statuses[0].get("imageID", "")).endswith(

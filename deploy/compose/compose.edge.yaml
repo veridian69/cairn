@@ -1,0 +1,30 @@
+# Edge mapper overlay: `-f compose.yaml -f compose.edge.yaml`. Serves the two
+# browser-connector paths. cloudflared on the host reaches it on loopback,
+# exactly as it reaches Cairn; nothing here publishes beyond this host.
+services:
+  cairn-edge:
+    image: ${CAIRN_EDGE_IMAGE:?read it from deploy/images.lock with --env-file}
+    # The config and credential files keep host ownership, and the edge
+    # refuses files it does not own, so the container runs as their owner.
+    user: "${CAIRN_EDGE_UID:?owner uid of the edge config and credentials}:${CAIRN_EDGE_GID:?owner gid of the edge config and credentials}"
+    ports:
+      - "127.0.0.1:${CAIRN_EDGE_HOST_PORT:?loopback port cloudflared forwards the browser paths to}:8790"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
+    volumes:
+      - type: bind
+        source: ${CAIRN_EDGE_CONFIG_FILE:?absolute path of edge.json}
+        target: /etc/cairn-edge/edge.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${CAIRN_EDGE_SECRETS_DIR:?directory holding one credential file per route}
+        target: /var/run/secrets/cairn-edge
+        read_only: true
+        bind: { create_host_path: false }
+    depends_on:
+      cairn:
+        condition: service_healthy
+    restart: unless-stopped

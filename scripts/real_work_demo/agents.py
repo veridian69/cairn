@@ -62,7 +62,11 @@ LOOP = ("t5-spike-correction", "t6-verifier-recheck")
 
 
 def claude_mcp(
-    turn: Turn, cairn: str, token: str, garden_profile: Path | None, a2a: Path = Path()
+    turn: Turn,
+    cairn: str,
+    token: str,
+    garden_profile: Path | None,
+    garden_bin: Path = Path(),
 ) -> dict[str, Any]:
     auth = {"Authorization": f"Bearer {token}"}
     servers: dict[str, dict[str, Any]] = {
@@ -73,7 +77,7 @@ def claude_mcp(
         assert garden_profile is not None
         servers["garden"] = {
             "type": "stdio",
-            "command": str(a2a),
+            "command": str(garden_bin),
             "args": ["connect", "--profile", str(garden_profile)],
         }
     return {"mcpServers": servers}
@@ -126,7 +130,7 @@ def codex_toml(
     turn: Turn,
     cairn: str,
     garden_profile: Path | None,
-    a2a: Path,
+    garden_bin: Path,
     writable: tuple[Path, ...] = (),
 ) -> str:
     q = json.dumps
@@ -160,7 +164,7 @@ def codex_toml(
         lines += [
             "",
             "[mcp_servers.garden]",
-            f"command = {q(str(a2a))}",
+            f"command = {q(str(garden_bin))}",
             f"args = {q(['connect', '--profile', str(garden_profile)])}",
             f"enabled_tools = {q(list(GARDEN_TOOLS))}",
         ]

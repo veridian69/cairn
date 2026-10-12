@@ -206,6 +206,7 @@ func (s *Session) applyAccessHeaders(header http.Header) {
 	access := s.access.AccessSnapshot()
 	header.Set("CF-Access-Client-Id", access.ClientID)
 	header.Set("CF-Access-Client-Secret", access.ClientSecret)
+	header.Set("Authorization", "Bearer "+string(access.CairnToken))
 }
 
 func (s *Session) applySessionHeaders(header http.Header) {

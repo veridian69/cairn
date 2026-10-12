@@ -6,42 +6,34 @@
 <h1 align="center">Cairn</h1>
 
 <p align="center">
-  <b>Not a vector store with a chat wrapper. A memory <i>authority</i> —<br>
-  the thing that decides what is on record, for whom, and how it got there.</b>
+  <b>Change agents. Keep the record.</b><br>
+  Self-hosted memory for people and AI agents.
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.7.13.md"><img alt="Release v0.7.13" src="https://img.shields.io/badge/release-v0.7.13-b68235"></a>
+  <a href="docs/releases/v0.7.14.md"><img alt="Release v0.7.14" src="https://img.shields.io/badge/release-v0.7.14-b68235"></a>
   <a href="LICENSE.md"><img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-555"></a>
-  <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-Linux%20%C2%B7%20Docker%20%C2%B7%20k8s-555">
-  <img alt="REST and MCP" src="https://img.shields.io/badge/API-REST%20%2B%20MCP-555">
 </p>
 
----
+**Continue the work.** Recall saved decisions, plans and observations across sessions and agents.  
+**Challenge the claim.** Every claim carries who said it; corrections keep the earlier record; a disagreement keeps both sides.  
+**Control access.** Scope, grants and classification are checked on every read and write.
 
-Switching agents or starting a fresh session shouldn't mean explaining the whole project again. Cairn is a shared place where people and agents save decisions, plans and observations — and get them back later, with attribution intact. It runs on your own machine or server and connects over REST or MCP.
-
-|  | |
-|---|---|
-| 🪨 **Attributable** | Every claim carries who said it. Remembering something does not make it true. |
-| ↩︎ **Correctable** | Corrections keep the earlier record, with the reason for the change. |
-| ⚖︎ **Contestable** | When two sources disagree, Cairn records both sides and declares no winner. |
-| 🔒 **Governed** | Scope, grants and classification are checked on every read and write. |
-| 🧾 **Receipted** | Writes return durable receipts, so you can check what was actually saved. |
-
-Agents must explicitly save context. Cairn does not silently capture your conversations.
+Semantic search is optional. Agents must explicitly save context; Cairn does not silently capture conversations.
 
 ## See it happen
 
-A real bug in the open-source deepdiff library. Val (Codex) hits a dead end. Spike (Claude) picks the work up from Cairn, finds Val's second attempt incomplete and disputes it. An independent verifier re-runs everything, settles the dispute and validates Spike's fix. A fresh Claude session then writes the pull request text from memory alone.
+![A deepdiff bug passes from Val (Codex) to Spike (Claude) through Cairn. Spike disputes an incomplete fix, an independent verifier validates Spike's fix, and a fresh Claude session uses Cairn to write the pull request text.](docs/assets/cairn-real-work-demo.gif)
 
-![Codex hits a dead end; Claude picks the work up from Cairn, finds the second attempt incomplete and disputes it; the verifier re-runs everything, settles the dispute and validates Claude's fix; a fresh Claude session writes the pull request text from memory alone](docs/assets/cairn-real-work-demo.gif)
+**A handover that includes the mistakes.** Val (Codex) records an incomplete fix for a real deepdiff bug. Spike (Claude) picks the work up through Cairn and disputes it. An independent verifier tests both fixes and validates Spike's. A fresh Claude session then uses Cairn to write the pull request text.
 
-**91 seconds** · [Read the full technical transcript](docs/cairn-real-work-demo/transcript.md) · [What happened, with evidence checks](docs/cairn-real-work-demo.md)
+**91-second edited demo** · [Full transcript](docs/cairn-real-work-demo/transcript.md) · [Evidence and checks](docs/cairn-real-work-demo.md)
 
-<sub>Real work, real tool calls, on a disposable instance. Headings and summaries are written for the edit; excerpts are verbatim and labelled; waiting time is shortened.</sub>
+<sub>Real tool calls on a disposable instance. Headings and summaries are written for the edit; excerpts are verbatim and labelled; waiting time is shortened.</sub>
 
 Minimal mechanism demos: [a correction with Garden and Attic](docs/cairn-attic-garden-correction-demo.md) · [a plan checked against its Attic source](docs/cairn-attic-garden-demo.md)
+
+**Try it:** [run the disposable quickstart](docs/quickstart.md) — one throwaway instance, no OpenAI API key.
 
 ## Install
 
@@ -123,7 +115,8 @@ Generated contracts define the wire surface: [memory OpenAPI](contracts/cairn-me
 
 - One serving process per SQLite data directory; requires reliable POSIX locking and `fsync`.
 - The listener is plain HTTP. Terminate TLS and rate-limit at a reverse proxy or ingress before it leaves numeric loopback.
-- Bearer credentials live in owner-only files. Neither REST nor MCP issues them.
+- Bearer credentials live in owner-only files. The memory API never issues or discovers them; `/v1` administration issues a credential to an admin and returns its plaintext once.
+- Browser connectors (claude.ai, ChatGPT) reach Cairn only through `cairn-edge` behind Cloudflare Access. The edge maps each inbound path to its own principal and holds that principal's credential, so nothing at the edge becomes a principal silently.
 - Recalled text is attributed, **untrusted** data. It must never become system or developer instructions.
 - Graph-backed semantic retrieval is optional.
 - Docker Compose and conformant Kubernetes are supported shapes. The OpenShift overlay is statically validated with no claimed target acceptance.
@@ -133,7 +126,7 @@ Generated contracts define the wire surface: [memory OpenAPI](contracts/cairn-me
 
 ## Further reading
 
-[Client guide](docs/clients.md) · [Shared-memory guide](docs/shared-memory.md) · [Python client](docs/shared-memory-client.md) · [Restart-safe sessions](docs/durable-sessions.md) · [Host workflows](docs/host-memory-workflows.md) · [Memory suggestions](docs/memory-suggestions.md) · [Semantic fact search](docs/operations/semantic-fact-search.md) · [v0.1 contract](docs/specs/cairn-v0.1-contract.md) · [Deployment](docs/operations/deployment.md) · [Backup and restore](docs/operations/backup-restore.md) · [Local MCP relay](cairn-mcp/README.md) · [A2A (Garden) agent chat](docs/a2a.md)
+[Client guide](docs/clients.md) · [Shared-memory guide](docs/shared-memory.md) · [Python client](docs/shared-memory-client.md) · [Restart-safe sessions](docs/durable-sessions.md) · [Host workflows](docs/host-memory-workflows.md) · [Memory suggestions](docs/memory-suggestions.md) · [Semantic fact search](docs/operations/semantic-fact-search.md) · [v0.1 contract](docs/specs/cairn-v0.1-contract.md) · [Deployment](docs/operations/deployment.md) · [Backup and restore](docs/operations/backup-restore.md) · [Local MCP relay](cairn-mcp/README.md) · [Edge for browser connectors](docs/operations/cairn-edge.md) · [Garden agent chat](docs/garden.md)
 
 ## Development
 
@@ -144,7 +137,7 @@ make check
 
 The locked gate covers formatting, linting, typing, tests, generated contracts, deployment renders and dependency audit. The hosted check runs on demand: **Actions → Check → Run workflow**, or `gh workflow run check.yml --ref BRANCH`. GitHub excludes the marked Bubblewrap/namespace tests and says so in the run summary — run `make check` locally for the complete suite.
 
-[Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md) · [v0.7.13 release notes](docs/releases/v0.7.13.md) · [macOS native installation](docs/operations/macos-native.md)
+[Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md) · [v0.7.14 release notes](docs/releases/v0.7.14.md) · [macOS native installation](docs/operations/macos-native.md)
 
 Apache-2.0 ([license](LICENSE.md) · [notices](NOTICE.md)). Cairn is the memory service behind [Drystane](https://github.com/veridian69/drystane), the control plane that prompted its design.
 

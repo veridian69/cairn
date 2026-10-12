@@ -45,6 +45,7 @@ func TestSessionTracksInitialiseMetadata(t *testing.T) {
 		accept          string
 		clientID        string
 		clientSecret    string
+		authorization   string
 		sessionID       string
 		protocolVersion string
 	}
@@ -60,6 +61,7 @@ func TestSessionTracksInitialiseMetadata(t *testing.T) {
 			accept:          r.Header.Get("Accept"),
 			clientID:        r.Header.Get("CF-Access-Client-Id"),
 			clientSecret:    r.Header.Get("CF-Access-Client-Secret"),
+			authorization:   r.Header.Get("Authorization"),
 			sessionID:       r.Header.Get("Mcp-Session-Id"),
 			protocolVersion: r.Header.Get("Mcp-Protocol-Version"),
 		}
@@ -73,7 +75,7 @@ func TestSessionTracksInitialiseMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	s, err := NewSession(server.URL, server.Client(), fixedAccess{credentials.AccessCredentials{ClientID: "id", ClientSecret: "secret"}})
+	s, err := NewSession(server.URL, server.Client(), fixedAccess{credentials.AccessCredentials{ClientID: "id", ClientSecret: "secret", CairnToken: []byte("cairn1.test.token")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +102,9 @@ func TestSessionTracksInitialiseMetadata(t *testing.T) {
 	if first.clientID != "id" || first.clientSecret != "secret" {
 		t.Fatalf("Cloudflare access headers = %#v", first)
 	}
+	if first.authorization != "Bearer cairn1.test.token" || second.authorization != "Bearer cairn1.test.token" {
+		t.Fatalf("Authorization = %q, %q", first.authorization, second.authorization)
+	}
 	if first.sessionID != "" || first.protocolVersion != "" {
 		t.Fatalf("initial MCP headers = %#v", first)
 	}
@@ -124,7 +129,7 @@ func TestSessionDoesNotFollowRedirects(t *testing.T) {
 	defer origin.Close()
 
 	client := origin.Client()
-	s, err := NewSession(origin.URL, client, fixedAccess{credentials.AccessCredentials{ClientID: "id", ClientSecret: "secret"}})
+	s, err := NewSession(origin.URL, client, fixedAccess{credentials.AccessCredentials{ClientID: "id", ClientSecret: "secret", CairnToken: []byte("cairn1.test.token")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +417,7 @@ func TestSessionCloseDeletesOnceAndAlwaysClosesEvents(t *testing.T) {
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("status_%d", test.status), func(t *testing.T) {
 			type deleteMetadata struct {
-				clientID, clientSecret, sessionID, protocolVersion string
+				clientID, clientSecret, authorization, sessionID, protocolVersion string
 			}
 			deletes := make(chan deleteMetadata, 2)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -420,6 +425,7 @@ func TestSessionCloseDeletesOnceAndAlwaysClosesEvents(t *testing.T) {
 					deletes <- deleteMetadata{
 						r.Header.Get("CF-Access-Client-Id"),
 						r.Header.Get("CF-Access-Client-Secret"),
+						r.Header.Get("Authorization"),
 						r.Header.Get("Mcp-Session-Id"),
 						r.Header.Get("Mcp-Protocol-Version"),
 					}
@@ -432,7 +438,7 @@ func TestSessionCloseDeletesOnceAndAlwaysClosesEvents(t *testing.T) {
 			}))
 			defer server.Close()
 
-			s, err := NewSession(server.URL, server.Client(), fixedAccess{credentials.AccessCredentials{ClientID: "id", ClientSecret: "secret"}})
+			s, err := NewSession(server.URL, server.Client(), fixedAccess{credentials.AccessCredentials{ClientID: "id", ClientSecret: "secret", CairnToken: []byte("cairn1.test.token")}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -450,7 +456,7 @@ func TestSessionCloseDeletesOnceAndAlwaysClosesEvents(t *testing.T) {
 				t.Fatalf("second Close() error = %v, first = %v", secondErr, firstErr)
 			}
 			got := <-deletes
-			if got != (deleteMetadata{"id", "secret", "session-close", "2026-07-28"}) {
+			if got != (deleteMetadata{"id", "secret", "Bearer cairn1.test.token", "session-close", "2026-07-28"}) {
 				t.Fatalf("DELETE metadata = %#v", got)
 			}
 			select {
@@ -490,15 +496,15 @@ func TestSessionPostSSEEmitsEveryDataEvent(t *testing.T) {
 
 func TestSessionLegacyListenerUsesCurrentMetadataOnceAndAccepts405(t *testing.T) {
 	type getMetadata struct {
-		accept, clientID, clientSecret, sessionID, protocolVersion string
+		accept, clientID, clientSecret, authorization, sessionID, protocolVersion string
 	}
 	gets := make(chan getMetadata, 2)
 	var getCalls atomic.Int32
-	source := &rotatingAccess{value: credentials.AccessCredentials{ClientID: "post-id", ClientSecret: "post-secret"}}
+	source := &rotatingAccess{value: credentials.AccessCredentials{ClientID: "post-id", ClientSecret: "post-secret", CairnToken: []byte("cairn1.post.token")}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
-			source.set(credentials.AccessCredentials{ClientID: "get-id", ClientSecret: "get-secret"})
+			source.set(credentials.AccessCredentials{ClientID: "get-id", ClientSecret: "get-secret", CairnToken: []byte("cairn1.test.token")})
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Mcp-Session-Id", "legacy-session")
 			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}`)
@@ -508,6 +514,7 @@ func TestSessionLegacyListenerUsesCurrentMetadataOnceAndAccepts405(t *testing.T)
 				r.Header.Get("Accept"),
 				r.Header.Get("CF-Access-Client-Id"),
 				r.Header.Get("CF-Access-Client-Secret"),
+				r.Header.Get("Authorization"),
 				r.Header.Get("Mcp-Session-Id"),
 				r.Header.Get("Mcp-Protocol-Version"),
 			}
@@ -535,7 +542,7 @@ func TestSessionLegacyListenerUsesCurrentMetadataOnceAndAccepts405(t *testing.T)
 
 	select {
 	case got := <-gets:
-		want := getMetadata{"text/event-stream", "get-id", "get-secret", "legacy-session", "2025-06-18"}
+		want := getMetadata{"text/event-stream", "get-id", "get-secret", "Bearer cairn1.test.token", "legacy-session", "2025-06-18"}
 		if got != want {
 			t.Fatalf("GET metadata = %#v, want %#v", got, want)
 		}
@@ -620,6 +627,7 @@ func TestSessionLegacyListenerEmitsSSEMessages(t *testing.T) {
 	s, err := NewSession(server.URL, server.Client(), fixedAccess{credentials.AccessCredentials{
 		ClientID:     "client-id",
 		ClientSecret: "client-secret",
+		CairnToken:   []byte("cairn1.test.token"),
 	}})
 	if err != nil {
 		t.Fatal(err)

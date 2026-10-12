@@ -86,6 +86,7 @@ function New-Fixture([string] $Name, [string] $IDValue) {
     New-Item -ItemType Directory -Path $config -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $config 'cf-access-client-id'), $IDValue)
     [IO.File]::WriteAllText((Join-Path $config 'cf-access-client-secret'), 'sentinel-secret')
+    [IO.File]::WriteAllText((Join-Path $config 'cairn-credential'), 'cairn1.fixture.token')
     Set-PrivateConfigAcl $config
     return @{ Config = $config; Bin = (Join-Path $root 'bin') }
 }
@@ -109,7 +110,7 @@ function Add-FileAllowRule([string] $Path, [string] $Sid, [System.Security.Acces
     [IO.File]::SetAccessControl($Path, $acl)
 }
 function Set-PrivateConfigAcl([string] $Path) {
-    foreach ($name in @('cf-access-client-id', 'cf-access-client-secret')) {
+    foreach ($name in @('cf-access-client-id', 'cf-access-client-secret', 'cairn-credential')) {
         $fileAcl = New-Object System.Security.AccessControl.FileSecurity
         $fileAcl.SetOwner([System.Security.Principal.SecurityIdentifier]::new($currentSid))
         $fileAcl.SetAccessRuleProtection($true, $false)
@@ -167,7 +168,7 @@ function New-Junction([string] $Path, [string] $Target) {
 try {
     $fresh = @{ Config = (Join-Path $fixture 'fresh-config'); Bin = (Join-Path $fixture 'fresh-bin') }
     Invoke-Setup $fresh
-    foreach ($name in @('cf-access-client-id', 'cf-access-client-secret')) {
+    foreach ($name in @('cf-access-client-id', 'cf-access-client-secret', 'cairn-credential')) {
         if ([IO.File]::ReadAllText((Join-Path $fresh.Config $name)) -ne 'sentinel-new-credential') {
             $failures.Add('first install did not preserve supplied sentinel')
         }
@@ -367,7 +368,7 @@ try {
     $binary = Join-Path $paths.Bin 'cairn-mcp.exe'
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $binary
-    $info.Arguments = 'stdio --allow-http-upstream --upstream-url http://127.0.0.1:1/mcp --cf-client-id-path "' + (Join-Path $paths.Config 'cf-access-client-id') + '" --cf-client-secret-path "' + (Join-Path $paths.Config 'cf-access-client-secret') + '"'
+    $info.Arguments = 'stdio --allow-http-upstream --upstream-url http://127.0.0.1:1/mcp --cf-client-id-path "' + (Join-Path $paths.Config 'cf-access-client-id') + '" --cf-client-secret-path "' + (Join-Path $paths.Config 'cf-access-client-secret') + '" --cairn-credential-path "' + (Join-Path $paths.Config 'cairn-credential') + '"'
     $info.UseShellExecute = $false
     $info.RedirectStandardInput = $true
     $info.RedirectStandardOutput = $true

@@ -171,8 +171,8 @@ class Backend:
                 raise InstallError(
                     "Docker Garden requires an owned source build; --garden-image is not supported"
                 )
-            if not (self.ctx.source / "a2a/Dockerfile").is_file():
-                raise InstallError("Source checkout has no Garden a2a/Dockerfile")
+            if not (self.ctx.source / "garden/Dockerfile").is_file():
+                raise InstallError("Source checkout has no Garden garden/Dockerfile")
 
     @property
     def _all_compose(self) -> list[str]:
@@ -424,7 +424,7 @@ class Backend:
     def _build_image(self, *, garden: bool = False) -> None:
         reference = self.garden_image if garden else self.image
         key = "garden_image" if garden else "image"
-        source = self.ctx.source / "a2a" if garden else self.ctx.source
+        source = self.ctx.source / "garden" if garden else self.ctx.source
         image_ids = self._ids(
             "image",
             ["--filter", f"reference={reference}"],

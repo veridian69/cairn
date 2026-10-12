@@ -2,9 +2,13 @@
 
 `cairn-mcp` is a local trust-boundary relay. HTTP mode binds only to
 `127.0.0.1:8765`, checks a local bearer token, injects a Cloudflare Access
-client ID and secret, and forwards MCP Streamable HTTP traffic to an HTTPS
+client ID and secret and the Cairn bearer credential, and forwards MCP Streamable HTTP traffic to an HTTPS
 upstream. STDIO mode starts one process per client and does not use the local
 bearer token.
+
+The tunnel routes `/memory/` straight to Cairn under a service-token Access
+policy, so relay upstreams use `/memory/v1/mcp`. `/mcp` and `/chatgpt/mcp` go
+to the browser-only edge, which rejects service tokens.
 
 See the [relay README](../../cairn-mcp/README.md) for build and command details
 and the [client guide](../clients.md#mcp-clients) for MCP semantics.
@@ -16,6 +20,7 @@ Create these files before installation:
 ```text
 $HOME/.config/cairn/cf-access-client-id
 $HOME/.config/cairn/cf-access-client-secret
+$HOME/.config/cairn/cairn-credential
 ```
 
 Each file must be non-empty, owned by the current user, mode `0600`, at most
@@ -25,12 +30,19 @@ variables, command arguments, unit files, logs and Git.
 ```sh
 client_id_source=/secure/path/client-id
 client_secret_source=/secure/path/client-secret
+cairn_credential_source=/secure/path/cairn-credential
 install -d -m 0700 "$HOME/.config/cairn"
 install -m 0600 "$client_id_source" \
   "$HOME/.config/cairn/cf-access-client-id"
 install -m 0600 "$client_secret_source" \
   "$HOME/.config/cairn/cf-access-client-secret"
+install -m 0600 "$cairn_credential_source" \
+  "$HOME/.config/cairn/cairn-credential"
 ```
+
+The Cairn credential is the plaintext from one `issue-credential` response
+for this host's workload principal. It is a Cairn credential, unlike the local
+relay token, and every memory operation from this host carries it.
 
 ## Install
 
@@ -57,12 +69,12 @@ variables, so use the absolute binary path returned by `realpath`.
 ```toml
 [mcp_servers.cairn]
 command = "/absolute/path/to/cairn-mcp"
-args = ["stdio", "--upstream-url", "https://cairn.example/mcp"]
+args = ["stdio", "--upstream-url", "https://cairn.example/memory/v1/mcp"]
 ```
 
-STDIO reads the Cloudflare files directly and exits when its client's stdin
-closes. Restart the client after replacing either credential so a new process
-loads the complete pair.
+STDIO reads the credential files directly and exits when its client's stdin
+closes. Restart the client after replacing any credential so a new process
+loads the complete set.
 
 OpenCode takes the same launch as a `local` command array in
 `~/.config/opencode/opencode.json` or a project `opencode.json`:
@@ -77,7 +89,7 @@ OpenCode takes the same launch as a `local` command array in
         "/absolute/path/to/cairn-mcp",
         "stdio",
         "--upstream-url",
-        "https://cairn.example/mcp"
+        "https://cairn.example/memory/v1/mcp"
       ],
       "enabled": true
     }
@@ -97,7 +109,7 @@ systemd user drop-in so it does not rely on a built-in default:
 ```ini
 [Service]
 ExecStart=
-ExecStart=%h/.local/share/bin/cairn-mcp serve --upstream-url https://cairn.example/mcp
+ExecStart=%h/.local/share/bin/cairn-mcp serve --upstream-url https://cairn.example/memory/v1/mcp
 ```
 
 Then reload the user manager and start the unit:
@@ -124,7 +136,7 @@ environment variable.
 
 ```sh
 "$HOME/.local/share/bin/cairn-mcp" check \
-  --upstream-url https://cairn.example/mcp
+  --upstream-url https://cairn.example/memory/v1/mcp
 systemctl --user status cairn-mcp.service --no-pager
 curl -fsS http://127.0.0.1:8765/healthz
 ```
@@ -134,7 +146,7 @@ followed by `get_status` is the end-to-end check.
 
 The HTTP service reloads all three credential files on `SIGHUP` as one
 validated snapshot. Stage replacement files in the same directory, set mode
-`0600`, rename both Cloudflare files into place, run `check` with the configured
+`0600`, rename each changed file into place, run `check` with the configured
 upstream URL, then reload:
 
 ```sh
@@ -162,7 +174,7 @@ journalctl --user -u cairn-mcp.service --since "15 minutes ago" --no-pager
 ss -ltn '( sport = :8765 )'
 curl -fsS http://127.0.0.1:8765/healthz
 "$HOME/.local/share/bin/cairn-mcp" check \
-  --upstream-url https://cairn.example/mcp
+  --upstream-url https://cairn.example/memory/v1/mcp
 ```
 
 | Symptom | Action |
@@ -172,7 +184,7 @@ curl -fsS http://127.0.0.1:8765/healthz
 | `/healthz` fails | Inspect the unit, restart loop and ownership of port 8765. |
 | `/healthz` succeeds but MCP fails | Check client-token freshness, Cloudflare Access and the upstream endpoint. |
 | HTTP 401 from loopback | Reload the shell token from its file and restart the client. |
-| STDIO exits with `stdio error` | Validate both Cloudflare files and upstream reachability. |
+| STDIO exits with `stdio error` | Validate the three credential files and upstream reachability. |
 
 Do not use `set -x`, dump process environments, run verbose requests with
 bearer headers, or paste logs containing request headers or bodies.

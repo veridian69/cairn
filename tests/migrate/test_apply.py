@@ -314,6 +314,113 @@ async def test_apply_resumes_after_the_last_durable_receipt(tmp_path: Path) -> N
     assert len(receipts.read_text(encoding="utf-8").splitlines()) == 2
 
 
+def _committing_transport(requested_keys: list[str]) -> MockTransport:
+    def respond(request: Request) -> Response:
+        requested_keys.append(request.headers["Idempotency-Key"])
+        serial = f"{len(requested_keys):08d}"
+        return Response(
+            200,
+            json={
+                "outcome": "committed",
+                "result": {
+                    "assertion_id": f"{serial}-1111-4111-8111-111111111111",
+                    "fact_ids": [f"{serial}-2222-4222-8222-222222222222"],
+                    "evidence_id": None,
+                },
+            },
+        )
+
+    return MockTransport(respond)
+
+
+@pytest.mark.anyio
+async def test_receipts_carry_over_to_a_different_plan_for_the_same_instance(
+    tmp_path: Path,
+) -> None:
+    """Cutover delta: a later plan resumes on the earlier plan's receipts.
+
+    Receipts bind to the instance and to each operation's identity and key,
+    not to the plan digest. A freeze plan with more operations therefore
+    applies only what the first plan did not.
+    """
+    one = _operation("legacy-one", "SYNTHETIC-DELTA-BODY-ONE")
+    two = _operation("legacy-two", "SYNTHETIC-DELTA-BODY-TWO")
+    three = _operation("legacy-three", "SYNTHETIC-DELTA-BODY-THREE")
+    first = _write_plan(tmp_path / "first", [one, two])
+    second = _write_plan(tmp_path / "second", [one, two, three])
+    first_manifest = json.loads((first / PLAN_MANIFEST_FILENAME).read_text())
+    second_manifest = json.loads((second / PLAN_MANIFEST_FILENAME).read_text())
+    assert first_manifest["files"][0]["sha256"] != second_manifest["files"][0]["sha256"]
+    receipts = tmp_path / "receipts.jsonl"
+    requested_keys: list[str] = []
+
+    async with AsyncClient(
+        transport=_committing_transport(requested_keys),
+        base_url="https://cairn.invalid",
+    ) as client:
+        first_summary = await apply_plan(
+            plan_path=first,
+            receipts_path=receipts,
+            expected_instance=INSTANCE_ID_TEXT,
+            client=client,
+            credential="synthetic-token",
+        )
+        requested_keys.clear()
+        second_summary = await apply_plan(
+            plan_path=second,
+            receipts_path=receipts,
+            expected_instance=INSTANCE_ID_TEXT,
+            client=client,
+            credential="synthetic-token",
+        )
+
+    assert (first_summary.applied, first_summary.resumed) == (2, 0)
+    assert (second_summary.planned, second_summary.applied, second_summary.resumed) == (
+        3,
+        1,
+        2,
+    )
+    assert requested_keys == [three["idempotency_key"]]
+    assert len(receipts.read_text(encoding="utf-8").splitlines()) == 3
+
+
+@pytest.mark.anyio
+async def test_a_different_key_for_a_receipted_identity_is_a_conflict(
+    tmp_path: Path,
+) -> None:
+    """The same operation, store and legacy id under another key must stop."""
+    one = _operation("legacy-one", "SYNTHETIC-DELTA-BODY-ONE")
+    first = _write_plan(tmp_path / "first", [one])
+    receipts = tmp_path / "receipts.jsonl"
+    requested_keys: list[str] = []
+    async with AsyncClient(
+        transport=_committing_transport(requested_keys),
+        base_url="https://cairn.invalid",
+    ) as client:
+        await apply_plan(
+            plan_path=first,
+            receipts_path=receipts,
+            expected_instance=INSTANCE_ID_TEXT,
+            client=client,
+            credential="synthetic-token",
+        )
+        requested_keys.clear()
+        rekeyed = dict(one)
+        rekeyed["idempotency_key"] = idempotency_key("graph-episode", "other-id")
+        second = _write_plan(tmp_path / "second", [rekeyed])
+        with pytest.raises(ApplyError) as error:
+            await apply_plan(
+                plan_path=second,
+                receipts_path=receipts,
+                expected_instance=INSTANCE_ID_TEXT,
+                client=client,
+                credential="synthetic-token",
+            )
+
+    assert error.value.code == "receipt_conflict"
+    assert requested_keys == []
+
+
 @pytest.mark.anyio
 async def test_apply_rejects_a_noncanonical_plan_idempotency_uuid(
     tmp_path: Path,
@@ -730,6 +837,57 @@ async def test_validated_ingest_without_promote_grant_surfaces_real_refusal(
     assert error.value.code == "request_failed"
     assert error.value.detail == "authorisation_denied"
     assert not (tmp_path / "receipts.jsonl").exists()
+
+
+@pytest.mark.anyio
+async def test_a_later_plan_resumes_on_real_receipts_from_a_real_instance(
+    tmp_path: Path,
+) -> None:
+    """The cutover delta against the real catalogue, not a mock transport."""
+    one = _operation("legacy-one", "SYNTHETIC-REAL-DELTA-ONE")
+    two = _operation("legacy-two", "SYNTHETIC-REAL-DELTA-TWO")
+    three = _operation("legacy-three", "SYNTHETIC-REAL-DELTA-THREE")
+    first = _write_plan(tmp_path / "first", [one, two])
+    second = _write_plan(tmp_path / "second", [one, two, three])
+    receipts = tmp_path / "receipts.jsonl"
+    application, token = _in_process_instance(
+        tmp_path / "instance", operations=["ingest"]
+    )
+
+    async with LifespanManager(application):
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://cairn"
+        ) as client:
+            first_summary = await apply_plan(
+                plan_path=first,
+                receipts_path=receipts,
+                expected_instance=INSTANCE_ID_TEXT,
+                client=client,
+                credential=token,
+            )
+            second_summary = await apply_plan(
+                plan_path=second,
+                receipts_path=receipts,
+                expected_instance=INSTANCE_ID_TEXT,
+                client=client,
+                credential=token,
+            )
+
+    assert (first_summary.applied, first_summary.resumed) == (2, 0)
+    assert (second_summary.planned, second_summary.applied, second_summary.resumed) == (
+        3,
+        1,
+        2,
+    )
+    written = [
+        json.loads(line) for line in receipts.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [receipt["legacy_id"] for receipt in written] == [
+        "legacy-one",
+        "legacy-two",
+        "legacy-three",
+    ]
+    assert len({receipt["assertion_id"] for receipt in written}) == 3
 
 
 @pytest.mark.anyio

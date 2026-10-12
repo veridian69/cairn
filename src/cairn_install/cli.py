@@ -42,18 +42,18 @@ FINGERPRINT_FILES = (
     "deploy/kustomize/rendered/kubernetes-retrieval.yaml",
     "integrations/codex/cairn-memory/SKILL.md",
     "integrations/claude/cairn-memory/SKILL.md",
-    "a2a/go.mod",
-    "a2a/go.sum",
-    "a2a/main.go",
-    "a2a/Dockerfile",
+    "garden/go.mod",
+    "garden/go.sum",
+    "garden/main.go",
+    "garden/Dockerfile",
 )
 FINGERPRINT_TREES = (
     "src/cairn",
     "src/cairn_install",
     "scripts",
-    "a2a/cmd",
-    "a2a/internal",
-    "a2a/scripts",
+    "garden/cmd",
+    "garden/internal",
+    "garden/scripts",
 )
 
 

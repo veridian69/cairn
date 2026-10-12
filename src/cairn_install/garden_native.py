@@ -41,7 +41,7 @@ class GardenBackend(Backend):
         super().__init__(cast(Context, _UnitContext(ctx)))
         self.config_path = ctx.root / "garden" / "host.json"
         self.data_path = ctx.root / "garden" / "data"
-        self.binary = ctx.root / "garden" / "bin" / "a2a"
+        self.binary = ctx.root / "garden" / "bin" / "garden"
 
     def _service_name(self) -> str:
         return f"cairn-install-{self.ctx.name}-garden.service"
@@ -61,7 +61,7 @@ class GardenBackend(Backend):
             self._check_binary()
         else:
             self.parent.command(
-                ["go", "version"], cwd=self.parent.source / "a2a", env=self._go_env()
+                ["go", "version"], cwd=self.parent.source / "garden", env=self._go_env()
             )
         if not self.is_running():
             require_listener_available(
@@ -145,9 +145,9 @@ class GardenBackend(Backend):
         with tempfile.TemporaryDirectory(
             prefix=".build-", dir=self.binary.parent
         ) as temporary:
-            output = Path(temporary) / "a2a"
+            output = Path(temporary) / "garden"
             version = source_version(self.parent.source)
-            # Same flags as a2a/Dockerfile and a2a/Makefile, so the binary
+            # Same flags as garden/Dockerfile and garden/Makefile, so the binary
             # reports the release version. Go's caches stay inside the
             # instance tree, writable, so blitz's rmtree removes them.
             self.parent.command(
@@ -157,12 +157,12 @@ class GardenBackend(Backend):
                     "-trimpath",
                     "-mod=readonly",
                     "-ldflags",
-                    f"-s -w -X github.com/veridian69/cairn/a2a/cmd.version={version}",
+                    f"-s -w -X github.com/veridian69/cairn/garden/cmd.version={version}",
                     "-o",
                     str(output),
                     ".",
                 ],
-                cwd=self.parent.source / "a2a",
+                cwd=self.parent.source / "garden",
                 env=self._go_env(),
                 timeout=900,
             )

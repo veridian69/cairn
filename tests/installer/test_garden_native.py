@@ -241,10 +241,10 @@ def test_native_build_stamps_the_release_version_and_keeps_go_caches_owned(
         assert str(backend.binary) in ctx.state["owned_files"]
 
     [(argv, cwd, env)] = builds
-    assert cwd == tmp_path / "a2a"
+    assert cwd == tmp_path / "garden"
     assert "-trimpath" in argv and "-mod=readonly" in argv
     assert argv[argv.index("-ldflags") + 1] == (
-        "-s -w -X github.com/veridian69/cairn/a2a/cmd.version=9.9.9"
+        "-s -w -X github.com/veridian69/cairn/garden/cmd.version=9.9.9"
     )
     assert env == {
         "CGO_ENABLED": "0",

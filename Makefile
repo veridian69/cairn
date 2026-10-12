@@ -1,5 +1,5 @@
-.PHONY: sync fetch-kubectl check check-cairn-mcp check-a2a test test-backup test-restore contract render compose-config \
-	image smoke-image kind-acceptance pre-blind compose-acceptance reference-acceptance \
+.PHONY: sync fetch-kubectl check check-cairn-mcp check-garden test test-backup test-restore contract render compose-config \
+	image image-edge smoke-image kind-acceptance pre-blind compose-acceptance reference-acceptance \
 	reference-posture-acceptance reference-posture-launch
 
 IMAGE ?= cairn:dev
@@ -8,7 +8,7 @@ IMAGES_LOCK = deploy/images.lock
 RENDER_DIR = deploy/kustomize/rendered
 COMPOSE_DIR = deploy/compose
 CAIRN_MCP_DIR = cairn-mcp
-A2A_DIR = a2a
+GARDEN_DIR = garden
 # P-69: the pins reach Compose from $(IMAGES_LOCK) itself, and the
 # instance parameters from the committed example. Both compositions are
 # validated — with and without the retrieval overlay — because an overlay
@@ -79,10 +79,10 @@ check-cairn-mcp:
 
 # The Garden component ships with the distribution, so its Go suite, offline
 # installer tests and build-version check gate the repository like cairn-mcp.
-# Blind acceptance found `a2a --version` reporting `dev` while this suite
+# Blind acceptance found `garden --version` reporting `dev` while this suite
 # was only run by hand.
-check-a2a:
-	$(MAKE) -C $(A2A_DIR) check
+check-garden:
+	$(MAKE) -C $(GARDEN_DIR) check
 
 # P-30: both copies of each artefact and its digest come from one render.
 # The generator writes to stdout and this target owns the paths. The
@@ -162,12 +162,12 @@ compose-config:
 	FALKORDB_CONFIG_FILE=./falkordb.conf \
 		$(COMPOSE) -f $(COMPOSE_DIR)/compose.graphiti.yaml config -q
 
-check: check-cairn-mcp check-a2a
+check: check-cairn-mcp check-garden
 	uv lock --check
 	./scripts/check-license
 	uv run --locked ruff check .
 	uv run --locked ruff format --check .
-	uv run --locked mypy src tests
+	uv run --locked mypy src tests scripts/cutover_principals.py
 	$(MAKE) contract
 	git diff --exit-code -- $(CONTRACT) $(CONTRACT).sha256 $(PACKAGED_CONTRACT) \
 		$(MANIFEST) $(MANIFEST).sha256 $(PACKAGED_MANIFEST) \
@@ -186,6 +186,15 @@ image:
 	docker build --pull=false \
 		--build-arg REVISION="$(REVISION)" \
 		--tag $(IMAGE) .
+
+EDGE_IMAGE ?= cairn-edge:dev
+
+image-edge:
+	docker build --pull=false \
+		--build-arg VERSION=$(or $(VERSION),$(error VERSION is required)) \
+		--build-arg REVISION=$$(git rev-parse HEAD) \
+		--file cairn-mcp/Dockerfile.edge \
+		--tag $(EDGE_IMAGE) cairn-mcp
 
 smoke-image:
 	IMAGE=$(IMAGE) ./scripts/smoke-image

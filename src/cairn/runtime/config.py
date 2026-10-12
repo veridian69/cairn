@@ -121,8 +121,8 @@ class GraphitiConfig(BaseModel):
     # constant, not configuration: batch-on-small measurably degraded
     # dedup accuracy (11/15 vs 13/15) and a dial would invite it back.
     # That accuracy choice carries a per-call cost. Every batch of two
-    # or more moves edge dedup off the small model (gpt-4.1-nano) onto
-    # graphiti's default (gpt-5.5 at the pinned 0.29.3), and batching
+    # or more moves edge dedup off the small model (gpt-5.6-luna) onto
+    # the medium model (gpt-5.4-nano, set in projection/graphiti.py), and batching
     # ships ON by default: fewer calls, each dearer. Deliberate, and
     # not free.
     # The ranges below are admissibility bounds, not measured values —

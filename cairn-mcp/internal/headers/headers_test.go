@@ -127,3 +127,43 @@ func TestDownstreamHeaders(t *testing.T) {
 		t.Fatalf("unexpected canonicalisation behaviour for retry-after")
 	}
 }
+
+func TestUpstreamHeadersSetsCairnBearerLast(t *testing.T) {
+	raw := http.Header{}
+	raw.Set("Authorization", "Bearer client-supplied")
+	raw.Set("CF-Access-Client-Id", "spoofed")
+	raw.Set("Cf-Access-Jwt-Assertion", "spoofed")
+	raw.Set("MCP-Protocol-Version", "2025-11-25")
+	out := UpstreamHeaders(raw, credentials.CredentialSnapshot{
+		CFClientID: "id", CFClientSecret: "secret", CairnToken: []byte("cairn1.a.b"),
+	})
+	if got := out.Values("Authorization"); len(got) != 1 || got[0] != "Bearer cairn1.a.b" {
+		t.Fatalf("Authorization = %v", got)
+	}
+	if out.Get("CF-Access-Client-Id") != "id" {
+		t.Fatalf("CF-Access-Client-Id = %q", out.Get("CF-Access-Client-Id"))
+	}
+	if _, present := out["Cf-Access-Jwt-Assertion"]; present {
+		t.Fatal("assertion header must be dropped")
+	}
+	if out.Get("MCP-Protocol-Version") != "2025-11-25" {
+		t.Fatal("allowlisted header must survive")
+	}
+}
+
+func TestBearerHeadersFiltersAndSetsAuthorization(t *testing.T) {
+	raw := http.Header{}
+	raw.Set("Authorization", "Bearer client-supplied")
+	raw.Set("CF-Access-Client-Secret", "spoofed")
+	raw.Set("Content-Type", "application/json")
+	out := BearerHeaders(raw, []byte("cairn1.c.d"))
+	if got := out.Values("Authorization"); len(got) != 1 || got[0] != "Bearer cairn1.c.d" {
+		t.Fatalf("Authorization = %v", got)
+	}
+	if _, present := out["Cf-Access-Client-Secret"]; present {
+		t.Fatal("Cloudflare headers must not pass through BearerHeaders")
+	}
+	if out.Get("Content-Type") != "application/json" {
+		t.Fatal("allowlisted header must survive")
+	}
+}

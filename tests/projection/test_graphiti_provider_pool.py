@@ -19,9 +19,9 @@ def test_provider_clients_route_language_work_to_nano_models(
     shared, llm, _embedder, reranker = _openai_provider_clients()
     try:
         assert llm._get_model_for_size(ModelSize.medium) == "gpt-5.4-nano"
-        assert llm._get_model_for_size(ModelSize.small) == "gpt-4.1-nano"
+        assert llm._get_model_for_size(ModelSize.small) == "gpt-5.6-luna"
         assert llm._resolve_reasoning_effort("gpt-5.4-nano", llm.reasoning) == "none"
-        assert reranker.config.model == "gpt-4.1-nano"
+        assert reranker.config.model == "gpt-5.6-luna"
     finally:
         asyncio.run(shared.close())
 
