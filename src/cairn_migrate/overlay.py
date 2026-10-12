@@ -31,6 +31,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from cairn.catalogue.sqlite import (
+    CatalogueStorageError,
+    canonical_timestamp,
+    parse_timestamp,
+)
 from cairn_migrate.mapping import (
     ENUMERATIONS_FILENAME,
     OPERATIONS_FILENAME,
@@ -183,6 +188,16 @@ def _ruling(entry: object, index: int) -> _Ruling:
             or set(source) != _SOURCE_FIELDS
             or not all(isinstance(item, str) and item for item in source.values())
         ):
+            raise OverlayError("rulings_invalid", detail=detail)
+        # created_at becomes the request's observed_at: hold it to the
+        # catalogue's timestamp contract here, not at apply. strptime's %f
+        # takes one to six digits, so only the canonical rendering passes.
+        created_at = source["created_at"]
+        try:
+            canonical = canonical_timestamp(parse_timestamp(created_at))
+        except CatalogueStorageError:
+            raise OverlayError("rulings_invalid", detail=detail) from None
+        if canonical != created_at:
             raise OverlayError("rulings_invalid", detail=detail)
     return _Ruling(
         legacy_id=entry["legacy_id"],

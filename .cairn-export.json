@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "source_revision": "d81bfe58969eaa4420ae288987aa53f4993f34c1",
+  "source_revision": "04df94b84b8e240367706a443abe27e5bb002d9e",
   "release_configuration": {
     "files.json": "4f8a78a378c5efdc54bd5b80cde5e3c94ebb26fbf6d72f1e57e986df787ddd94",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
@@ -902,7 +902,7 @@
       "mode": 420
     },
     "docs/releases/v0.7.14.md": {
-      "sha256": "9b741d143c693cf8ef3aff37806b7eea3752b40fc867b5bd70a8ced909e41460",
+      "sha256": "a3aaff2021f333585f2e7f455baafcb5129cf25d878ce6b2ab4ab1155dd8be26",
       "mode": 420
     },
     "docs/releases/v0.7.8.md": {
@@ -2946,7 +2946,7 @@
       "mode": 420
     },
     "src/cairn_migrate/overlay.py": {
-      "sha256": "d2d870820266a492c40641c52b8cfec1d8a109d713ce777e69280f1033492c88",
+      "sha256": "6e0ab52a03f849d0562b4ea0110403f1f166d25cb33ba28efe45876e61a665c4",
       "mode": 420
     },
     "src/cairn_migrate/report.py": {
@@ -3838,7 +3838,7 @@
       "mode": 420
     },
     "tests/migrate/test_overlay_plan.py": {
-      "sha256": "ae201ea87a7de81d16ae7391a568f0110940e71985f2df8b67a49bdca2534e25",
+      "sha256": "cac31f4d727b6d71cc40ce3ada9eedaca5481a48c7fd8e5c693240b69554bf41",
       "mode": 420
     },
     "tests/migrate/test_report.py": {

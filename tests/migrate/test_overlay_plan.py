@@ -642,6 +642,24 @@ def test_overlay_refuses_a_plan_with_carriage_returns(
         _ruling("turn-accept", "REJECT"),
         {**_ruling("ep-new-1", "ACCEPT", "body"), "store": "graph-episode"},
         _ruling("turn-merged", "MERGED", None, SCREENED_SOURCE),
+        _ruling(
+            "turn-screened",
+            "ACCEPT",
+            "body",
+            {**SCREENED_SOURCE, "created_at": "yesterday"},
+        ),
+        _ruling(
+            "turn-screened",
+            "ACCEPT",
+            "body",
+            {**SCREENED_SOURCE, "created_at": "2026-09-21T09:00:00Z"},
+        ),
+        _ruling(
+            "turn-screened",
+            "ACCEPT",
+            "body",
+            {**SCREENED_SOURCE, "created_at": "2026-09-21T09:00:00.1Z"},
+        ),
     ],
 )
 def test_overlay_refuses_invalid_rulings(
