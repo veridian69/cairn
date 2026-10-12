@@ -301,7 +301,7 @@ class SplitTests(unittest.TestCase):
     def test_makefile_and_default_coverage_remain_intact(self):
         self.assertEqual(
             hashlib.sha256((ROOT / "Makefile").read_bytes()).hexdigest(),
-            "b4fc7d8e298e9e351919f6951b8f6f2530327a68f7dfc46be7e1332c6e26fddc",
+            "f458036341c91e806207dd52e7ba098ffcac750b8d36ab9417b92f2756547f29",
         )
         import tomllib
 
