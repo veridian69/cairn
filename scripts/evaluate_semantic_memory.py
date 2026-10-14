@@ -309,7 +309,9 @@ def run(args: argparse.Namespace) -> int:
         raise EnvironmentError("output_exists")
     corpus = load_corpus(args.corpus)
     child_environment = provider_environment(args.provider_key_file, os.environ)
-    image = falkordb_image((ROOT / "deploy/images.lock").read_text())
+    image = falkordb_image(
+        (ROOT / "deploy/images.lock").read_text(), args.falkordb_image
+    )
     with TemporaryDirectory(
         prefix="cairn-semantic-", dir=native_scratch_parent()
     ) as scratch:
@@ -423,6 +425,15 @@ def main() -> int:
         default=900,
         choices=range(60, 1801),
         metavar="60..1800",
+    )
+    parser.add_argument(
+        "--falkordb-image",
+        metavar="REF",
+        help=(
+            "overrides deploy/images.lock: a digest-pinned maintained image, or "
+            "cairn.local/falkordb-runtime@sha256:<64 hex> (no tag); cairn.local "
+            "is accepted only here"
+        ),
     )
     args = parser.parse_args()
     try:

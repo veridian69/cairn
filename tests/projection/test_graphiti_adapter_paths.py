@@ -1683,6 +1683,15 @@ def test_a_close_request_interrupts_a_waiting_call_quickly() -> None:
         assert raised.value.code == "graphiti_shutdown"
         assert time.monotonic() - started < 10.0
     finally:
+
+        async def drain() -> None:
+            # future.cancel() only schedules the task's cancellation; stop
+            # the loop before it lands and the task is garbage-collected
+            # pending, logging into whichever test's caplog is active then.
+            others = asyncio.all_tasks() - {asyncio.current_task()}
+            await asyncio.gather(*others, return_exceptions=True)
+
+        asyncio.run_coroutine_threadsafe(drain(), adapter._loop).result(timeout=5.0)
         adapter._loop.call_soon_threadsafe(adapter._loop.stop)
         adapter._thread.join(timeout=5.0)
         adapter._loop.close()

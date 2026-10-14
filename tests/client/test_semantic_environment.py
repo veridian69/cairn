@@ -133,3 +133,64 @@ def test_image_pin_rejects_untrusted_or_invalid_derivative_references(
     module = environment()
     with pytest.raises(module.EnvironmentError, match="image_pin_invalid"):
         module.falkordb_image(f"FALKORDB_IMAGE={image}\n")
+
+
+def test_image_override_takes_precedence_over_lock() -> None:
+    module = environment()
+    locked = f"falkordb/falkordb:v1@sha256:{'a' * 64}"
+    override = f"ghcr.io/veridian69/cairn-falkordb:v2@sha256:{'b' * 64}"
+    assert module.falkordb_image(f"FALKORDB_IMAGE={locked}\n", override) == override
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        f"cairn.local/falkordb-runtime@sha256:{'b' * 64}",
+    ],
+)
+def test_image_override_accepts_reviewed_local_runtime(image: str) -> None:
+    assert environment().falkordb_image("", image) == image
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        f"cairn.local/falkordb-runtime@sha256:{'B' * 64}",
+        f"cairn.local/falkordb-runtime@sha256:{'b' * 63}",
+        f"cairn.local/other-runtime@sha256:{'b' * 64}",
+        "cairn.local/falkordb-runtime:latest",
+        f"cairn.local/falkordb-runtime:build-{'b' * 64}@sha256:{'b' * 64}",
+        "cairn.local/falkordb-runtime",
+        "ghcr.io/veridian69/cairn-falkordb:v1",
+        f"ghcr.io/other/cairn-falkordb:v1@sha256:{'a' * 64}",
+        f"docker.io/library/redis:v1@sha256:{'a' * 64}",
+    ],
+)
+def test_image_override_refuses_unpinned_and_other_repositories(image: str) -> None:
+    module = environment()
+    with pytest.raises(module.EnvironmentError, match="image_pin_invalid"):
+        module.falkordb_image("", image)
+
+
+def test_lock_refuses_local_runtime_without_override() -> None:
+    line = f"FALKORDB_IMAGE=cairn.local/falkordb-runtime@sha256:{'b' * 64}\n"
+    module = environment()
+    with pytest.raises(module.EnvironmentError, match="image_pin_invalid"):
+        module.falkordb_image(line)
+
+
+def test_zero_placeholder_lock_is_refused_and_names_the_flag() -> None:
+    lock = "FALKORDB_IMAGE=cairn.local/falkordb-runtime@sha256:" + "0" * 64 + "\n"
+    module = environment()
+    with pytest.raises(module.EnvironmentError, match="--falkordb-image") as raised:
+        module.falkordb_image(lock)
+    assert "image_pin_placeholder" in str(raised.value)
+
+
+def test_zero_placeholder_override_is_refused_and_names_the_flag() -> None:
+    locked = f"FALKORDB_IMAGE=falkordb/falkordb:v1@sha256:{'a' * 64}\n"
+    override = "cairn.local/falkordb-runtime@sha256:" + "0" * 64
+    module = environment()
+    with pytest.raises(module.EnvironmentError, match="--falkordb-image") as raised:
+        module.falkordb_image(locked, override)
+    assert "image_pin_placeholder" in str(raised.value)
