@@ -74,6 +74,9 @@ Each connector carries this exact text as its instructions, with `<realm>`
 replaced by the realm the connector principals were issued under
 (`scripts/cutover_principals.py --realm`). The edge fills in nothing, so scope,
 classification and idempotency keys come from here.
+ChatGPT has no per-connector instructions field: put the text in Settings →
+Personalization → Custom instructions, or in a Project's instructions if Cairn is
+used only there. Without it ChatGPT guesses the scope and is refused.
 
 ```text
 You are connected to the user's personal memory, Cairn.

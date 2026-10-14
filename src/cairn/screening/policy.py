@@ -25,6 +25,23 @@ Stated residuals, accepted rather than undiscovered:
   there is no baseline, no per-request exemption and no privileged bypass, and
   a caller must redact or reformulate a false positive. A false negative writes
   a credential into permanent custody; a false positive costs a rewording.
+  I-98 narrows one class: lowercase words joined by ``-``, ``_`` or ``/`` fire
+  only when the keyword labels them, so ``cairn-credential-spike-wsl`` or a
+  branch name in a note no longer does.
+- **Unlabelled word passphrases.** The price of I-98: a lowercase word
+  passphrase near a keyword but not labelled by it — "the vault password, for
+  the record, winter-meadow-copper-lantern" — passes. Labelled, it is caught.
+  Candidates outside the case-consistent word grammar keep the plain window test.
+- **File names beside a keyword.** A candidate that a dot extension directly
+  follows, and that is case-consistent words, digits and ``-``, ``_`` or ``/``
+  joins, is exempt whether labelled or not, so ``.token-saver/backlog-STATE.md``
+  passes. Accepted by Operator (14 October 2026): ``credential:
+  winter-meadow-copper-lantern.txt`` passes, because the extension is what
+  exempts it. So does any random run of lowercase, uppercase or title-case
+  tokens given an extension of one to eight characters, ``credential:
+  qzxvbnmlkjhgfdsaoiuytrewpc.txt``; internally mixed-case runs fail the token
+  grammar and stay refused. Hex digits and joiners alone are neither words nor
+  a file name, so hex digests stay refused, joined or not.
 - **Unicode homoglyphs.** Text is NFKC-folded and stripped of format
   characters before screening, which closes an invisible inserted into a
   literal, a soft hyphen inside a token and a fullwidth transliteration. Two
@@ -292,6 +309,31 @@ _WINDOW = 64
 _BASE64_ENTROPY_FLOOR = 3.5
 _HEX_ENTROPY_FLOOR = 2.5
 
+# I-98 (ruled 14 October 2026). Lowercase words joined by hyphens,
+# underscores or slashes clear the base64 floor on letter variety alone —
+# ``contextual-entropy`` scores 3.57 — so every hyphenated identifier, branch
+# name or path in a note about credentials or tokens was refused. Shape alone cannot settle it: a
+# word passphrase has exactly this shape. What separates them is the keyword's
+# relation to the string, so a word-shaped candidate fires only when the
+# keyword labels it — ``password: X``, ``token=X``, ``secret is X``, or the
+# keyword as the run's own prefix, directly followed by ``-``, ``_`` or ``/``
+# (#114: ``token2-build-runner-service`` is not labelled) — and a passphrase in
+# looser prose is the accepted residual. Every other candidate keeps the plain window test.
+# Amendment, 14 October 2026: file names. The word grammar takes case-consistent
+# tokens (``docs/P4-Window``), still with the twelve-letter cap on each run.
+_WORD_TOKEN = r"(?:(?:[a-z]{1,12}|[A-Z]{1,12}|[A-Z][a-z]{1,11})[0-9]*|[0-9]+)"
+_WORD_SHAPED = re.compile(rf"{_WORD_TOKEN}(?:[-_/]{_WORD_TOKEN})+")
+# A candidate followed by a dot extension and built of case-consistent tokens
+# is a file name, exempt whether labelled or not. Hex overlaps the lowercase
+# and digit tokens, so a candidate of hex digits and joiners alone is neither
+# words nor a file name: ``4c1d90eb27f5a3608b9e2d47f0a6c853.json`` and
+# ``abcdef0123456789-ABCDEF0123456789`` stay refused.
+_FILE_TOKEN = r"(?:[a-z]+[0-9]*|[A-Z]+[0-9]*|[A-Z][a-z]+[0-9]*|[0-9]+)"
+_FILE_SHAPED = re.compile(rf"{_FILE_TOKEN}(?:[-_/]{_FILE_TOKEN})*")
+_HEX_JOINED = re.compile(r"[0-9a-fA-F]+(?:[-_/][0-9a-fA-F]+)*")
+_FILE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9+/=_%-])")
+_LABEL_GAP = re.compile(r"\s*[:=]\s*[\"'`]?|\s+(?:is|was)\s+[\"'`]?", re.IGNORECASE)
+
 
 def _shannon_entropy(text: str) -> float:
     counts = Counter(text)
@@ -342,6 +384,42 @@ def _candidate_trips(value: str) -> bool:
     )
 
 
+def _candidate_verdict(text: str, candidate: re.Match[str]) -> tuple[bool, bool, bool]:
+    # (trips, word-shaped, file-shaped). The word shape is judged after UUID
+    # excision, as the entropy is, so a UUID cannot make a passphrase look less
+    # word-like. The file shape reads the raw candidate and the text after it;
+    # ``=`` is in the candidate charset, so ``credential=x.json`` is one run and
+    # each ``=``-separated piece is judged on its own. Neither shape admits hex
+    # digits and joiners alone.
+    value = candidate.group()
+    stripped = _UUID_SHAPED.sub("", value)
+    return (
+        _candidate_trips(value),
+        _WORD_SHAPED.fullmatch(stripped) is not None
+        and _HEX_JOINED.fullmatch(stripped) is None,
+        _FILE_EXTENSION.match(text, candidate.end()) is not None
+        and all(
+            _FILE_SHAPED.fullmatch(piece) is not None
+            and _HEX_JOINED.fullmatch(piece) is None
+            for piece in value.split("=")
+        ),
+    )
+
+
+def _keyword_labels(
+    text: str, keyword: re.Match[str], candidate: re.Match[str]
+) -> bool:
+    # The gap is bounded by the window, so this adds constant work per pair.
+    # A run-start keyword labels only when a joiner follows it: ``password-…``
+    # does, ``token2-build-runner-service`` (a digit) does not (#114).
+    if candidate.start() == keyword.start():
+        return text[keyword.end() : keyword.end() + 1] in ("-", "_", "/")
+    return (
+        candidate.start() >= keyword.end()
+        and _LABEL_GAP.fullmatch(text, keyword.end(), candidate.start()) is not None
+    )
+
+
 def _contains_contextual_entropy(text: str) -> bool:
     # Candidates are found across the whole text and then filtered by position,
     # rather than by slicing the window out first. Slicing truncates any
@@ -363,7 +441,7 @@ def _contains_contextual_entropy(text: str) -> bool:
     candidates: tuple[re.Match[str], ...] = ()
     ends: list[int] = []
     starts: list[int] = []
-    verdicts: list[bool | None] = []
+    verdicts: list[tuple[bool, bool, bool] | None] = []
     for keyword in _ENTROPY_KEYWORD.finditer(text):
         if not candidates:
             candidates = tuple(_ENTROPY_CANDIDATE.finditer(text))
@@ -379,9 +457,16 @@ def _contains_contextual_entropy(text: str) -> bool:
         for index in range(first, last):
             verdict = verdicts[index]
             if verdict is None:
-                verdict = _candidate_trips(candidates[index].group())
+                verdict = _candidate_verdict(text, candidates[index])
                 verdicts[index] = verdict
-            if verdict:
+            trips, word_shaped, file_shaped = verdict
+            if (
+                trips
+                and not file_shaped
+                and (
+                    not word_shaped or _keyword_labels(text, keyword, candidates[index])
+                )
+            ):
                 return True
     return False
 

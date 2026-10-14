@@ -51,18 +51,37 @@ def provider_environment(
     return environment
 
 
-def falkordb_image(lock_text: str) -> str:
-    """Parse a literal locked image reference; never source a shell file."""
-    values = [
-        line.removeprefix("FALKORDB_IMAGE=")
-        for line in lock_text.splitlines()
-        if line.startswith("FALKORDB_IMAGE=")
-    ]
-    if len(values) != 1 or not re.fullmatch(
+def falkordb_image(lock_text: str, override: str | None = None) -> str:
+    """Parse a literal locked image reference, or an explicit override.
+
+    Never source a shell file. The override is a plain argument, held to the
+    same digest pin. It alone also accepts the reviewed local runtime, with the
+    installers' exact grammar (no tag). cairn.local references are never
+    accepted from the lock.
+    """
+    if override is None:
+        values = [
+            line.removeprefix("FALKORDB_IMAGE=")
+            for line in lock_text.splitlines()
+            if line.startswith("FALKORDB_IMAGE=")
+        ]
+        if len(values) != 1:
+            raise EnvironmentError("image_pin_invalid")
+        image = values[0]
+    else:
+        image = override
+    if image.endswith("@sha256:" + "0" * 64):
+        raise EnvironmentError(
+            "image_pin_placeholder: deliberately impossible; "
+            "pass --falkordb-image with the reviewed local runtime"
+        )
+    maintained = (
         r"(?:ghcr\.io/veridian69/cairn-falkordb|"
         r"(?:docker\.io/)?falkordb/falkordb(?:-server)?)"
-        r":[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}",
-        values[0],
-    ):
+        r":[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}"
+    )
+    local = r"cairn\.local/falkordb-runtime@sha256:[0-9a-f]{64}"
+    pattern = maintained if override is None else f"(?:{maintained}|{local})"
+    if not re.fullmatch(pattern, image):
         raise EnvironmentError("image_pin_invalid")
-    return values[0]
+    return image

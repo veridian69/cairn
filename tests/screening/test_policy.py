@@ -194,6 +194,208 @@ def test_a_candidate_beyond_the_keyword_window_does_not_fire() -> None:
     assert rule not in _rule_identities(SecretScreen().screen(_FIELD_PATH, far))
 
 
+# === I-98: word-shaped candidates need a labelling keyword ===================
+#
+# Every literal below was run through the real ``SecretScreen`` before being
+# written here, against both the old and the new rule.
+
+_ENTROPY_RULE = f"{POLICY_VERSION}/contextual-entropy"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The credential path is cairn-credential-spike-wsl",
+        "The secret screen refused the fact under contextual-entropy today.",
+        "token rotation runs from the relay-credential-alpha-host unit",
+        "password resets go through the self-service-portal-helper flow",
+        "the secret work is on branch spike/secret-screen-labelled-words",
+        "the token helper lives in docs/operations/client_cutover_instructions",
+    ],
+)
+def test_word_shaped_identifiers_in_prose_do_not_fire(text: str) -> None:
+    assert _ENTROPY_RULE not in _rule_identities(
+        SecretScreen().screen(_FIELD_PATH, text)
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "credential: winter-meadow-copper-lantern",
+        "password=winter-meadow-copper-lantern",
+        "the password is winter-meadow-copper-lantern",
+        "The Passphrase was 'winter-meadow-copper-lantern'",
+        "password-winter-meadow-copper-lantern",
+        "secret_winter_meadow_copper_lantern",
+        "token: qzxvbnml-kjhgfdsa-poiuytre",
+        "passphrase: winter/meadow/copper/lantern",
+        "password/winter/meadow/copper/lantern",
+        "token, unrelated; password: winter-meadow-copper-lantern",
+        "password:\nwinter-meadow-copper-lantern",
+        "password： winter-meadow-copper-lantern",
+        "password:​ winter-meadow-copper-lantern",
+        "api-key: winter-meadow-copper-lantern",
+        "access_key=winter-meadow-copper-lantern",
+        "token: abcdefghijkl-mnopqrstuvwx-yzabcdefghij",
+    ],
+)
+def test_a_labelled_word_passphrase_still_fires(text: str) -> None:
+    assert _ENTROPY_RULE in _rule_identities(SecretScreen().screen(_FIELD_PATH, text))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "credential: aB3xY9kQ-7mZ2pL5v-N8wR4tG6",
+        "credential: AKIA-IOSFODNN7EXAMPLE",
+        "credential: W10-FREEZE-7c41ab",
+        "the credential store holds aB3xY9kQ7mZ2pL5vN8wR4tG6 for now",
+        # A thirteen-letter segment is past the word bound.
+        "the token sits near abcdefghijklm-nopqrstuvwxy-zabcdefghijk",
+    ],
+)
+def test_candidates_that_are_not_word_shaped_keep_the_window_test(text: str) -> None:
+    assert _ENTROPY_RULE in _rule_identities(SecretScreen().screen(_FIELD_PATH, text))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the vault password, for the record, winter-meadow-copper-lantern",
+        "password: harmless winter-meadow-copper-lantern",
+        "prefix-password-winter-meadow-copper-lantern",
+        "the token sits near abcdefghijkl-mnopqrstuvwx-yzabcdefghij",
+    ],
+)
+def test_an_unlabelled_word_passphrase_is_the_accepted_residual(text: str) -> None:
+    # Pinned so the residual I-98 accepts cannot widen or vanish unnoticed.
+    assert _ENTROPY_RULE not in _rule_identities(
+        SecretScreen().screen(_FIELD_PATH, text)
+    )
+
+
+def test_word_shape_is_judged_after_uuid_excision() -> None:
+    uuid = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+    screen = SecretScreen()
+    assert screen.screen(_FIELD_PATH, f"credential: {uuid}") == ()
+    # Excision leaves a leading hyphen, so this one is not word-shaped.
+    trailing = f"credential: {uuid}-winter-meadow-copper-lantern"
+    assert _ENTROPY_RULE in _rule_identities(screen.screen(_FIELD_PATH, trailing))
+    # Excision leaves winter-meadow-copper-lantern: word-shaped, so the label
+    # decides.
+    interior = f"winter-meadow{uuid}-copper-lantern"
+    assert _ENTROPY_RULE in _rule_identities(
+        screen.screen(_FIELD_PATH, f"credential: {interior}")
+    )
+    assert _ENTROPY_RULE not in _rule_identities(
+        screen.screen(_FIELD_PATH, f"credential for {interior}")
+    )
+
+
+# === Amendment, 14 October 2026: digit after a prefix keyword (#114) =========
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "token2-build-runner-service",
+        "password9-reset-service-helper",
+        "TOKEN2-build-runner-service",
+        "secret3_build_runner_service",
+        "token2/build/runner/service",
+        # Keyword inside a longer run is not the run's own prefix.
+        "build-token2-runner-service-helper",
+        # Accepted residual (#114): a digit unlabels a real word passphrase too.
+        "password1-winter-meadow-copper-lantern",
+        "api-key1-winter-meadow-copper-lantern",
+        "access_key1-winter-meadow-copper-lantern",
+    ],
+)
+def test_a_digit_after_a_prefix_keyword_is_not_a_label(text: str) -> None:
+    assert _ENTROPY_RULE not in _rule_identities(
+        SecretScreen().screen(_FIELD_PATH, text)
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "password-winter-meadow-copper-lantern",
+        "PASSWORD-winter-meadow-copper-lantern",
+        "secret_winter-meadow-copper",
+        "token-saver/backlog-STATE",
+        "token/winter/meadow/copper/lantern",
+        # The no-digit pairs of the residual cases above.
+        "api-key-winter-meadow-copper-lantern",
+        "access_key-winter-meadow-copper-lantern",
+    ],
+)
+def test_a_joiner_after_a_prefix_keyword_still_labels(text: str) -> None:
+    assert _ENTROPY_RULE in _rule_identities(SecretScreen().screen(_FIELD_PATH, text))
+
+
+# === Amendment, 14 October 2026: file names ==================================
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The state file is .token-saver/backlog-STATE.md",
+        "token runner at .token-saver/p4-run/cf-adapter.sh",
+        "secret rules live in src/cairn/screening/Policy_V1.py",
+        "credential stored in ~/.config/cairn/credential-spike-wsl.json",
+        "the token helper lives in docs/operations/P4-Window-Cutover",
+        # Accepted residual (Operator, 14 October 2026): the extension is the exemption.
+        "credential: winter-meadow-copper-lantern.txt",
+        "credential: qzxvbnmlkjhgfdsaoiuytrewpc.txt",
+        "credential: Qzxvbnmlkjhgfdsaoiuytrewpc.txt",
+        # ``=`` joins the label into the run; each piece is judged on its own.
+        "credential=relay-credential-alpha-host.json",
+        "password: winter-meadow-copper-lantern.abcdefgh",
+    ],
+)
+def test_file_names_beside_a_keyword_do_not_fire(text: str) -> None:
+    assert _ENTROPY_RULE not in _rule_identities(
+        SecretScreen().screen(_FIELD_PATH, text)
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Hex digits and joiners alone are never a file name.
+        "token cache 4c1d90eb27f5a3608b9e2d47f0a6c853.json",
+        "credential: abcdef0123456789.txt",
+        "credential: abcdefabcdefabcdefabcdefabcdefab.json",
+        "credential: 01234567890123456789012345678901.json",
+        "credential: 4c1d90eb-27f5a360-8b9e2d47.json",
+        "credential=abcdef0123456789.json",
+        "credential=aB3xY9kQ7mZ2pL5vN8wR4tG6.json",
+        "aB3xY9kQ7mZ2pL5vN8wR4tG6=relay-credential-alpha-host.json",
+        # Unlabelled, joined hex is not word-shaped either.
+        "credential cache abcdef0123456789-ABCDEF0123456789",
+        "credential cache abcdef0123456789_ABCDEF0123456789.json",
+        "credential cache abcdef0123456789/ABCDEF0123456789",
+        # Nine characters is not an extension.
+        "password: winter-meadow-copper-lantern.abcdefghi",
+        # The extension exempts one occurrence, not every copy of the run.
+        "password: winter-meadow-copper-lantern.txt, password: "
+        "winter-meadow-copper-lantern",
+        "credential: aB3xY9kQ7mZ2pL5vN8wR4tG6.txt",
+        # The full stop ends the sentence: no extension follows the run.
+        "password=Zm9vYmFyc3ludGhldGljcGFzc3dvcmR2YWx1ZQ.",
+        "token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc",
+        "credential: AKIA-IOSFODNN7EXAMPLE.csv",
+        "credential: W10-FREEZE-7c41ab",
+        "password: Winter-Meadow-Copper-Lantern",
+        "password: token-saver/backlog-STATE",
+    ],
+)
+def test_candidates_that_are_not_file_names_still_fire(text: str) -> None:
+    assert _ENTROPY_RULE in _rule_identities(SecretScreen().screen(_FIELD_PATH, text))
+
+
 def test_the_authorization_header_floor_is_exact_on_both_sides() -> None:
     rule = f"{POLICY_VERSION}/authorization-header"
     fifteen = SecretScreen().screen(_FIELD_PATH, f"Authorization: Bearer {'a1' * 7}b")

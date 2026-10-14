@@ -1,6 +1,6 @@
 # Security policy
 
-Cairn `v0.7.14` is the current stable source release. There is no long-term
+Cairn `v0.7.15` is the current stable source release. There is no long-term
 support policy yet.
 
 ## Report a vulnerability
