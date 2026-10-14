@@ -14,7 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const currentSchemaVersion = 1
@@ -75,6 +76,10 @@ func Open(dataDir string, options Options) (*Store, error) {
 	if err != nil {
 		return fail(fmt.Errorf("opening memory database: %w", err))
 	}
+	if err := connectFirst(db); err != nil {
+		_ = db.Close()
+		return fail(fmt.Errorf("opening memory database: %w", err))
+	}
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return fail(fmt.Errorf("migrating memory database: %w", err))
@@ -124,6 +129,28 @@ func (s *Store) Close() error {
 		}
 	})
 	return s.closeErr
+}
+
+// connectFirst opens the pool's first connection, retrying SQLITE_BUSY for the
+// busy_timeout budget. Switching a fresh rollback-journal file to WAL takes an
+// exclusive lock without consulting the busy handler, so concurrent first
+// opens lose that race with an immediate SQLITE_BUSY however long busy_timeout
+// is. Once the file is WAL the pragma is a no-op, so later connections never
+// reach this. Serialising on memory.db.lock instead would need an exclusive
+// flock downgraded to shared, and flock conversion is not atomic: a
+// destructive command could take the lock in the gap while this store already
+// holds the database open.
+func connectFirst(db *sql.DB) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := db.Ping()
+		var busy *sqlite.Error
+		if err == nil || !errors.As(err, &busy) ||
+			busy.Code()&0xff != sqlite3.SQLITE_BUSY || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func migrate(db *sql.DB) error {

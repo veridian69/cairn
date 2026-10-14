@@ -59,7 +59,7 @@ def test_launcher_retains_safe_partial_report_after_scratch_cleanup(
         },
     )
     monkeypatch.setattr(module, "provider_environment", lambda *a: {})
-    monkeypatch.setattr(module, "falkordb_image", lambda _: "locked-image")
+    monkeypatch.setattr(module, "falkordb_image", lambda *_: "locked-image")
 
     @contextmanager
     def lifecycle(image: str) -> Any:
@@ -123,6 +123,7 @@ def test_launcher_retains_safe_partial_report_after_scratch_cleanup(
         corpus=tmp_path / "not-read",
         provider_key_file=tmp_path / "not-read",
         deadline_seconds=60,
+        falkordb_image=None,
     )
     if child_code != 1:
         # A file cannot turn a refused/failed worker invocation into a usable
@@ -188,7 +189,7 @@ def test_launcher_complete_flags_bind_to_measured_outcomes(
         },
     )
     monkeypatch.setattr(module, "provider_environment", lambda *a: {})
-    monkeypatch.setattr(module, "falkordb_image", lambda _: "locked-image")
+    monkeypatch.setattr(module, "falkordb_image", lambda *_: "locked-image")
 
     @contextmanager
     def lifecycle(image: str) -> Any:
@@ -299,7 +300,7 @@ def test_launcher_missing_or_malformed_partial_report_stays_closed(
         module, "load_corpus", lambda _: {"queries": [], "corrections": []}
     )
     monkeypatch.setattr(module, "provider_environment", lambda *a: {})
-    monkeypatch.setattr(module, "falkordb_image", lambda _: "image")
+    monkeypatch.setattr(module, "falkordb_image", lambda *_: "image")
 
     @contextmanager
     def lifecycle(image: str) -> Any:
@@ -828,3 +829,50 @@ def test_real_api_plumbing_with_controlled_index_cannot_claim_semantic_evidence(
     assert report["quality_expectations_met"] is False
     assert report["retrieval_mode"] == "controlled-index-not-semantic"
     assert not (tmp_path / "result.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ([], None),
+        (
+            ["--falkordb-image", "cairn.local/falkordb-runtime@sha256:" + "b" * 64],
+            "cairn.local/falkordb-runtime@sha256:" + "b" * 64,
+        ),
+    ],
+)
+def test_falkordb_image_flag_reaches_the_pin_check(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    extra: list[str],
+    expected: str | None,
+) -> None:
+    module = runner(monkeypatch)
+    seen: list[str | None] = []
+    monkeypatch.setattr(
+        module, "load_corpus", lambda _: {"queries": [], "corrections": []}
+    )
+    monkeypatch.setattr(module, "provider_environment", lambda *a: {})
+
+    def pin(lock_text: str, override: str | None = None) -> str:
+        assert lock_text
+        seen.append(override)
+        raise module.EnvironmentError("image_pin_invalid")
+
+    monkeypatch.setattr(module, "falkordb_image", pin)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "runner",
+            "--provider-key-file",
+            "unused",
+            "--corpus",
+            "unused",
+            "--output",
+            str(tmp_path / "out.json"),
+            *extra,
+        ],
+    )
+    assert module.main() == 2
+    assert seen == [expected]
