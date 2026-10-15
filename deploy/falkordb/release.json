@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "image_placeholder": "cairn.local/falkordb-runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "local_image": "cairn-local/falkordb-server:v4.20.4-runtime-fix",
-  "archive_sha256": "b36492a4358dbd15b52e874338c975a6606fda30bb5418140b3060312cc881ec"
+  "local_image": "cairn-local/falkordb-server:v4.20.7",
+  "archive_sha256": "1085f22300671b522cbe79407e3d15a300a305d83b2f778f52bb039cc8cf1c49"
 }

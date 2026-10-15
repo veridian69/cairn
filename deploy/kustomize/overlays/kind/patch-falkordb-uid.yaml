@@ -38,10 +38,10 @@
 # Verified against the pinned image before it was written: FalkorDB 4.20.2
 # starts, loads the graph module, refuses unauthenticated clients and
 # serves queries as an arbitrary non-root UID with the root filesystem
-# read-only. The pin moved to v4.20.4 on 28 August 2026 — the version the
-# P-89 attribution runs proved on the compose tier — which re-ran module
-# load and authentication but not this overlay's arbitrary-UID posture;
-# the next kind acceptance run is what re-proves that.
+# read-only. The current local source recipe targets v4.20.7 with Redis
+# 8.10.2. Its build and this overlay's arbitrary-UID posture still require
+# acceptance with the selected local runtime descriptor; the placeholder
+# image is not evidence of either check.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

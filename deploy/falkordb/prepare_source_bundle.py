@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare the corresponding-source bundle for Cairn's FalkorDB derivative."""
+"""Prepare the historical 4.20.4 derivative's corresponding-source bundle.
+
+Use an immutable earlier release's distribution directory. This generator's
+Debian inventory and extracted module checks do not describe local source builds.
+"""
 
 from __future__ import annotations
 
@@ -675,6 +679,11 @@ def prepare(arguments: argparse.Namespace) -> Path:
     falkordb_checkout = cast(Path, arguments.falkordb_checkout).resolve()
     runtime_image = cast(str, arguments.runtime_image)
     provenance = json.loads((distribution / "provenance.json").read_text())
+    if provenance.get("patched_commit") is None:
+        raise BundleError(
+            "historical source-bundle generator requires the immutable earlier "
+            "release's distribution directory; current local builds have no bundle"
+        )
     expected_commit = provenance["patched_commit"]
     source_epoch = int(
         _git(

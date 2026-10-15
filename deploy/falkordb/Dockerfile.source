@@ -3,9 +3,9 @@ FROM ${UBUNTU_BASE} AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates cmake dpkg-dev libssl-dev m4 automake gperf peg libtool autoconf python3 python3-venv python3-dev unzip rsync pkg-config && rm -rf /var/lib/apt/lists/*
 ARG BUILD_JOBS=10
-ARG REDIS_VERSION=8.6.3
+ARG REDIS_VERSION=8.10.2
 COPY redis.tar.gz /build/redis.tar.gz
-RUN --network=none tar -xzf /build/redis.tar.gz -C /build && cd "/build/redis-${REDIS_VERSION}" && export BUILD_TLS=yes BUILD_WITH_MODULES=no && make -j"${BUILD_JOBS}" all && make PREFIX=/opt/redis install
+RUN --network=none tar -xzf /build/redis.tar.gz -C /build && cd "/build/redis-${REDIS_VERSION}" && export BUILD_TLS=yes BUILD_WITH_MODULES=no && make -j"${BUILD_JOBS}" -C src all && make PREFIX=/opt/redis install
 COPY FalkorDB /build/FalkorDB
 COPY cpu_features /build/cpu_features
 RUN printf '%s\n' 'set(CXX_AVX OFF CACHE BOOL "Cairn amd64 baseline" FORCE)' 'set(CXX_AVX512F OFF CACHE BOOL "Cairn amd64 baseline" FORCE)' 'set(CXX_AVX512DQ OFF CACHE BOOL "Cairn amd64 baseline" FORCE)' 'set(VECSIM_BUILD_TESTS OFF CACHE BOOL "No build-time test downloads" FORCE)' 'set(FETCHCONTENT_SOURCE_DIR_CPU_FEATURES "/build/cpu_features" CACHE PATH "Pinned source" FORCE)' > /build/cairn-toolchain.cmake && printf '#!/bin/sh\nprintf "%s\\n"\n' "${BUILD_JOBS}" > /usr/local/bin/nproc && chmod 0755 /usr/local/bin/nproc
@@ -25,7 +25,7 @@ RUN --network=none CMAKE_TOOLCHAIN_FILE=/build/cairn-toolchain.cmake make GCC=1 
 
 ARG UBUNTU_BASE
 FROM ${UBUNTU_BASE}
-LABEL org.opencontainers.image.title="Cairn FalkorDB runtime" org.opencontainers.image.revision="5ac6db8059013c9d74842c02b6a9f1a4858a6a1b" org.opencontainers.image.version="redis-8.6.3_falkordb-4.20.4"
+LABEL org.opencontainers.image.title="Cairn FalkorDB runtime" org.opencontainers.image.revision="2811bc690c37558b345c0f8491c05424729e6953" org.opencontainers.image.version="redis-8.10.2_falkordb-4.20.7"
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates libssl3 libgomp1 libstdc++6 && rm -rf /var/lib/apt/lists/* && groupadd --gid 10001 falkordb && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin falkordb && mkdir -p /var/lib/falkordb/data && chown -R 10001:10001 /var/lib/falkordb
 COPY --from=builder /opt/redis/bin/redis-server /usr/local/bin/redis-server
