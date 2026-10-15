@@ -112,14 +112,14 @@ def test_image_pin_parser_never_executes_shell_values() -> None:
 def test_image_pin_accepts_maintained_and_upstream_repositories(
     repository: str,
 ) -> None:
-    image = f"{repository}:v4.20.4-cairn.1@sha256:{'a' * 64}"
+    image = f"{repository}:v4.20.7-cairn.1@sha256:{'a' * 64}"
     assert environment().falkordb_image(f"FALKORDB_IMAGE={image}\n") == image
 
 
 @pytest.mark.parametrize(
     "image",
     [
-        "ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1",
+        "ghcr.io/veridian69/cairn-falkordb:v4.20.7-cairn.1",
         f"ghcr.io/other/cairn-falkordb:v1@sha256:{'a' * 64}",
         f"ghcr.io/veridian69/cairn-falkordb:$(touch nope)@sha256:{'a' * 64}",
         f"ghcr.io/veridian69/cairn-falkordb:v1@sha256:{'a' * 64};touch nope",

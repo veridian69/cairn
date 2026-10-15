@@ -9,5 +9,8 @@
   "debian_binary_packages": 73,
   "debian_source_packages": 53,
   "debian_source_files": 166,
-  "debian_copyright_files": 73
+  "debian_copyright_files": 73,
+  "artifact_role": "historical_only",
+  "current_runtime_source_bundle": null,
+  "note": "This inventory identifies the September 2026 derivative only. New local source builds do not distribute a corresponding-source bundle; use the immutable earlier release recipe for this archive."
 }

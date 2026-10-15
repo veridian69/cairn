@@ -157,7 +157,7 @@ class FakeContext:
         (self.source / "uv.lock").write_text("version = 1\n")
         (self.source / "deploy").mkdir()
         (self.source / "deploy" / "images.lock").write_text(
-            "FALKORDB_IMAGE=falkordb/falkordb:v4.20.4@sha256:" + "a" * 64 + "\n"
+            "FALKORDB_IMAGE=falkordb/falkordb:v4.20.7@sha256:" + "a" * 64 + "\n"
         )
         self.state: dict[str, Any] = {
             "name": "demo",
@@ -804,7 +804,7 @@ def test_semantic_prepare_uses_protected_credentials_and_pinned_index(
     assert ["--publish", "127.0.0.1:19123:6379"] == run[
         run.index("--publish") : run.index("--publish") + 2
     ]
-    assert run[-1] == "falkordb/falkordb:v4.20.4@sha256:" + "a" * 64
+    assert run[-1] == "falkordb/falkordb:v4.20.7@sha256:" + "a" * 64
 
 
 def test_semantic_port_is_allocated_once_and_reused(

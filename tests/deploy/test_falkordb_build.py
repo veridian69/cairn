@@ -1,12 +1,69 @@
 """The source recipe pins inputs and refuses dirty source before Docker."""
 
+import argparse
+import importlib.util
+import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
 RECIPE = Path(__file__).resolve().parents[2] / "deploy/falkordb"
+
+
+def test_current_source_pins_and_built_records() -> None:
+    build = (RECIPE / "build.sh").read_text()
+    dockerfile = (RECIPE / "Dockerfile.source").read_text()
+    provenance = json.loads((RECIPE / "provenance.json").read_text())
+    commit = "2811bc690c37558b345c0f8491c05424729e6953"
+    redis_sha = "b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3"
+    assert f"falkor_commit={commit}" in build
+    assert "redis_version=8.10.2" in build
+    assert f"redis_sha={redis_sha}" in build
+    assert "cpu_features_commit=438a66e41807cd73e0c403966041b358f5eafc68" in build
+    assert "ARG REDIS_VERSION=8.10.2" in dockerfile
+    assert f'org.opencontainers.image.revision="{commit}"' in dockerfile
+    assert (
+        'org.opencontainers.image.version="redis-8.10.2_falkordb-4.20.7"' in dockerfile
+    )
+    assert provenance["upstream_commit"] == commit
+    assert provenance["redis_source_sha256"] == redis_sha
+    assert provenance["build_source_state"] == "built_and_accepted"
+    assert provenance["module_recompiled"] is True
+    for field in ("module_sha256", "image_index", "platform_manifest", "image_config"):
+        assert re.fullmatch(r"(sha256:)?[0-9a-f]{64}", provenance[field])
+    assert provenance["scanner"]["fixable_high_critical"] == 0
+    release = json.loads((RECIPE / "release.json").read_text())
+    assert release["local_image"] == "cairn-local/falkordb-server:v4.20.7"
+    assert re.fullmatch(r"[0-9a-f]{64}", release["archive_sha256"])
+    assert (
+        json.loads((RECIPE / "source-release.json").read_text())["artifact_role"]
+        == "historical_only"
+    )
+
+
+def test_historical_bundle_refuses_current_provenance_before_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "historical_source_bundle", RECIPE / "prepare_source_bundle.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: pytest.fail("external command called")
+    )
+    with pytest.raises(module.BundleError, match="immutable earlier release"):
+        module.prepare(
+            argparse.Namespace(
+                distribution_dir=RECIPE,
+                falkordb_checkout=tmp_path,
+                runtime_image="unused",
+            )
+        )
 
 
 def test_source_recipe_has_offline_compiles_and_runtime_dependency_check() -> None:
@@ -90,7 +147,7 @@ def test_git_status_failure_refuses_before_docker(tmp_path: Path) -> None:
         r"""#!/bin/sh
 if [ "$1" = clone ]; then eval "target=\${$#}"; mkdir -p "$target"; exit 0; fi
 case "$*" in
-  *" rev-parse HEAD") printf '%s\n' 5ac6db8059013c9d74842c02b6a9f1a4858a6a1b ;;
+  *" rev-parse HEAD") printf '%s\n' 2811bc690c37558b345c0f8491c05424729e6953 ;;
   *" submodule status --recursive") exit 0 ;;
   *" status --porcelain --untracked-files=all") exit 42 ;;
   *) exit 0 ;;

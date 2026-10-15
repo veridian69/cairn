@@ -1,11 +1,19 @@
-# Preparing the FalkorDB corresponding-source bundle
+# Historical FalkorDB corresponding-source bundle
 
-`prepare_source_bundle.py` creates the source companion for the exact
+The current local source recipe targets FalkorDB 4.20.7 and Redis 8.10.2.
+It does not distribute a database image or source bundle. `source-release.json`
+retains the historical archive inventory explicitly as `historical_only`.
+The generator's fixed module, commit epoch and Debian inventory describe the
+older derivative; changing only its version strings would misidentify its source.
+It refuses the current source-build provenance, which has no `patched_commit`,
+before invoking Git or Docker.
+
+For the older derivative, `prepare_source_bundle.py` creates the source companion for the exact
 linux/amd64 `v4.20.4-cairn.1` runtime. It is release preparation machinery;
 running it does not publish an image or source archive.
 
 The generator fails closed unless it can tie every input to the identities in
-`provenance.json`. It includes:
+the immutable earlier release's `provenance.json`. It includes:
 
 - FalkorDB at patched commit `c3fea9bee0d7d4ad6c24308f18a19fc8c81c2996`,
   including all nine direct and five nested submodules at their gitlink commits;
@@ -27,7 +35,9 @@ Debian source metadata, or any checksum mismatch stops generation.
 
 Requirements are Python 3.12 or newer, Git, Docker with the exact accepted
 image already present, and outbound HTTPS access to the official Redis and
-Debian source archives. From the Cairn checkout, create a separate source
+Debian source archives. Run these instructions from the immutable `v0.5.0-rc.4` Cairn checkout, whose
+`deploy/falkordb/` files match that derivative. Do not use the refreshed current
+recipe or `upstream/` copies as the distribution inputs. Create a separate source
 checkout at a new path and initialise its recursive gitlinks:
 
 ```sh
@@ -41,6 +51,7 @@ git -C "$source_checkout" checkout --detach \
 git -C "$source_checkout" submodule sync --recursive
 git -C "$source_checkout" submodule update --init --recursive
 python3 deploy/falkordb/prepare_source_bundle.py \
+  --distribution-dir "$PWD/deploy/falkordb" \
   --falkordb-checkout "$source_checkout" \
   --runtime-image \
     cairn-local/falkordb-server@sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578 \

@@ -29,8 +29,8 @@ def tool() -> ModuleType:
 def descriptor(tmp_path: Path, **changes: Any) -> Path:
     data = {
         "schema_version": 1,
-        "image": "ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@sha256:" + "a" * 64,
-        "local_image": "cairn-local/falkordb-server:v4.20.4-runtime-fix",
+        "image": "ghcr.io/veridian69/cairn-falkordb:v4.20.7-cairn.1@sha256:" + "a" * 64,
+        "local_image": "cairn-local/falkordb-server:v4.20.7-runtime-fix",
         "archive_sha256": hashlib.sha256(b"checked archive").hexdigest(),
     }
     data.update(changes)
@@ -46,7 +46,7 @@ def descriptor(tmp_path: Path, **changes: Any) -> Path:
         {"schema_version": 2},
         {"image": "--help"},
         {"image": "ghcr.io/veridian69/cairn-falkordb:latest"},
-        {"image": "ghcr.io/other/cairn-falkordb:v4.20.4-cairn.1@sha256:" + "a" * 64},
+        {"image": "ghcr.io/other/cairn-falkordb:v4.20.7-cairn.1@sha256:" + "a" * 64},
         {"local_image": "$(touch /tmp/not-allowed)"},
         {"archive_sha256": "A" * 64},
         {"command": "anything"},
@@ -273,7 +273,7 @@ def test_prepare_writes_archive_with_complete_index_and_reports_checksum(
     expected = payload.getvalue()
     path = descriptor(
         tmp_path,
-        image="ghcr.io/veridian69/cairn-falkordb:v4.20.4-cairn.1@" + digest,
+        image="ghcr.io/veridian69/cairn-falkordb:v4.20.7-cairn.1@" + digest,
         archive_sha256=None,
     )
     original_descriptor = path.read_bytes()

@@ -1,25 +1,91 @@
 {
   "schema_version": 1,
   "platform": "linux/amd64",
-  "upstream_version": "4.20.4",
-  "upstream_commit": "5ac6db8059013c9d74842c02b6a9f1a4858a6a1b",
-  "patched_commit": "c3fea9bee0d7d4ad6c24308f18a19fc8c81c2996",
-  "upstream_pr": "https://github.com/FalkorDB/FalkorDB/pull/2838",
-  "module_source_image": "falkordb/falkordb:v4.20.4@sha256:adbddd418916c25618564ff8597a919b08bc76452ebeb74eb985c38d7281df62",
-  "module_sha256": "81ea6b989dc2fd4c9ad905e246018b220b02f0e40c406255f9da4768c1684555",
-  "redis_base": "redis:8.6.3@sha256:4d25e2fe601f7ffaeb4437cb6ced3518bc36edf34ebe98863c80836943d94529",
-  "image_index": "sha256:37a9377eda8a9fd493817869bc2ce4f7d110f054ad74a8fe7d39c3689be3a578",
-  "platform_manifest": "sha256:082208ce77a8ae5b318907e673611d8f0e2b27ed26fa0fd2349f9e0acd0b8f16",
-  "image_config": "sha256:8a1ad120b7894fb6db8c15cef9d4830283f6f267ab7b8a519e75b4fb9439f45e",
-  "module_recompiled": false,
+  "upstream_version": "4.20.7",
+  "upstream_commit": "2811bc690c37558b345c0f8491c05424729e6953",
+  "upstream_source": "https://github.com/FalkorDB/FalkorDB/tree/v4.20.7",
+  "patched_commit": null,
+  "module_source_image": null,
+  "module_sha256": "003643d732f14e52fac6f7a3835cd8ebbe69292eeec4a20fedd73db316915337",
+  "redis_version": "8.10.2",
+  "redis_source": "https://download.redis.io/releases/redis-8.10.2.tar.gz",
+  "redis_source_sha256": "b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3",
+  "redis_hash_source": "https://github.com/redis/redis-hashes/blob/master/README",
+  "redis_base": null,
+  "ubuntu_base": "ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4",
+  "cpu_features_commit": "438a66e41807cd73e0c403966041b358f5eafc68",
+  "recursive_dependencies": [
+    {
+      "path": "deps/LAGraph",
+      "commit": "42a1f15b3ef0a842b3ed18398bdb4474f076a3dd"
+    },
+    {
+      "path": "deps/RediSearch",
+      "commit": "311f901265edda45e4bf84c948d91dd34ed8ec11"
+    },
+    {
+      "path": "deps/RediSearch/deps/VectorSimilarity",
+      "commit": "98d6a4d25bb7467ddbdce78155cc461e071bed44"
+    },
+    {
+      "path": "deps/RediSearch/deps/googletest",
+      "commit": "e2239ee6043f73722e7aa812a459f54a28552929"
+    },
+    {
+      "path": "deps/RediSearch/deps/hiredis",
+      "commit": "c14775b4e48334e0262c9f168887578f4a368b5d"
+    },
+    {
+      "path": "deps/RediSearch/deps/libuv",
+      "commit": "0c1fa696aa502eb749c2c4735005f41ba00a27b8"
+    },
+    {
+      "path": "deps/RediSearch/deps/readies",
+      "commit": "9f19bb2d56f5c60e842e758d8d1396b527031ea3"
+    },
+    {
+      "path": "deps/libcsv",
+      "commit": "b1d5212831842ee5869d99bc208a21837e4037d5"
+    },
+    {
+      "path": "deps/libcurl",
+      "commit": "68720b4837284335b2d63cb358f8f6ce65f5bc55"
+    },
+    {
+      "path": "deps/oniguruma",
+      "commit": "4ef89209a239c1aea328cf13c05a2807e5c146d1"
+    },
+    {
+      "path": "deps/quickjs",
+      "commit": "1fdc768fdc8571300755cdd3e4654ce99c0255ce"
+    },
+    {
+      "path": "deps/rax",
+      "commit": "ba4529f6c836c9ff1296cde12b8557329f5530b7"
+    },
+    {
+      "path": "deps/utf8proc",
+      "commit": "e5e799221b45bbb90f5fdc5c69b6b8dfbf017e78"
+    },
+    {
+      "path": "deps/xxHash",
+      "commit": "e626a72bc2321cd320e953a0ccf1584cad60f363"
+    }
+  ],
+  "image_index": "sha256:f009b3770a9899516951059b199d0d2bd7b670c953cef42f139419b76ac60751",
+  "platform_manifest": "sha256:46261ec24bdb13fcf810d4786ed21bc57581de5926f876b29049d5bf7f81cff0",
+  "image_config": "sha256:de562f072fef53abe6ae01646120f363f41b4392106a58e5645fe798e1d75765",
+  "module_recompiled": true,
   "scanner": {
     "version": "0.70.0",
-    "database_sha256": "3112b1f2645bf7062ef4ccff085b27148a8d46c2c5de0eff63e1eb37b6617dd8",
-    "date": "2026-09-15",
-    "high": 36,
+    "database_updated_at": "2026-10-14T13:10:32Z",
+    "date": "2026-10-15",
+    "scope": "os-pkgs (ubuntu 24.04); Redis and the FalkorDB module are compiled from source and invisible to the scanner",
+    "high": 0,
     "critical": 0,
     "fixable_high_critical": 0
   },
-  "build_source_state": "The image was built from upstream_commit with the uncommitted runtime grouping patch; patched_commit subsequently records the matching recipe bytes.",
-  "attestation_scope": "Preserved BuildKit attestation is supplemental; request and resolved dependency completeness are false. Exact recipe hashes and component source inventory provide separate provenance."
+  "build_source_state": "built_and_accepted",
+  "build_recipe": "Dockerfile.source compiles the upstream module and the Redis core, without its bundled modules, from verified source; no Cairn patch is applied to the upstream checkout.",
+  "attestation_scope": "Built 15 October 2026 by deploy/falkordb/build.sh from the pins above; accepted by scan, graph synthetic acceptance and volume rehearsals from 4.20.0 and 4.20.4 to 4.20.7. The exported archive is local, not published."
 }

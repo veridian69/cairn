@@ -1814,7 +1814,7 @@ def test_report_refuses_incomplete_or_unobserved_check_claims(
             "runtime_observations",
             lambda value: value[1].__setitem__(
                 "spec_image",
-                f"registry.example.invalid/falkordb:v4.20.4@{FALKORDB_DIGEST}",
+                f"registry.example.invalid/falkordb:v4.20.7@{FALKORDB_DIGEST}",
             ),
         ),
         ("network_observations", lambda value: value.pop()),
@@ -2019,7 +2019,7 @@ def test_report_and_outcome_claim_are_both_fsynced(
 
 
 def test_official_short_falkordb_reference_is_canonicalised(state: ModuleType) -> None:
-    upstream = f"falkordb/falkordb:v4.20.4@{'sha256:' + 'a' * 64}"
+    upstream = f"falkordb/falkordb:v4.20.7@{'sha256:' + 'a' * 64}"
     assert state.canonical_image_reference(upstream) == f"docker.io/{upstream}"
 
 

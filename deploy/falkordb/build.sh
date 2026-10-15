@@ -12,10 +12,10 @@ if [[ ! $jobs =~ ^([1-9]|10)$ ]]; then
 fi
 
 recipe_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-falkor_commit=5ac6db8059013c9d74842c02b6a9f1a4858a6a1b
+falkor_commit=2811bc690c37558b345c0f8491c05424729e6953
 cpu_features_commit=438a66e41807cd73e0c403966041b358f5eafc68
-redis_version=8.6.3
-redis_sha=9f54d4458c52be5472cdd1347d737f1d488b520fc3d0911cba47302de8d836e2
+redis_version=8.10.2
+redis_sha=b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3
 output_image=cairn-local/falkordb-server:rebuild
 for command in docker git curl sha256sum mktemp; do
   command -v "$command" >/dev/null || { printf 'required command missing: %s\n' "$command" >&2; exit 1; }

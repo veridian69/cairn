@@ -1,16 +1,28 @@
 # Build FalkorDB locally
 
 Cairn ships a recipe for a Linux amd64 server runtime. The operator builds it
-locally from pinned source: FalkorDB 4.20.4 at commit
-`5ac6db8059013c9d74842c02b6a9f1a4858a6a1b` with its exact recursive gitlinks,
-Redis 8.6.3 with SHA-256
-`9f54d4458c52be5472cdd1347d737f1d488b520fc3d0911cba47302de8d836e2`, and
+locally from pinned source: FalkorDB 4.20.7 at commit
+`2811bc690c37558b345c0f8491c05424729e6953` with its exact recursive gitlinks,
+Redis 8.10.2 with SHA-256
+`b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3`, and
 `google/cpu_features` at commit
 `438a66e41807cd73e0c403966041b358f5eafc68`. The builder and final runtime
 stages use Ubuntu 24.04 pinned at digest
 `sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4`.
 Cairn does not publish this database image to GHCR or attach database images or
 source bundles to new releases.
+
+These pins are Cairn's local runtime. They were built and
+accepted on 15 October 2026;
+`provenance.json` records that build's identities and scan, and `release.json`
+its local tag and archive hash. Each operator's own build has its own identity:
+the actual local descriptor comes from `scripts/falkordb_runtime.py` after the
+build. `source-release.json` explicitly identifies the historical bundle only.
+
+The image scan covers the Ubuntu packages only. Redis and the FalkorDB module
+are compiled from source and carry no package metadata, so a scanner cannot see
+them; their security currency rests on the pins above, which must be checked
+against upstream releases by hand.
 
 The `FALKORDB_IMAGE` value in `deploy/images.lock` and the committed Kubernetes
 renders is an all-zero, deliberately unusable placeholder. It is not a fallback
@@ -61,7 +73,8 @@ The build is accepted only when `build.sh` exits zero, prints the final `Built
 cairn-local/falkordb-server:rebuild` line, and `falkordb_runtime.py` exits zero
 after writing all three files above. Any non-zero exit, missing final line,
 missing output, checksum failure or diagnostic outside those listed categories
-remains a failure to investigate.
+remains a failure to investigate. The 15 October 2026 build at these pins
+emitted diagnostics in those categories only.
 
 For a guided Docker or Linux native semantic install, provide
 `--falkordb-runtime /absolute/path/to/build/falkordb-local/runtime.json` alongside
@@ -171,3 +184,11 @@ Older RC3/RC4 tags described a prebuilt maintained image and paired source
 bundle. Their metadata and historical acceptance do not identify a fresh local
 build. Use documentation from those immutable tags when operating those older
 releases. New installations follow the recipe and local receipts above.
+`prepare_source_bundle.py` remains specific to the historical derivative's
+Debian inventory and extracted module; see [SOURCE_BUNDLE.md](SOURCE_BUNDLE.md).
+
+Rollback means restoring the pre-upgrade volume or running `cairn rebuild-index`
+to regenerate derived index state. An in-place downgrade is not part of this recipe.
+Redis 8.10.2 saves RDB format 15, which Redis 8.6.x refuses to load, so copy
+`dump.rdb` after stopping the old container and before the new image first
+starts; Cairn's own backups do not include the graph.

@@ -349,6 +349,11 @@ _ARROW_GAP = re.compile(r"[ \t]*-+>[ \t]*|[ \t]+>[ \t]*")
 _VERB_GAP = re.compile(r"[ \t]+(?:is|was)[ \t]+", re.IGNORECASE)
 _SPACE_GAP = re.compile(r"[ \t]+")
 _WORD = re.compile(r"\S+")
+# A flag word may open with punctuation or symbols (``(`--password-raw X`)``,
+# ``**--password-raw X**``, ``>--password-raw X``), at the word start or after
+# any ``=`` in it (``X="--password-raw X"``, ``A[0]=``, ``A+=``) (#125). The
+# run excludes ``=``, so each attempt stops at the next one: linear per word.
+_FLAG_START = re.compile(r"(?:(?<!\S)|(?<==))(?:[^\w\s=]|_)*--")
 
 
 def _shannon_entropy(text: str) -> float:
@@ -441,14 +446,16 @@ def _keyword_labels(
     if _VERB_GAP.fullmatch(text, *gap) is not None:
         return True
     # Flags are judged on the whole whitespace-delimited word around the
-    # keyword, found by bisection in spans computed once per text.
+    # keyword, found by bisection in spans computed once per text. The word's
+    # opening is read last: only keywords whose word ends before the candidate
+    # reach it, so a long opening is not rescanned for every keyword inside it.
     word_starts, word_ends = words
     index = bisect_right(word_starts, keyword.start()) - 1
     word_end = word_ends[index]
     if (
-        text.startswith("--", word_starts[index])
-        and word_end <= candidate.start()
+        word_end <= candidate.start()
         and _SPACE_GAP.fullmatch(text, word_end, candidate.start()) is not None
+        and _FLAG_START.search(text, word_starts[index], keyword.start()) is not None
     ):
         return True
     # A real word needs a letter: ``PASSWORD_1 X`` and ``password(1) X`` label.
