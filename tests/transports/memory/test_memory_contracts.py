@@ -50,10 +50,12 @@ def test_i27_proposal_key_schemas_match_variant_not_version(operation: str) -> N
 
 def test_i27_schema_specialisation_does_not_mutate_shared_v1_keys() -> None:
     from cairn.transports.mcp.server import build_tool
+    from cairn.transports.memory.instructions import SCOPE_DESCRIPTION
     from cairn.transports.memory.operations import OPERATIONS
     from cairn.transports.rest.v1.openapi import _path_item
 
-    # Every non-proposal operation must still use precisely its shared builder.
+    # Every non-proposal operation must still use precisely its shared builder,
+    # plus #108's MCP-only scope hint.
     document = openapi_document()
     tools = {t["name"]: t for t in manifest_document()["tools"]}
     for entry in OPERATIONS:
@@ -63,7 +65,9 @@ def test_i27_schema_specialisation_does_not_mutate_shared_v1_keys() -> None:
             "proposal-reject",
         }:
             assert document["paths"][entry.path] == _path_item(entry)
-            assert tools[entry.tool]["inputSchema"] == build_tool(entry).inputSchema
+            expected = build_tool(entry).inputSchema
+            expected["properties"]["scope"]["description"] = SCOPE_DESCRIPTION
+            assert tools[entry.tool]["inputSchema"] == expected
 
 
 @pytest.mark.parametrize("name,mcp", [(OPENAPI_NAME, False), (MANIFEST_NAME, True)])

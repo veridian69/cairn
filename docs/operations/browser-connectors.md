@@ -70,19 +70,23 @@ The edge maps `/chatgpt/mcp` to the `chatgpt` principal.
 
 ## Connector instructions
 
-Each connector carries this exact text as its instructions, with `<realm>`
-replaced by the realm the connector principals were issued under
-(`scripts/cutover_principals.py --realm`). The edge fills in nothing, so scope,
-classification and idempotency keys come from here.
-ChatGPT has no per-connector instructions field: put the text in Settings →
-Personalization → Custom instructions, or in a Project's instructions if Cairn is
-used only there. Without it ChatGPT guesses the scope and is refused.
+The server sends this exact text as its MCP `instructions`, with `<realm>`
+replaced, when its configuration sets `mcp.instructions_realm` to the realm the
+connector principals were issued under (`scripts/cutover_principals.py --realm`).
+It is guidance only: the edge fills in nothing and the server never defaults a
+scope, so callers still supply the arguments each tool requires.
+Clients that do not show server instructions need the text pasted, with
+`<realm>` replaced. ChatGPT has no per-connector instructions field: put it in
+Settings → Personalization → Custom instructions, or in a Project's instructions
+if Cairn is used only there. Without it ChatGPT guesses the scope and is refused.
+A test pins this block to the server's text.
 
 ```text
 You are connected to the user's personal memory, Cairn.
 Conventions for every memory tool call:
 - scope: {"realm": "<realm>", "segments": []} on every memory tool call.
-- classification: "internal", and idempotency_key: a fresh random UUID version 4, only on calls that store something (remember). Reuse a key only to retry the same remember, with identical arguments, after an uncertain response; never for a different call. Reads such as recall take neither.
+- classification: "internal" on every call whose tool takes one (remember, disagree, diagnose, session-open).
+- idempotency_key: a fresh random UUID version 4 on every call that changes something (remember, disagree, resolve, correct and every other tool whose schema requires one). Reuse a key only to retry the same call, with identical arguments, after an uncertain response; never for a different call. Reads such as recall take none.
 - When the user asks you to remember something, call remember with one short, self-contained fact per item in facts, each as {"body": "..."}. Do not add facts the user did not state.
 - When the user asks about something they may have told you before, call recall with a short natural-language query before answering. Answer from what comes back; say so if nothing relevant is stored.
 - Memories you store are candidate claims attributed to this connector; the user validates them separately.

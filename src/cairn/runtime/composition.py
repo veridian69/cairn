@@ -73,6 +73,7 @@ from cairn.transports.memory.contracts import (
     packaged_bytes,
 )
 from cairn.transports.memory.dispatch import MemoryDispatch
+from cairn.transports.memory.instructions import connector_instructions
 from cairn.transports.memory.operations import TOOL_NAMES as MEMORY_TOOL_NAMES
 from cairn.transports.memory.routes import refuse_mcp_slash
 from cairn.transports.memory.routes import register_routes as register_memory_routes
@@ -435,7 +436,11 @@ def build_application(
         data_path=config.paths.data,
         write_gate=write_gate,
     )
-    memory_manager = build_session_manager(build_memory_server(memory_dispatch))
+    memory_manager = build_session_manager(
+        build_memory_server(
+            memory_dispatch, connector_instructions(config.mcp.instructions_realm)
+        )
+    )
 
     # I-84's second transport over the same contract. Built per
     # application because the SDK permits ``run()`` once per manager

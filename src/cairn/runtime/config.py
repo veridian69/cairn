@@ -23,6 +23,8 @@ _SAFE_ERROR_FIELDS = frozenset(
         "paths.credentials",
         "attic",
         "attic.enabled",
+        "mcp",
+        "mcp.instructions_realm",
     }
 )
 
@@ -158,6 +160,18 @@ class DeliveryConfig(BaseModel):
     chunk_size: int = Field(default=1, ge=1, le=500)
 
 
+class McpConfig(BaseModel):
+    """#108: the realm the memory MCP instructions name. Guidance text only;
+    the server never defaults a call's scope from it. Unset sends no
+    instructions."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    # The realm-id shape of ``authority.gate``; importing it here is circular.
+    instructions_realm: str | None = Field(
+        default=None, pattern=r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    )
+
+
 class CairnConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     schema_version: Literal["cairn.config/v1"]
@@ -168,6 +182,7 @@ class CairnConfig(BaseModel):
     attic: AtticConfig = Field(default=AtticConfig(enabled=False))
     graphiti: GraphitiConfig = Field(default=GraphitiConfig(enabled=False))
     delivery: DeliveryConfig = Field(default=DeliveryConfig())
+    mcp: McpConfig = Field(default=McpConfig())
 
 
 class _StrictSafeLoader(yaml.SafeLoader):

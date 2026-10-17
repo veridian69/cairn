@@ -21,8 +21,14 @@ build. `source-release.json` explicitly identifies the historical bundle only.
 
 The image scan covers the Ubuntu packages only. Redis and the FalkorDB module
 are compiled from source and carry no package metadata, so a scanner cannot see
-them; their security currency rests on the pins above, which must be checked
-against upstream releases by hand.
+them; their security currency rests on the pins above.
+`scripts/check-runtime-currency` compares those pins with upstream releases: it
+reports each component as `current`, `behind-patch` (exit 1; for Redis it names
+newer patches whose notes say `SECURITY`) or `newer-line-available` (information
+only). `--container NAME` reads the pins from a running runtime container's
+image labels instead, and `--status FILE` also writes the result as JSON for a
+scheduled job to report. It never changes a pin; a pin change still goes
+through build, scan, acceptance and rollout.
 
 The `FALKORDB_IMAGE` value in `deploy/images.lock` and the committed Kubernetes
 renders is an all-zero, deliberately unusable placeholder. It is not a fallback
@@ -187,8 +193,10 @@ releases. New installations follow the recipe and local receipts above.
 `prepare_source_bundle.py` remains specific to the historical derivative's
 Debian inventory and extracted module; see [SOURCE_BUNDLE.md](SOURCE_BUNDLE.md).
 
-Rollback means restoring the pre-upgrade volume or running `cairn rebuild-index`
-to regenerate derived index state. An in-place downgrade is not part of this recipe.
+Rollback means restoring the pre-upgrade volume, which is exact only if nothing
+was written after it was copied, or running `cairn rebuild-index` on an empty
+volume to regenerate derived index state. After restoring a Cairn backup,
+always rebuild. An in-place downgrade is not part of this recipe.
 Redis 8.10.2 saves RDB format 15, which Redis 8.6.x refuses to load, so copy
 `dump.rdb` after stopping the old container and before the new image first
 starts; Cairn's own backups do not include the graph.
