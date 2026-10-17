@@ -1,0 +1,24 @@
+{
+ "node_id": "MDM6VGFnNjY4NjczNjY1OmU2MzFhMWYzODkxNzFmZWY1YTQxZGRhMDA1N2FkMzYyY2ViMzdjZTM=",
+ "sha": "e631a1f389171fef5a41dda0057ad362ceb37ce3",
+ "url": "https://api.github.com/repos/FalkorDB/FalkorDB/git/tags/e631a1f389171fef5a41dda0057ad362ceb37ce3",
+ "tagger": {
+  "name": "swilly22",
+  "email": "roi@redislabs.com",
+  "date": "2019-10-30T15:11:50Z"
+ },
+ "object": {
+  "sha": "f75217889a02a2f0964dc06d177b440f47d7a034",
+  "type": "commit",
+  "url": "https://api.github.com/repos/FalkorDB/FalkorDB/git/commits/f75217889a02a2f0964dc06d177b440f47d7a034"
+ },
+ "tag": "v1.99.4",
+ "message": "v1.99.4\n",
+ "verification": {
+  "verified": false,
+  "reason": "unsigned",
+  "signature": null,
+  "payload": null,
+  "verified_at": null
+ }
+}

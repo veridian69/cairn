@@ -111,7 +111,8 @@
             "title": "Observation"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [
@@ -599,7 +600,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [
@@ -914,7 +916,8 @@
             "title": "Observed At"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [
@@ -1126,7 +1129,8 @@
             "type": "boolean"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "trust_filters": {
             "items": {
@@ -1649,7 +1653,8 @@
             "type": "boolean"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "time_basis": {
             "anyOf": [
@@ -2294,7 +2299,8 @@
             "title": "Query"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "start": {
             "anyOf": [
@@ -2529,7 +2535,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [
@@ -3046,7 +3053,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [
@@ -3239,7 +3247,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "selected_fact_id": {
             "anyOf": [
@@ -3450,7 +3459,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "superseded_by": {
             "anyOf": [
@@ -3662,7 +3672,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -4216,7 +4227,8 @@
             "title": "Replaces Turn Id"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -4827,7 +4839,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -5372,7 +5385,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -5918,7 +5932,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -6456,7 +6471,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -6971,7 +6987,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -7508,7 +7525,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "session_id": {
             "title": "Session Id",
@@ -8063,7 +8081,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "source_fact_id": {
             "title": "Source Fact Id",
@@ -8276,7 +8295,8 @@
             "type": "integer"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [
@@ -8585,7 +8605,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [
@@ -8872,7 +8893,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           },
           "target_classification": {
             "enum": [
@@ -9106,7 +9128,8 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/$defs/ScopeBody"
+            "$ref": "#/$defs/ScopeBody",
+            "description": "The server never fills in a scope from its configuration. Its instructions name this deployment's realm when one is configured."
           }
         },
         "required": [

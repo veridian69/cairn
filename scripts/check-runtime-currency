@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Compare the self-built Redis and FalkorDB pins with upstream releases.
+
+The image scan sees only Ubuntu packages: Redis and the FalkorDB module are
+compiled from source and carry no package metadata, so falling behind on them
+never fails a scan (issue 120). Read-only, no credentials: it uses `gh api`
+when present, otherwise unauthenticated GitHub API calls.
+
+Pins come from `deploy/falkordb/build.sh`, or with `--container` from the
+OCI labels of a running runtime container. `--status` also writes the result
+as JSON for a scheduler to pick up.
+
+Exit 0 when every pin is the newest patch on its line, 1 when any is
+behind-patch, 2 when the check itself could not run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import re
+import shutil
+import subprocess
+import sys
+import urllib.request
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+BUILD_SCRIPT = REPOSITORY_ROOT / "deploy/falkordb/build.sh"
+STABLE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+HASHED = re.compile(r"^hash redis-(\d+\.\d+\.\d+)\.tar\.gz ", re.MULTILINE)
+
+Version = tuple[int, int, int]
+
+
+class CurrencyError(RuntimeError):
+    pass
+
+
+def fixture_name(path: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", path).strip("_") + ".json"
+
+
+def fetch(path: str, fixtures: Path | None) -> Any:
+    if fixtures is not None:
+        return json.loads((fixtures / fixture_name(path)).read_text())
+    if shutil.which("gh"):
+        try:
+            result = subprocess.run(
+                ["gh", "api", path], capture_output=True, text=True, timeout=60
+            )
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            if result.returncode == 0:
+                return json.loads(result.stdout)
+        # An unauthenticated or stalled gh falls back to the public API.
+    request = urllib.request.Request(
+        "https://api.github.com/" + path,
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.loads(response.read())
+
+
+def pins(build_script: Path) -> dict[str, str]:
+    text = build_script.read_text()
+    found = dict(
+        re.findall(r"^(falkor_commit|redis_version)=(\S+)$", text, re.MULTILINE)
+    )
+    if set(found) != {"falkor_commit", "redis_version"}:
+        raise CurrencyError(f"{build_script}: Redis or FalkorDB pin missing")
+    return found
+
+
+def container_pins(name: str) -> dict[str, str]:
+    result = subprocess.run(
+        ["docker", "inspect", "--format", "{{json .Config.Labels}}", name],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode:
+        raise CurrencyError(f"docker inspect {name} failed")
+    labels = json.loads(result.stdout) or {}
+    version = re.fullmatch(
+        r"redis-(\d+\.\d+\.\d+)_falkordb-\S+",
+        labels.get("org.opencontainers.image.version", ""),
+    )
+    commit = labels.get("org.opencontainers.image.revision", "")
+    if not version or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise CurrencyError(f"{name}: image labels carry no Redis and FalkorDB pins")
+    return {"falkor_commit": commit, "redis_version": version[1]}
+
+
+def write_status(path: Path, code: int, lines: list[str], error: str) -> None:
+    status = {
+        "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "exit": code,
+        "result": {0: "current", 1: "behind-patch"}.get(code, "failed"),
+        "lines": lines,
+        "error": error,
+    }
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(json.dumps(status, indent=2) + "\n")
+    temp.replace(path)
+
+
+def parse(tag: str) -> Version | None:
+    match = STABLE.match(tag)
+    return (int(match[1]), int(match[2]), int(match[3])) if match else None
+
+
+def text(version: Version, prefix: str) -> str:
+    return prefix + ".".join(map(str, version))
+
+
+def stable_releases(repo: str, fixtures: Path | None) -> dict[Version, str]:
+    releases = fetch(f"repos/{repo}/releases?per_page=100", fixtures)
+    found = {}
+    for release in releases:
+        version = parse(release["tag_name"])
+        if version and not release["draft"] and not release["prerelease"]:
+            found[version] = release.get("body") or ""
+    return found
+
+
+def report(
+    component: str,
+    pinned: Version,
+    available: set[Version],
+    prefix: str,
+    notes: list[str],
+) -> tuple[str, bool]:
+    line = pinned[:2]
+    on_line = [v for v in available if v[:2] == line]
+    if pinned not in on_line:
+        raise CurrencyError(
+            f"{component} {text(pinned, prefix)}: not an upstream release"
+        )
+    newest = max(on_line)
+    newer_lines = sorted(
+        max(v for v in available if v[:2] == other)
+        for other in {v[:2] for v in available}
+        if other > line
+    )
+    label = f"{component} {text(pinned, prefix)}"
+    details = list(notes)
+    if newer_lines:
+        joined = ", ".join(text(v, prefix) for v in newer_lines)
+        details.append(f"newer lines (information only): {joined}")
+    if newest > pinned:
+        status = f"behind-patch; {text(newest, prefix)} available"
+    elif newer_lines:
+        status = "newer-line-available"
+    else:
+        status = "current"
+    return f"{label}: " + "; ".join([status, *details]), newest > pinned
+
+
+def redis(version: str, fixtures: Path | None) -> tuple[str, bool]:
+    pinned = parse(version)
+    if pinned is None:
+        raise CurrencyError(f"redis_version {version!r} is not major.minor.patch")
+    releases = stable_releases("redis/redis", fixtures)
+    readme = fetch("repos/redis/redis-hashes/contents/README", fixtures)
+    hashed = {
+        parse(v) for v in HASHED.findall(base64.b64decode(readme["content"]).decode())
+    }
+    # A release counts once its tarball hash is published, as build.sh needs it.
+    available = {v for v in releases if v in hashed}
+    notes = []
+    unhashed = sorted(v for v in releases if v not in hashed and v[:2] == pinned[:2])
+    if unhashed:
+        notes.append(
+            "not yet in redis-hashes: " + ", ".join(text(v, "") for v in unhashed)
+        )
+    # Hashed or not: a security release must be reported as soon as it exists.
+    security = sorted(
+        v
+        for v in releases
+        if v[:2] == pinned[:2]
+        and v > pinned
+        and re.search(r"\bSECURITY\b", releases[v])
+    )
+    if security:
+        notes.append("SECURITY in " + ", ".join(text(v, "") for v in security))
+    return report("redis", pinned, available, "", notes)
+
+
+def falkordb(commit: str, fixtures: Path | None) -> tuple[str, bool]:
+    refs = fetch("repos/FalkorDB/FalkorDB/git/matching-refs/tags/v", fixtures)
+    tagged = []
+    for ref in refs:
+        version = parse(ref["ref"].removeprefix("refs/tags/"))
+        target = ref["object"]
+        if version is None:
+            continue
+        if target["type"] == "tag":
+            target = fetch(
+                f"repos/FalkorDB/FalkorDB/git/tags/{target['sha']}", fixtures
+            )["object"]
+        if target["sha"] == commit:
+            tagged.append(version)
+    if len(tagged) != 1:
+        raise CurrencyError(
+            f"falkor_commit {commit[:12]} is not exactly one release tag"
+        )
+    available = set(stable_releases("FalkorDB/FalkorDB", fixtures))
+    return report("falkordb", tagged[0], available, "v", [f"commit {commit[:12]}"])
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--build-script", type=Path, default=BUILD_SCRIPT)
+    source.add_argument("--container", help="read pins from this container's labels")
+    parser.add_argument(
+        "--fixtures", type=Path, help="read recorded API responses instead of GitHub"
+    )
+    parser.add_argument("--status", type=Path, help="also write the result as JSON")
+    args = parser.parse_args(argv)
+    lines: list[str] = []
+    error = ""
+    try:
+        if args.container:
+            pinned = container_pins(args.container)
+        else:
+            pinned = pins(args.build_script)
+        results = [
+            redis(pinned["redis_version"], args.fixtures),
+            falkordb(pinned["falkor_commit"], args.fixtures),
+        ]
+        lines = [line for line, _ in results]
+        code = 1 if any(behind for _, behind in results) else 0
+    except Exception as exc:
+        # Any failure is exit 2, never 1: an unattended run must not read as behind-patch.
+        error = f"runtime currency check failed: {exc!r}"
+        code = 2
+    for line in lines:
+        print(line)
+    if error:
+        print(error, file=sys.stderr)
+    if args.status:
+        try:
+            write_status(args.status, code, lines, error)
+        except OSError as exc:
+            print(f"status not written: {exc!r}", file=sys.stderr)
+            return 2
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

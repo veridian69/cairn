@@ -28,6 +28,7 @@ from cairn.transports.mcp.server import (
 )
 from cairn.transports.memory.diagnostic_audit import argument_fingerprint
 from cairn.transports.memory.dispatch import MemoryDispatch
+from cairn.transports.memory.instructions import SCOPE_DESCRIPTION
 from cairn.transports.memory.operations import (
     AUDITED_READ_TOOL_NAMES,
     BY_TOOL,
@@ -60,6 +61,8 @@ PROPOSAL_KEY_SCHEMA = {
 
 def build_memory_tool(entry: OperationEntry) -> Tool:
     tool = build_tool(entry)
+    if "scope" in tool.inputSchema["properties"]:
+        tool.inputSchema["properties"]["scope"]["description"] = SCOPE_DESCRIPTION
     if entry.tool in PROPOSAL_TOOL_NAMES and entry.mutation:
         tool.inputSchema["properties"]["idempotency_key"] = dict(PROPOSAL_KEY_SCHEMA)
     if entry.tool in {"suggest", "proposal-list", "proposal-read"}:
@@ -75,8 +78,8 @@ def build_memory_tool(entry: OperationEntry) -> Tool:
 TOOLS = tuple(build_memory_tool(entry) for entry in OPERATIONS)
 
 
-def build_server(dispatch: MemoryDispatch) -> Server:
-    server: Server = Server("cairn-memory")
+def build_server(dispatch: MemoryDispatch, instructions: str | None = None) -> Server:
+    server: Server = Server("cairn-memory", instructions=instructions)
 
     @server.list_tools()  # type: ignore[no-untyped-call, untyped-decorator]
     async def list_tools() -> list[Tool]:

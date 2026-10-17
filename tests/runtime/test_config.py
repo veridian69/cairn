@@ -9,6 +9,7 @@ from cairn.runtime.config import (
     ConfigError,
     DeliveryConfig,
     GraphitiConfig,
+    McpConfig,
     load_config,
     resolve_config_path,
 )
@@ -478,3 +479,21 @@ def test_graphiti_edge_batch_max_facts_accepts_the_bounds() -> None:
         GraphitiConfig(enabled=True, edge_batch_max_facts=500).edge_batch_max_facts
         == 500
     )
+
+
+def test_mcp_instructions_realm_defaults_to_none() -> None:
+    assert McpConfig().instructions_realm is None
+
+
+def test_mcp_instructions_realm_rejects_an_invalid_realm_id() -> None:
+    with pytest.raises(ValidationError):
+        McpConfig(instructions_realm="Not A Realm")
+
+
+def test_config_with_mcp_block_parses_instructions_realm(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    write_config(config_path, f"{CONFIG}mcp:\n  instructions_realm: cairn\n")
+
+    config = load_config(config_path)
+
+    assert config.mcp.instructions_realm == "cairn"
