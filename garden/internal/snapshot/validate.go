@@ -104,6 +104,21 @@ func stagedSchemaVersion(db *sql.DB, kind string) (int, error) {
 	}
 }
 
+// gatewaySchemaV1 is the state.db schema the gateway adds in internal/garden/store.go.
+// It is optional, because a daemon-only data directory never has it, but when present
+// all of it must match exactly. The gateway creates both tables in one transaction.
+var gatewaySchemaV1 = map[string]string{
+	"garden_binding": `
+CREATE TABLE garden_binding (singleton INTEGER PRIMARY KEY CHECK(singleton=1), binding TEXT NOT NULL)`,
+	"garden_inbox": `
+CREATE TABLE garden_inbox (
+ principal TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, participant TEXT NOT NULL UNIQUE,
+ generation TEXT NOT NULL, cursor INTEGER NOT NULL, pending_seq INTEGER NOT NULL DEFAULT 0,
+ pending_id TEXT NOT NULL DEFAULT '', receipt TEXT NOT NULL DEFAULT '', last_receipt TEXT NOT NULL DEFAULT '',
+ consumer TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0
+)`,
+}
+
 func validateStateSchemaV1(db *sql.DB) error {
 	expected := map[string]string{
 		"participants": `
@@ -143,7 +158,7 @@ func validateStateSchemaV1(db *sql.DB) error {
 		return err
 	}
 	defer rows.Close()
-	seen := make(map[string]bool, len(expected))
+	seen := make(map[string]bool, len(expected)+len(gatewaySchemaV1))
 	for rows.Next() {
 		var objectType string
 		var name string
@@ -152,6 +167,9 @@ func validateStateSchemaV1(db *sql.DB) error {
 			return err
 		}
 		want, ok := expected[name]
+		if !ok {
+			want, ok = gatewaySchemaV1[name]
+		}
 		if !ok || objectType != "table" || !definition.Valid ||
 			normaliseSchemaSQL(definition.String) != normaliseSchemaSQL(want) {
 			return fmt.Errorf("unexpected schema object %s %s", objectType, name)
@@ -161,7 +179,16 @@ func validateStateSchemaV1(db *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if len(seen) != len(expected) {
+	gatewaySeen := 0
+	for name := range gatewaySchemaV1 {
+		if seen[name] {
+			gatewaySeen++
+		}
+	}
+	if gatewaySeen != 0 && gatewaySeen != len(gatewaySchemaV1) {
+		return fmt.Errorf("partial gateway state schema objects")
+	}
+	if len(seen)-gatewaySeen != len(expected) {
 		return fmt.Errorf("missing state schema objects")
 	}
 	return nil

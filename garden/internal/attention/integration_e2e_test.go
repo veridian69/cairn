@@ -241,9 +241,8 @@ func TestAttentionAdaptersEndToEndWithCentralGarden(t *testing.T) {
 
 	t.Run("codex", func(t *testing.T) {
 		runCtx, runCancel := context.WithCancel(ctx)
-		command := exec.CommandContext(runCtx, os.Args[0], "-test.run=TestCodexWireHelper")
-		command.Env = append(os.Environ(), "GARDEN_CODEX_TEST_HELPER=accept", "GARDEN_CODEX_MESSAGE_ID="+messageIDs[1])
-		host, err := startCodex(runCtx, command, "thread-target")
+		fake := newFakeCodex(t, messageIDs[1], "accept")
+		host, err := startCodex(runCtx, fake.socket, "thread-target")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -291,7 +290,7 @@ func TestAttentionAdaptersEndToEndWithCentralGarden(t *testing.T) {
 			}
 		}))
 		defer hostHTTP.Close()
-		host, err := NewOpenCode(hostHTTP.URL, "ses_target", "", "")
+		host, err := NewOpenCode(hostHTTP.URL, "ses_target", "", "", "1")
 		if err != nil {
 			t.Fatal(err)
 		}

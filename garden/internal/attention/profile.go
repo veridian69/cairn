@@ -28,9 +28,12 @@ type Profile struct {
 	SessionID           string           `json:"session_id,omitempty"`
 	HostEndpoint        string           `json:"host_endpoint,omitempty"`
 	HostUsername        string           `json:"host_username,omitempty"`
+	HostAPIVersion      string           `json:"host_api_version,omitempty"`
 	HostCredentialFile  string           `json:"host_credential_file,omitempty"`
 	CodexSocket         string           `json:"codex_socket,omitempty"`
-	CodexBinary         string           `json:"codex_binary,omitempty"`
+	// CodexBinary is accepted so existing profiles still load, but it is ignored:
+	// Garden dials the control socket itself and runs no Codex binary.
+	CodexBinary string `json:"codex_binary,omitempty"`
 }
 
 func LoadProfile(path string) (Profile, error) {
@@ -45,13 +48,17 @@ func LoadProfile(path string) (Profile, error) {
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(data, &fields)
 	allowed := map[string]bool{}
-	for _, name := range []string{"garden_endpoint", "garden_tls_ca_file", "garden_tls_server_name", "credential_file", "instance_id", "scope", "classification", "participant", "adapter", "session_id", "host_endpoint", "host_username", "host_credential_file", "codex_socket", "codex_binary"} {
+	for _, name := range []string{"garden_endpoint", "garden_tls_ca_file", "garden_tls_server_name", "credential_file", "instance_id", "scope", "classification", "participant", "adapter", "session_id", "host_endpoint", "host_username", "host_api_version", "host_credential_file", "codex_socket", "codex_binary"} {
 		allowed[name] = true
 	}
 	for name := range fields {
 		if !allowed[name] {
 			return p, errors.New("unknown adapter profile field")
 		}
+	}
+	// An explicit null decodes to "" and would otherwise pass as omitted.
+	if raw, ok := fields["host_api_version"]; ok && string(bytes.TrimSpace(raw)) == "null" {
+		return p, errors.New("invalid adapter profile field")
 	}
 	u, err := endpoint(p.GardenEndpoint)
 	if err != nil {
@@ -97,8 +104,17 @@ func LoadProfile(path string) (Profile, error) {
 		if p.HostUsername == "" {
 			p.HostUsername = "opencode"
 		}
+		if p.HostAPIVersion == "" {
+			p.HostAPIVersion = "1"
+		}
+		if p.HostAPIVersion != "1" && p.HostAPIVersion != "2" {
+			return p, errors.New("OpenCode host API version must be 1 or 2")
+		}
 	default:
 		return p, errors.New("adapter must be stdio, claude, codex or opencode")
+	}
+	if p.Adapter != "opencode" && p.HostAPIVersion != "" {
+		return p, errors.New("host API version applies only to OpenCode")
 	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {

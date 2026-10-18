@@ -18,7 +18,49 @@ type legacyMemoryLease struct {
 }
 
 func acquireLegacyMemoryLease(dataDir string) (*legacyMemoryLease, error) {
-	path := filepath.Join(dataDir, "memory.db.lock")
+	return acquireExistingLock(dataDir, "memory.db.lock", "legacy memory lock")
+}
+
+// gatewayLockNames are the flock files a running gateway or host holds in its data directory.
+var gatewayLockNames = []string{"garden.lock", "host.lock"}
+
+// gatewayLease holds every gateway lock file that exists in a data directory.
+// An absent file means no gateway has locked this directory yet. A gateway that
+// creates one later must still reach a live daemon or host after taking its lock,
+// and maintenance holds the store lease only after that daemon has stopped. The
+// gateway therefore fails before opening state.db (internal/garden/server.go New).
+type gatewayLease struct {
+	held []*legacyMemoryLease
+}
+
+func acquireGatewayLease(dataDir string) (*gatewayLease, error) {
+	var lease gatewayLease
+	for _, name := range gatewayLockNames {
+		held, err := acquireExistingLock(dataDir, name, "gateway lock")
+		if err != nil {
+			_ = lease.Close()
+			return nil, err
+		}
+		lease.held = append(lease.held, held)
+	}
+	return &lease, nil
+}
+
+func (l *gatewayLease) Close() error {
+	if l == nil {
+		return nil
+	}
+	var first error
+	for _, held := range l.held {
+		if err := held.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func acquireExistingLock(dataDir, name, description string) (*legacyMemoryLease, error) {
+	path := filepath.Join(dataDir, name)
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if os.IsNotExist(err) {
 		return &legacyMemoryLease{}, nil
@@ -30,8 +72,8 @@ func acquireLegacyMemoryLease(dataDir string) (*legacyMemoryLease, error) {
 		_ = file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
 			return nil, fmt.Errorf(
-				"runtime is in use (legacy memory lock %s): stop every Garden command first",
-				path,
+				"runtime is in use (%s %s): stop every Garden command first",
+				description, path,
 			)
 		}
 		return nil, err

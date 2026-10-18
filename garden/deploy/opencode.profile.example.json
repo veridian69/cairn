@@ -9,5 +9,6 @@
   "session_id": "REPLACE_WITH_EXISTING_SESSION_ID",
   "host_endpoint": "http://127.0.0.1:4096",
   "host_username": "opencode",
+  "host_api_version": "2",
   "host_credential_file": "opencode-server.password"
 }

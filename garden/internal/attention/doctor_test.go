@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"testing"
 )
 
@@ -18,17 +16,20 @@ func TestDoctorOpenCodeIsReadOnlyAndChecksSelectedSession(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": "ses_target"})
 	}))
 	defer srv.Close()
-	p := Profile{Adapter: "opencode", HostEndpoint: srv.URL, SessionID: "ses_target"}
+	p := Profile{Adapter: "opencode", HostEndpoint: srv.URL, SessionID: "ses_target", HostAPIVersion: "1"}
 	if err := checkOpenCode(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestDoctorCodexNeverResumesOrStartsTurn(t *testing.T) {
-	ctx := context.Background()
-	command := exec.Command(os.Args[0], "-test.run=TestCodexWireHelper")
-	command.Env = append(os.Environ(), "GARDEN_CODEX_TEST_HELPER=probe")
-	if err := checkCodexCommand(ctx, command, "thread-target"); err != nil {
+	fake := newFakeCodex(t, "msg-one", "probe")
+	if err := checkCodexSocket(context.Background(), fake.socket, "thread-target"); err != nil {
 		t.Fatal(err)
+	}
+	for _, method := range fake.received() {
+		if method == "thread/resume" || method == "turn/start" {
+			t.Fatalf("doctor sent %s", method)
+		}
 	}
 }

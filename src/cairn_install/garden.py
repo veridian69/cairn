@@ -634,7 +634,6 @@ def profiles(ctx: Context) -> None:
             profile.update(
                 session_id="REPLACE_WITH_EXISTING_TASK_ID",
                 codex_socket="/REPLACE/WITH/EXISTING/CODEX/CONTROL.sock",
-                codex_binary="codex",
             )
         elif adapter == "opencode":
             profile.update(
@@ -718,8 +717,8 @@ def profiles(ctx: Context) -> None:
             "`claude --dangerously-load-development-channels server:garden` only after reviewing "
             "the adapter and completing host channel consent. Organisation policy still applies. "
             "Claude must call acknowledge_delivery on receipt of each channel message.\n\n"
-            "Codex requires an existing app-server control socket supporting "
-            "`codex app-server proxy --sock` (inspected protocol 0.154.0). An arbitrary desktop "
+            "Codex requires an existing app-server control socket, which Garden reaches "
+            "directly over WebSocket (verified with Codex 0.163.0). An arbitrary desktop "
             "or CLI session without that endpoint cannot be attached.\n",
         )
         exports[name] = str(directory)

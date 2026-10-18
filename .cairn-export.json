@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "dc625a81b57ea61e30084495156efb9a2e2b8097",
+  "source_revision": "5a60d7abca7d1a1a6586ee3d446e12ad59f2f430",
   "release_configuration": {
-    "files.json": "50383999b0c88c5c337150b75531d949a49754f7482edc167080b05caecfeab9",
+    "files.json": "f2211d48ec1dca3fe75ffdb076253dd0e009ebea6514d87be777b8ea8ade41bb",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "acebb36afb368cdd1839aee4c248962e8fdc1a9fe2a8bc2a6bff8a0c5efad746",
-    "overlay_set_sha256": "4b04d9a6eb6272c3cbb00514f0588ce9bd0a545a0e704a0280cf258ea9e62f54"
+    "overlay_set_sha256": "8d3255b253b37ac0091edb51d83696ec73fedf177a60ca99ea76d4e7f0fbdaba"
   },
   "files": {
     ".dockerignore": {
@@ -66,7 +66,7 @@
       "mode": 420
     },
     "Dockerfile": {
-      "sha256": "cb507b3623b678a63df39cb16291ff382bf13fab768e5b9486c048425d2ae5ef",
+      "sha256": "b2b332002092702e72d0908aa01caf892744b100d7061c6937d28c83b3e6ada2",
       "mode": 420
     },
     "LICENSE-Apache-2.0.txt": {
@@ -86,11 +86,11 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "edda855bea404eb4e302754031009856200fb4f60f085fafe8456dd3a3293957",
+      "sha256": "4c6fe32c72131119c8a25d2f56ecc50d242873631a5e9b6a8987a13fd769464b",
       "mode": 420
     },
     "SECURITY.md": {
-      "sha256": "bdd29df353224c60fc568a91882a45160ecf7f34b6cfb73e4f443cb3819183b2",
+      "sha256": "d0b54a5315ddaa0663520851a09c3e36e59f2cda43165a1469bb58f5f9dd726a",
       "mode": 420
     },
     "cairn-install": {
@@ -350,7 +350,7 @@
       "mode": 420
     },
     "deploy/compose/README.md": {
-      "sha256": "284bac2e57aa8c39d296d91fa43688d522a554f371fc4afb44bee66b3858202f",
+      "sha256": "aa0eceaaab77412c871cb476759f1dae0c6cb32b5be817ece745949b0fa83b93",
       "mode": 420
     },
     "deploy/compose/compose.edge.yaml": {
@@ -426,7 +426,7 @@
       "mode": 493
     },
     "deploy/images.lock": {
-      "sha256": "13c309bbaf6685cfb009911922cb774aa5136690ced801c5368c7386ebee293b",
+      "sha256": "794d8eda41c90f67cb814c88d376b373166ba6cff8c8cb6d2ff7ae7596996c0d",
       "mode": 420
     },
     "deploy/kustomize/base/README.md": {
@@ -454,7 +454,7 @@
       "mode": 420
     },
     "deploy/kustomize/base/statefulset.yaml": {
-      "sha256": "a8f4204c09cb248b1f338ec2e6b8053dd8e56b2649e56f86af9162c94abb2b89",
+      "sha256": "cbde1bea875c6fd4f5e4f3da553714c61cad39202bb294533ad5553ffeafcaf7",
       "mode": 420
     },
     "deploy/kustomize/components/falkordb/README.md": {
@@ -574,11 +574,11 @@
       "mode": 420
     },
     "deploy/kustomize/rendered/base.yaml": {
-      "sha256": "7aa216bec4df034a7f7a4d2e16e18ed567d019a9df99a9d57f9053ee03be8e91",
+      "sha256": "15cba47c589c6cd89aa8868396c66bca91446ecc9819e0fa197b92d70d2f7e3c",
       "mode": 420
     },
     "deploy/kustomize/rendered/base.yaml.sha256": {
-      "sha256": "1d269cd2ded85cfda88053c90881140854799d8ef9dead060d25cb2ccd157ee5",
+      "sha256": "23ddd4e5d86d975fe6a0f69b27ad253d63512a2854cc66321f4c8b86a975deda",
       "mode": 420
     },
     "deploy/kustomize/rendered/egress-gateway-reference.yaml": {
@@ -598,35 +598,35 @@
       "mode": 420
     },
     "deploy/kustomize/rendered/kind.yaml": {
-      "sha256": "d9f36456a068eb77208c8c8939fe0e87cbe3f3d78d8376f4ae093086e62e9950",
+      "sha256": "9f6aff0d70b5b8cc199bf1db497eededafb94884f720d4ba9f4f203a341a53af",
       "mode": 420
     },
     "deploy/kustomize/rendered/kind.yaml.sha256": {
-      "sha256": "b3e050225630114b70e5589e4a8f13155ab4a9f8299b63d19b9add89f09dc4f0",
+      "sha256": "a45fd779f89dfe329753452dec23446ff5e8b2553665ec406873aaee1922305c",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes-retrieval.yaml": {
-      "sha256": "b8df2050927bba59bfdcc9d874276032e11ba7c9fa414fd796a32d08c59ba528",
+      "sha256": "b470e21d7d2975ac389e9e0ccaf8c9acc5c648bb7fac040454cf461ba386fdf1",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes-retrieval.yaml.sha256": {
-      "sha256": "2c58dffcb4bed370cb67e0bcd97459ed72627770901955edaab918c11a93f392",
+      "sha256": "bab0528f704266e66b967be8d3a9c3c07d5d79741235cd53d7a9e8fec1061868",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes.yaml": {
-      "sha256": "c6080e711257c6281461b3f7e331824ebb6b24c87c7921148c130992e7f8c406",
+      "sha256": "834afebdad43fe68f9c1f6417934f9f0bdaa64c205bee29dbdd5ee4259dbd779",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes.yaml.sha256": {
-      "sha256": "606082e1efa079d8eddb305f7787548ab40a8b0a87ce0ca2c9cc38297f3f3cb9",
+      "sha256": "f00800a190e02ee3a43a3b8fa9b945eeb739b73f20b015ddebb6f0a079ecaf81",
       "mode": 420
     },
     "deploy/kustomize/rendered/openshift.yaml": {
-      "sha256": "7aa216bec4df034a7f7a4d2e16e18ed567d019a9df99a9d57f9053ee03be8e91",
+      "sha256": "15cba47c589c6cd89aa8868396c66bca91446ecc9819e0fa197b92d70d2f7e3c",
       "mode": 420
     },
     "deploy/kustomize/rendered/openshift.yaml.sha256": {
-      "sha256": "40373014a64022a96b0fc9009457f7aacb896416887fbb11032c6f67d3136bc0",
+      "sha256": "c75fc87566e0a55637cba8e4bf66f70e3dd69cc3296067ba2a7af498f838a4b3",
       "mode": 420
     },
     "docs/assets/cairn-attic-garden-correction-demo.gif": {
@@ -738,7 +738,7 @@
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-inventory.md": {
-      "sha256": "95451ad4fa32fa9680df7d539bc69b7e265f5be746e6e11f9d5ec5b35f469c8c",
+      "sha256": "9a945ac7b44a71642847cabd83020816186d635a90b9312790dfcf9bf6c4ea38",
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-security.md": {
@@ -774,7 +774,7 @@
       "mode": 420
     },
     "docs/operations/browser-connectors.md": {
-      "sha256": "d46d2872877a933c0f03b4936e2cc097ab5cbe5d8630411e033da7001c196b65",
+      "sha256": "82834bb54b120e58b19bf17a2f2e634c24a927439125a1a58f9072992fead97b",
       "mode": 420
     },
     "docs/operations/cairn-edge.md": {
@@ -786,7 +786,7 @@
       "mode": 420
     },
     "docs/operations/deployment.md": {
-      "sha256": "e6b537ea51647283afb69fefbc54d4da7159c76e895647fcd0bbf2a90d9acbe5",
+      "sha256": "fcc1ef702cfa35d1891dcfa4ace18af281088f487d91c5af9e9a61f39b630598",
       "mode": 420
     },
     "docs/operations/docker-firewalld.md": {
@@ -810,7 +810,7 @@
       "mode": 420
     },
     "docs/operations/kubernetes-site.md": {
-      "sha256": "5e4ac5ca2da307ae55953509e5ff02fe69c3a433da6987dbd0ed339a8440bcdc",
+      "sha256": "f819b28dc9a5747363dbd531624c4ec867be1ffca4c14b6427dae52ba2af4892",
       "mode": 420
     },
     "docs/operations/macos-foreground.md": {
@@ -830,7 +830,7 @@
       "mode": 420
     },
     "docs/operations/migration.md": {
-      "sha256": "70bb6ef7e3db88fa4672b5ce3cd054987cde5233d7557c00ab5aec098802a265",
+      "sha256": "115eeb44fbdf0308d8b885b06742dbe76a3e49eaa75e27570eae461b37c3526b",
       "mode": 420
     },
     "docs/operations/native-installation.md": {
@@ -842,7 +842,7 @@
       "mode": 420
     },
     "docs/operations/shared-garden.md": {
-      "sha256": "87b09f4044f0b1cc5fa6e66734a004ae2965da92c0af0b5cb2e664a67027bac0",
+      "sha256": "226c943e2f328d36e9ae9e2a9675651fcf8d50230e0e8957fe469c7e4c598537",
       "mode": 420
     },
     "docs/quickstart.md": {
@@ -921,6 +921,10 @@
       "sha256": "0476f7815fc2fa1fe17fbdae3e77248363f035d3a13ee7483422a84075d23e70",
       "mode": 420
     },
+    "docs/releases/v0.7.19.md": {
+      "sha256": "84397c70386a3999b1de5189f9034df793e24cd9a44976fb462be6bd453948c0",
+      "mode": 420
+    },
     "docs/releases/v0.7.8.md": {
       "sha256": "166fd7158ec4bf6874ab0d5ff28d2bbd222a04a8275765663b36edfa40d28624",
       "mode": 420
@@ -970,7 +974,7 @@
       "mode": 420
     },
     "garden/README.md": {
-      "sha256": "3f930a166e2d80c2033f88627ad0cc87e4075d66d987be441372a8e258116689",
+      "sha256": "808845f39a4bab0d2018f1225569757e1a03f22968289fdd1337ef8a79c13fbd",
       "mode": 420
     },
     "garden/THIRD_PARTY_LICENSES/github.com/antithesishq/antithesis-sdk-go@v0.6.0-default-no-op/LICENSE": {
@@ -1011,6 +1015,10 @@
     },
     "garden/THIRD_PARTY_LICENSES/github.com/charmbracelet/x/term@v0.2.1/LICENSE": {
       "sha256": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b",
+      "mode": 420
+    },
+    "garden/THIRD_PARTY_LICENSES/github.com/coder/websocket@v1.8.15/LICENSE.txt": {
+      "sha256": "cc0975a5f6305145bdd7b41ce9479632fdac3870e6ac4281f28017f18c767c4e",
       "mode": 420
     },
     "garden/THIRD_PARTY_LICENSES/github.com/dustin/go-humanize@v1.0.1/LICENSE": {
@@ -1198,7 +1206,7 @@
       "mode": 420
     },
     "garden/THIRD_PARTY_NOTICES.md": {
-      "sha256": "5742c5e1a6308c564a197a6e74275ab5952b15431970ef609540d51784edfc61",
+      "sha256": "35890fe3f7f780d48b19070143527beb069d8617cb4700fb992fd77ba9d89380",
       "mode": 420
     },
     "garden/cmd/accountant.go": {
@@ -1222,7 +1230,7 @@
       "mode": 420
     },
     "garden/cmd/attention.go": {
-      "sha256": "4226970597433d3d6eda532f5d9d3fb60531bbbae6d40d5abf11412d7d47e452",
+      "sha256": "8b7593b6b4a897bf8b55c7563e75516f3534f02ba63b18b5ceca9d63bc4ce0af",
       "mode": 420
     },
     "garden/cmd/attention_test.go": {
@@ -1382,7 +1390,7 @@
       "mode": 420
     },
     "garden/deploy/codex.profile.example.json": {
-      "sha256": "260ff6a7bf49d107324b7e32c0b204e6837b9d45bd0ef5915f3c94d925ef6f2e",
+      "sha256": "7675a5f4c738b840afc2b26e99a7aa5652e8f67c13675f055e6ad1df6f8b49db",
       "mode": 420
     },
     "garden/deploy/daemon.yaml": {
@@ -1406,7 +1414,7 @@
       "mode": 420
     },
     "garden/deploy/opencode.profile.example.json": {
-      "sha256": "03aedf32d452c6abb85fa0a952726eef7ae354d38082e02ddd943699b07564a6",
+      "sha256": "9515b249c8c52dfc1cc98ce7c6f6539c6e9aac2753b003977ada43d8487ba894",
       "mode": 420
     },
     "garden/docs/readiness.md": {
@@ -1414,11 +1422,11 @@
       "mode": 420
     },
     "garden/go.mod": {
-      "sha256": "2ada6779c5f142b7b75f9bf2dabc008ecaba56c5fde8d23ac043529e11214e88",
+      "sha256": "c1cc4d1e34b96eaaf8793193ef92fda6447414782984a53429cc60200d0b1710",
       "mode": 420
     },
     "garden/go.sum": {
-      "sha256": "c53562bbb01bce034e2d28d9a84f6094b9ea7a685045a154b75a6587a31ddbab",
+      "sha256": "d2830064a701f0a6007b9d27f2e9d06992113dcfa2e0ab35df76e6e93d79051a",
       "mode": 420
     },
     "garden/integration/cairn_fixture.py": {
@@ -1434,7 +1442,7 @@
       "mode": 420
     },
     "garden/integration/test_mcp_config.py": {
-      "sha256": "4f18aa94bdb858202077c9b68dbaf5533ef6bcdff643e4763eeaca863f23ea5c",
+      "sha256": "6b838b087333208d059fe7bb7996f0dbb83e630c77e01207d85888152025015c",
       "mode": 420
     },
     "garden/integration/test_session.py": {
@@ -1458,19 +1466,19 @@
       "mode": 420
     },
     "garden/internal/attention/codex.go": {
-      "sha256": "498706d565f7bb5f109484f47c1c33f8d36599ef026e1750a25d91b6074fc630",
+      "sha256": "ac8840a62dbd22c4a0e31c6fb3cc7f137a9c4d40a4207f330cebc0c442fd9e2b",
       "mode": 420
     },
     "garden/internal/attention/codex_test.go": {
-      "sha256": "b25402cbd812abbaf93a05228e539f1a06076120fda078ac9d23b2318c90a84b",
+      "sha256": "8e34bfd2a3b3ed8251041b5dd411f45820c222175a2b2bb5d9feca554dd59b8f",
       "mode": 420
     },
     "garden/internal/attention/doctor.go": {
-      "sha256": "4131734150c9dfb6276b1bca02f1a321e8e9778b37bd073ccd5d93b2a2d6b541",
+      "sha256": "76f176e71fcde1d0ffec4beda3c8fe577914f84da2d64e040e0fa2134907e9ee",
       "mode": 420
     },
     "garden/internal/attention/doctor_test.go": {
-      "sha256": "8feedbc90803c5e905ded1916e37da25529b3f8d78a055f4a270ea46b3356cb2",
+      "sha256": "3550203a2f9646442d19d7cfef5ab3bd3f40c449926c6e2493cd9fb072b9eee4",
       "mode": 420
     },
     "garden/internal/attention/host.go": {
@@ -1478,23 +1486,23 @@
       "mode": 420
     },
     "garden/internal/attention/integration_e2e_test.go": {
-      "sha256": "f9d38f2e1897b645dcdb39e5b538dcc71a99ecb36b3bb949cc554580e32ce803",
+      "sha256": "787b7c8c851f6bdd3adeee5ac11fffc287989b942465fdd82523cf857dd1279a",
       "mode": 420
     },
     "garden/internal/attention/opencode.go": {
-      "sha256": "b29d3ddc00a4630500a6f8491a73f20b716a26a1435f847b9b01c82a9eb63872",
+      "sha256": "b27f9440bc87c36b229008fb6a1c05c8046d29b64f5c11e2aeaee02a50a29abd",
       "mode": 420
     },
     "garden/internal/attention/opencode_test.go": {
-      "sha256": "8385407ced4b06ba9dd5c53f50dbc766a7063904f8509af281c8c976f6cb1a5d",
+      "sha256": "6678c9be77cf62580bca429b0d3b010aea5b5fa185cfa31a3dce39539a7d3717",
       "mode": 420
     },
     "garden/internal/attention/profile.go": {
-      "sha256": "ed2dd242a7cdfe53465210804024afd97824340ead3a41aba5e27375383be06c",
+      "sha256": "6662ebd26e399e23d83f36d74e175dfe7481c29e52c641e03b403a1233fd9e4e",
       "mode": 420
     },
     "garden/internal/attention/profile_test.go": {
-      "sha256": "988e41bb617418ec4a155c7a7dac2d0d61ce42adf9a3472dc5505a73a1752261",
+      "sha256": "71dee6efd7e081a324f4273a9dc080b155d15f4d87974008117d196da8687873",
       "mode": 420
     },
     "garden/internal/attention/readiness.go": {
@@ -1670,7 +1678,11 @@
       "mode": 420
     },
     "garden/internal/garden/server.go": {
-      "sha256": "40ea9302f2e1a10259961899ed77ae70fbe97030f4f009f27016300ae8bbb569",
+      "sha256": "0976c22be3fd9371a13292c04114ca5c0dd25f4c412057708dd727f6eac201ed",
+      "mode": 420
+    },
+    "garden/internal/garden/startup_test.go": {
+      "sha256": "0b4ef015734a4b6da85968cb8d8f6c64919188f2650b4ac732632923b6c0051d",
       "mode": 420
     },
     "garden/internal/garden/store.go": {
@@ -1830,11 +1842,15 @@
       "mode": 420
     },
     "garden/internal/snapshot/files.go": {
-      "sha256": "d9232051480d62f479666e7717d065a88d771e0b2c1e8b49a379e5fdfe07978e",
+      "sha256": "afcb864bc2693a800129c0ebc537b8ad676c094e03962628bbf800cdb927e82b",
+      "mode": 420
+    },
+    "garden/internal/snapshot/gateway_test.go": {
+      "sha256": "eaf4ad4e785e4ddee0bd8eb8feaa4fe6d33a338701a524fd7f4d64b0361cc778",
       "mode": 420
     },
     "garden/internal/snapshot/legacy.go": {
-      "sha256": "aa78e808a53ec8a738d7a4d2986835dd89d8aa335f45854f06eed796ba8340f1",
+      "sha256": "2e0683c7da0e5b814af107657b0d1b5ac5f7ed4bfeb279d5c8ff41628d264cb2",
       "mode": 420
     },
     "garden/internal/snapshot/lifecycle_test.go": {
@@ -1842,7 +1858,7 @@
       "mode": 420
     },
     "garden/internal/snapshot/manager.go": {
-      "sha256": "3e0119f65e85938a14e277a81a723209e8a5eed1ba9d6532595785f6e56fa88d",
+      "sha256": "325ec2d828521fd532b858a7c70a5dfeb69e9656f0cf4259c4044388f8fcc190",
       "mode": 420
     },
     "garden/internal/snapshot/manifest.go": {
@@ -1850,11 +1866,11 @@
       "mode": 420
     },
     "garden/internal/snapshot/reset.go": {
-      "sha256": "aaf760015692a7bd7bfc8ba96fabf585539b4b978f35ca042f872aee99b8416d",
+      "sha256": "3e0a9873de3a0dbc96aef02f03d52faaef7ca281891368381d84e8f3045e244a",
       "mode": 420
     },
     "garden/internal/snapshot/restore.go": {
-      "sha256": "d659fd342aa8a2b6069b99222bcc44508f483cb531d0e19e92f96905733c728a",
+      "sha256": "1cde6894b843a4b21df589cc23648ca2a7b9fe9d1be74091023f630ee8e2dbb3",
       "mode": 420
     },
     "garden/internal/snapshot/snapshot_test.go": {
@@ -1862,11 +1878,11 @@
       "mode": 420
     },
     "garden/internal/snapshot/store_lock_test.go": {
-      "sha256": "c78418e915c514485ed32033214fe0b4629215b0dead7d4dae9db8686ab19a03",
+      "sha256": "35f94e6ff4a8b3aa461d4dcf81cd7a13ce046ed068b33a6fb7255b68ce4c1d87",
       "mode": 420
     },
     "garden/internal/snapshot/validate.go": {
-      "sha256": "6f6c593687f5638f0495c4b7bc62fae363ce0fc7723f1ea0da74e775e1c8ed99",
+      "sha256": "de589e52d165320db71a48e1e007d52fb43f7f2c27c305a19e18b57bb2261c0d",
       "mode": 420
     },
     "garden/internal/state/checkpoints.go": {
@@ -1926,7 +1942,7 @@
       "mode": 493
     },
     "garden/scripts/garden-config": {
-      "sha256": "b71b67f8cf5e361723931f4046c696afa01ec06d649b7f4db4a451d089fa10d3",
+      "sha256": "f1a1f0217b3222359f2f9fd74e8b52572cb885c9bb5e14cce1e7f9ebcd0b05b8",
       "mode": 493
     },
     "garden/scripts/garden-session": {
@@ -1950,7 +1966,7 @@
       "mode": 420
     },
     "pyproject.toml": {
-      "sha256": "d01d3b7892a5ae01f209edc8cfdc65a888831f37cfec65458ecb0f6466af7f67",
+      "sha256": "75afd3c8e9b89284e20cf812e7920532e9de8d0202201c008759d7c306e4a8ab",
       "mode": 420
     },
     "scripts/check-image-pins": {
@@ -2110,7 +2126,7 @@
       "mode": 493
     },
     "scripts/reference-posture-acceptance": {
-      "sha256": "3c4919dd2b5ebb3d6bfbb138aaa517b3c7b55eacd5522d2e7cc9292e3fb9d7f0",
+      "sha256": "174adb3575ff414213e0811d78a1d5904583c63511ff86a8c109b88e45a00a56",
       "mode": 493
     },
     "scripts/reference-posture-launch": {
@@ -2894,7 +2910,7 @@
       "mode": 420
     },
     "src/cairn_install/garden.py": {
-      "sha256": "f532b3c1ee55a200a5864109ba9d02650c469c66861fd1125cafa75ffb8a659e",
+      "sha256": "871913d6f1ff2518083844aa703e175797eea085ef0798a2a037181ba5b41c0d",
       "mode": 420
     },
     "src/cairn_install/garden_native.py": {
@@ -2906,7 +2922,7 @@
       "mode": 420
     },
     "src/cairn_install/kubernetes_assets.py": {
-      "sha256": "baadb79d1c0c5607f1fd5b47b86c514394f6f0a7c6d5d7efeef92b2536d9b575",
+      "sha256": "aabdf2ba5d2cc6817de38f6f9cafb472c17fa0b9ca0e978bf42c8c50e809d60d",
       "mode": 420
     },
     "src/cairn_install/kubernetes_endpoint.py": {
@@ -3054,11 +3070,11 @@
       "mode": 420
     },
     "tests/acceptance/reference/task11a-listener-pod.yaml": {
-      "sha256": "1e05a393070464f3521d4e5376cd4256df8e1bf26d4c84e3921ae50f354b4378",
+      "sha256": "2a77b9087c9b06d93c9f4aa837b4b69edb9f6d52771123e8df4e07408599144c",
       "mode": 420
     },
     "tests/acceptance/reference/task11a-probe-pod.yaml": {
-      "sha256": "e21e8bf988a5164b3431adafccb618bf39fae687e3bdf13594eb4d1b34329937",
+      "sha256": "f58c06a71368971f56bbad08f34b83f70e5f022bc0b809eec99f92ee8229ef76",
       "mode": 420
     },
     "tests/administration/test_audit_read.py": {
@@ -3618,7 +3634,7 @@
       "mode": 420
     },
     "tests/deploy/test_compose_acceptance.py": {
-      "sha256": "16dce6f29275b99f069bc8f369a83185698de512393aefb029f7887bedc4cf98",
+      "sha256": "47961a3c3dec8ef2925900be738eb843334515367414d3e7fda5e9e601480934",
       "mode": 420
     },
     "tests/deploy/test_compose_project.py": {
@@ -4234,7 +4250,7 @@
       "mode": 420
     },
     "uv.lock": {
-      "sha256": "e317a6e2af133fab73b5986733b0ed85a038068b0e6d544d2bad2b6704cd37c8",
+      "sha256": "7d11c1a6456d33591187fd7c68cd1160e12a7416cf53e4f9198b2a711966d3b0",
       "mode": 420
     }
   }

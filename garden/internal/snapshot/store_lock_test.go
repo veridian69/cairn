@@ -87,7 +87,11 @@ func TestOwnershipRejectsInvalidStoreLockEvenWithMarker(t *testing.T) {
 			case "contents":
 				err = os.WriteFile(path, []byte("foreign"), 0600)
 			case "permissions":
-				err = os.WriteFile(path, nil, 0644)
+				// Chmod, not the create mode, so the umask cannot narrow it.
+				err = os.WriteFile(path, nil, 0600)
+				if err == nil {
+					err = os.Chmod(path, 0644)
+				}
 			case "directory":
 				err = os.Mkdir(path, 0700)
 			}
