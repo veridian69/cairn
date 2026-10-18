@@ -34,6 +34,9 @@ type Server struct {
 	done     chan struct{}
 }
 
+// afterEnsure is a test seam that runs after the daemon check and before the gateway lock.
+var afterEnsure func()
+
 // New validates and enrols configured principals before any data is exposed.
 func New(ctx context.Context, cfg Config) (s *Server, err error) {
 	if err = cfg.validate(); err != nil {
@@ -63,6 +66,9 @@ func New(ctx context.Context, cfg Config) (s *Server, err error) {
 	if err = s.ensure(ctx); err != nil {
 		return nil, err
 	}
+	if afterEnsure != nil {
+		afterEnsure()
+	}
 
 	cfg = s.cfg
 	s.lock, err = os.OpenFile(filepath.Join(cfg.DataDir, "garden.lock"), os.O_CREATE|os.O_RDWR, 0600)
@@ -71,6 +77,15 @@ func New(ctx context.Context, cfg Config) (s *Server, err error) {
 	}
 	if err = unix.Flock(int(s.lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return nil, errors.New("another Garden service owns this data directory")
+	}
+	// Probe the daemon only after the lock is held and before any database opens.
+	// Snapshot and reset take the store lease only once the daemon has stopped, so
+	// either they already see this lock, or this round trip fails and state.db is untouched.
+	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	p, err := s.stream.Position(probe)
+	cancel()
+	if err != nil {
+		return nil, err
 	}
 	s.db, err = state.Open(filepath.Join(cfg.DataDir, "state.db"))
 	if err != nil {
@@ -81,10 +96,6 @@ func New(ctx context.Context, cfg Config) (s *Server, err error) {
 		return nil, err
 	}
 	s.sql.SetMaxOpenConns(1)
-	p, err := s.stream.Position(ctx)
-	if err != nil {
-		return nil, err
-	}
 	if err = s.initStore(ctx, p.Created.UTC().Format(time.RFC3339Nano), p.Last); err != nil {
 		return nil, err
 	}

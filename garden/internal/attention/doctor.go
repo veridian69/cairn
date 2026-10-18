@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os/exec"
 )
 
 // DoctorReport contains connection results without credentials or chat content.
@@ -32,11 +31,7 @@ func Doctor(ctx context.Context, p Profile, checkHost bool) (DoctorReport, error
 	}
 	switch p.Adapter {
 	case "codex":
-		binary := p.CodexBinary
-		if binary == "" {
-			binary = "codex"
-		}
-		err = checkCodexCommand(ctx, exec.CommandContext(ctx, binary, "app-server", "proxy", "--sock", p.CodexSocket), p.SessionID)
+		err = checkCodexSocket(ctx, p.CodexSocket, p.SessionID)
 	case "opencode":
 		err = checkOpenCode(ctx, p)
 	case "claude":
@@ -64,12 +59,16 @@ func checkOpenCode(ctx context.Context, p Profile) error {
 			return err
 		}
 	}
-	host, err := NewOpenCode(p.HostEndpoint, p.SessionID, p.HostUsername, password)
+	host, err := NewOpenCode(p.HostEndpoint, p.SessionID, p.HostUsername, password, p.HostAPIVersion)
 	if err != nil {
 		return err
 	}
 	defer host.http.CloseIdleConnections()
-	resp, err := host.request(ctx, http.MethodGet, "/session/"+p.SessionID, nil)
+	sessionPath := "/session/" + p.SessionID
+	if host.api == "2" {
+		sessionPath = "/api" + sessionPath
+	}
+	resp, err := host.request(ctx, http.MethodGet, sessionPath, nil)
 	if err != nil {
 		return ErrUnavailable
 	}
@@ -82,23 +81,33 @@ func checkOpenCode(ctx context.Context, p Profile) error {
 		return ErrRejected
 	}
 	var session struct {
-		ID string `json:"id"`
+		ID   string `json:"id"`
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
 	}
-	if json.Unmarshal(data, &session) != nil || session.ID != p.SessionID {
+	if json.Unmarshal(data, &session) != nil {
+		return ErrRejected
+	}
+	if host.api == "2" {
+		// 2.x wraps the session in {"data": ...}, so only the envelope's ID counts.
+		session.ID = session.Data.ID
+	}
+	if session.ID != p.SessionID {
 		return ErrRejected
 	}
 	return nil
 }
 
-func checkCodexCommand(ctx context.Context, command *exec.Cmd, thread string) error {
-	host, err := startCodexConnection(ctx, command, thread, false)
+func checkCodexSocket(ctx context.Context, socket, thread string) error {
+	host, err := startCodexConnection(ctx, socket, thread, false)
 	if err != nil {
 		return err
 	}
 	defer host.Close()
 	data, err := host.call(ctx, "thread/read", map[string]any{"threadId": thread, "includeTurns": false})
 	if err != nil {
-		return err
+		return beforeSubmission(err)
 	}
 	var response struct {
 		Thread struct {

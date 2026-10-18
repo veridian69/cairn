@@ -75,8 +75,9 @@ replaced, when its configuration sets `mcp.instructions_realm` to the realm the
 connector principals were issued under (`scripts/cutover_principals.py --realm`).
 It is guidance only: the edge fills in nothing and the server never defaults a
 scope, so callers still supply the arguments each tool requires.
-Clients that do not show server instructions need the text pasted, with
-`<realm>` replaced. ChatGPT has no per-connector instructions field: put it in
+Claude Code, claude.ai and Codex use the server instructions; ChatGPT web does
+not, so it needs the text pasted, with `<realm>` replaced. ChatGPT has no
+per-connector instructions field: put it in
 Settings → Personalization → Custom instructions, or in a Project's instructions
 if Cairn is used only there. Without it ChatGPT guesses the scope and is refused.
 A test pins this block to the server's text.

@@ -199,6 +199,34 @@ class MCPConfigTests(unittest.TestCase):
                 self.assertFalse(self.config.exists())
                 self.data = original
 
+    def test_host_api_version_is_omitted_or_explicit_for_opencode_only(self):
+        opencode = {
+            "adapter": "opencode",
+            "session_id": "ses_target",
+            "host_endpoint": "http://127.0.0.1:4096",
+        }
+        for delta, success in (
+            ({"host_api_version": "2"}, True),
+            ({"host_api_version": "1"}, True),
+            ({"host_api_version": "3"}, False),
+            ({"host_api_version": None}, False),
+            ({"host_api_version": 2}, False),
+        ):
+            with self.subTest(delta=delta):
+                original = self.data.copy()
+                self.data.update(opencode, **delta)
+                self.save_profile()
+                self.run_helper("opencode", "--dry-run", success=success)
+                self.assertFalse(self.config.exists())
+                self.data = original
+        for delta in ({"host_api_version": None}, {"host_api_version": "2"}):
+            with self.subTest(stdio=delta):
+                original = self.data.copy()
+                self.data.update(delta)
+                self.save_profile()
+                self.run_helper("opencode", "--dry-run", success=False)
+                self.data = original
+
     def test_invalid_endpoint_ports_do_not_create_configuration(self):
         for field in ("garden_endpoint", "host_endpoint"):
             for port in ("invalid", "65536"):

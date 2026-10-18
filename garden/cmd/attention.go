@@ -101,7 +101,7 @@ func newAttendCommand() *cobra.Command {
 		defer remote.Close()
 		var host attention.Host
 		if p.Adapter == "codex" {
-			client, err := attention.NewCodex(ctx, p.CodexBinary, p.CodexSocket, p.SessionID)
+			client, err := attention.NewCodex(ctx, p.CodexSocket, p.SessionID)
 			if err != nil {
 				return err
 			}
@@ -115,7 +115,7 @@ func newAttendCommand() *cobra.Command {
 					return err
 				}
 			}
-			host, err = attention.NewOpenCode(p.HostEndpoint, p.SessionID, p.HostUsername, password)
+			host, err = attention.NewOpenCode(p.HostEndpoint, p.SessionID, p.HostUsername, password, p.HostAPIVersion)
 			if err != nil {
 				return err
 			}

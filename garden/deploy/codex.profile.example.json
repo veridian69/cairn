@@ -7,6 +7,5 @@
   "participant": "val",
   "adapter": "codex",
   "session_id": "REPLACE_WITH_EXISTING_TASK_ID",
-  "codex_socket": "/run/user/1000/codex/control.sock",
-  "codex_binary": "codex"
+  "codex_socket": "/run/user/1000/codex/control.sock"
 }

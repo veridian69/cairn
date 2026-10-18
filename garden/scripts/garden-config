@@ -168,6 +168,7 @@ def validate_profile(path, host):
         "session_id",
         "host_endpoint",
         "host_username",
+        "host_api_version",
         "host_credential_file",
         "codex_socket",
         "codex_binary",
@@ -234,6 +235,15 @@ def validate_profile(path, host):
         absolute(data.get("codex_socket", ""))
     if data["adapter"] == "opencode":
         endpoint(data.get("host_endpoint"))
+        require(
+            (data.get("host_api_version") or "1") in ("1", "2"),
+            "OpenCode host API version must be 1 or 2",
+        )
+    else:
+        require(
+            not data.get("host_api_version"),
+            "host API version applies only to OpenCode",
+        )
     # Credential references are deliberately never opened or copied to host config.
 
 

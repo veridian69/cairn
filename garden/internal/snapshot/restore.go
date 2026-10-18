@@ -70,6 +70,11 @@ func (m *Manager) Restore(ctx context.Context, id string) (RestoreResult, error)
 		return RestoreResult{}, err
 	}
 	defer legacyLease.Close()
+	gatewayLock, err := acquireGatewayLease(dataDir)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	defer gatewayLock.Close()
 
 	currentBytes, currentFiles, err := treeBytes(dataDir)
 	if err != nil {

@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
+	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/muesli/termenv v0.16.0

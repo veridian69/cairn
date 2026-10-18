@@ -1,28 +1,37 @@
 package attention
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"os/exec"
+	"net"
+	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/coder/websocket"
+)
+
+const (
+	// codexCallTimeout bounds each request, including the connection handshake.
+	codexCallTimeout = 20 * time.Second
+	// codexMaxMessageBytes matches the frame limit of the former line-JSON proxy.
+	codexMaxMessageBytes = 2 * 1024 * 1024
 )
 
 // Codex attaches to an explicitly selected existing app-server control socket.
+// Codex 0.163 serves JSON-RPC as WebSocket text frames on that Unix socket, and
+// its `app-server proxy` only relays bytes, so Garden dials the socket directly.
 // It does not start a separate agent server or select the latest task.
 type Codex struct {
-	command   *exec.Cmd
-	in        io.WriteCloser
+	conn      *websocket.Conn
 	frames    chan rpcResponse
 	done      chan struct{}
 	lifecycle chan struct{}
 	mu        sync.Mutex
-	writeMu   sync.Mutex
 	closeOnce sync.Once
 	lifeOnce  sync.Once
 	terminal  atomic.Bool
@@ -40,8 +49,8 @@ type rpcResponse struct {
 	} `json:"error"`
 }
 
-// CodexAdapter reconnects a lost proxy only before message submission. It keeps
-// the explicitly selected host and task; uncertain turns are never retried.
+// CodexAdapter reconnects a lost control socket only before message submission.
+// It keeps the explicitly selected host and task; uncertain turns are never retried.
 type CodexAdapter struct {
 	mu         sync.Mutex
 	connection *Codex
@@ -51,15 +60,12 @@ type CodexAdapter struct {
 	closed     bool
 }
 
-func NewCodex(ctx context.Context, binary, socket, thread string) (*CodexAdapter, error) {
-	if binary == "" {
-		binary = "codex"
-	}
+func NewCodex(ctx context.Context, socket, thread string) (*CodexAdapter, error) {
 	if !filepath.IsAbs(socket) || !safeSession(thread) {
 		return nil, errors.New("Codex requires an absolute control socket and explicit task ID")
 	}
 	open := func(callCtx context.Context) (*Codex, error) {
-		return startCodex(callCtx, exec.CommandContext(ctx, binary, "app-server", "proxy", "--sock", socket), thread)
+		return startCodex(callCtx, socket, thread)
 	}
 	connection, err := open(ctx)
 	if err != nil {
@@ -146,61 +152,71 @@ func (h *CodexAdapter) Close() error {
 	return nil
 }
 
-func startCodex(ctx context.Context, command *exec.Cmd, thread string) (*Codex, error) {
-	return startCodexConnection(ctx, command, thread, true)
+func startCodex(ctx context.Context, socket, thread string) (*Codex, error) {
+	return startCodexConnection(ctx, socket, thread, true)
 }
 
-func startCodexConnection(ctx context.Context, command *exec.Cmd, thread string, resume bool) (*Codex, error) {
-	in, err := command.StdinPipe()
+func startCodexConnection(ctx context.Context, socket, thread string, resume bool) (*Codex, error) {
+	// The Unix socket is dialled for every connection; the URL host is only the
+	// HTTP Host header that the app-server expects for its WebSocket upgrade.
+	var dialer net.Dialer
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "unix", socket)
+	}}
+	dialCtx, cancelDial := context.WithTimeout(ctx, codexCallTimeout)
+	defer cancelDial()
+	conn, _, err := websocket.Dial(dialCtx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{Transport: transport},
+		// Negotiating permessage-deflate makes the 0.154 control socket drop the upgrade.
+		CompressionMode: websocket.CompressionDisabled,
+	})
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	out, err := command.StdoutPipe()
-	if err != nil {
-		_ = in.Close()
-		return nil, ErrUnavailable
-	}
-	command.Stderr = io.Discard
-	if err := command.Start(); err != nil {
-		_ = in.Close()
-		_ = out.Close()
-		return nil, ErrUnavailable
-	}
-	h := &Codex{command: command, in: in, frames: make(chan rpcResponse, 8), done: make(chan struct{}), lifecycle: make(chan struct{}), thread: thread}
-	go h.read(out)
+	conn.SetReadLimit(codexMaxMessageBytes)
+	h := &Codex{conn: conn, frames: make(chan rpcResponse, 8), done: make(chan struct{}), lifecycle: make(chan struct{}), thread: thread}
+	go h.read()
 	if _, err := h.call(ctx, "initialize", map[string]any{"clientInfo": map[string]string{"name": "garden-attention", "version": "1"}, "capabilities": map[string]bool{"experimentalApi": true}}); err != nil {
 		_ = h.Close()
-		return nil, err
+		return nil, beforeSubmission(err)
 	}
-	if err := h.write(map[string]any{"method": "initialized"}); err != nil {
+	if err := h.write(ctx, map[string]any{"method": "initialized"}); err != nil {
 		_ = h.Close()
 		return nil, ErrUnavailable
 	}
 	if resume {
 		if _, err := h.call(ctx, "thread/resume", map[string]any{"threadId": thread, "excludeTurns": true}); err != nil {
 			_ = h.Close()
-			return nil, err
+			return nil, beforeSubmission(err)
 		}
 	}
 	return h, nil
 }
 
-func (h *Codex) read(out io.Reader) {
+func (h *Codex) read() {
+	// Any reader exit ends the connection: pending calls fail and the watcher sees done.
+	defer h.Close()
 	defer close(h.frames)
-	scan := bufio.NewScanner(out)
-	scan.Buffer(make([]byte, 4096), 2*1024*1024)
-	for scan.Scan() {
+	for {
+		// Only text frames carry JSON-RPC; anything else ends the connection.
+		typ, data, err := h.conn.Read(context.Background())
+		if err != nil || typ != websocket.MessageText {
+			return
+		}
 		var head struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 		}
-		if json.Unmarshal(scan.Bytes(), &head) != nil {
+		if json.Unmarshal(data, &head) != nil {
 			return
 		}
 		if head.Method != "" {
 			// Never grant a permission or answer a host request on an agent's behalf.
 			if len(head.ID) > 0 {
-				if err := h.write(map[string]any{"id": head.ID, "error": map[string]any{"code": -32601, "message": "Garden adapter does not handle host approvals or requests"}}); err != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), codexCallTimeout)
+				err := h.write(ctx, map[string]any{"id": head.ID, "error": map[string]any{"code": -32601, "message": "Garden adapter does not handle host approvals or requests"}})
+				cancel()
+				if err != nil {
 					return
 				}
 			} else if head.Method == "thread/closed" || head.Method == "thread/archived" {
@@ -209,7 +225,7 @@ func (h *Codex) read(out io.Reader) {
 						ThreadID string `json:"threadId"`
 					} `json:"params"`
 				}
-				if json.Unmarshal(scan.Bytes(), &notice) == nil && notice.Params.ThreadID == h.thread {
+				if json.Unmarshal(data, &notice) == nil && notice.Params.ThreadID == h.thread {
 					h.signalLifecycle()
 				}
 			}
@@ -219,7 +235,7 @@ func (h *Codex) read(out io.Reader) {
 			continue
 		}
 		var frame rpcResponse
-		if json.Unmarshal(scan.Bytes(), &frame) != nil {
+		if json.Unmarshal(data, &frame) != nil {
 			return
 		}
 		select {
@@ -235,24 +251,27 @@ func (h *Codex) signalLifecycle() {
 	h.lifeOnce.Do(func() { close(h.lifecycle) })
 }
 
-func (h *Codex) write(frame any) error {
-	h.writeMu.Lock()
-	defer h.writeMu.Unlock()
-	return json.NewEncoder(h.in).Encode(frame)
+func (h *Codex) write(ctx context.Context, frame any) error {
+	data, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	// The WebSocket library permits concurrent writes, so no extra lock is needed.
+	return h.conn.Write(ctx, websocket.MessageText, data)
 }
 
 func (h *Codex) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, codexCallTimeout)
 	defer cancel()
-	// Closing this proxy unblocks a stalled pipe write as well as a response
+	// Closing this connection unblocks a stalled write as well as a response
 	// wait. The app-server itself and its task remain owned by the host.
 	stopClose := context.AfterFunc(ctx, func() { _ = h.Close() })
 	defer stopClose()
 	h.seq++
 	id := h.seq
-	if err := h.write(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+	if err := h.write(ctx, map[string]any{"id": id, "method": method, "params": params}); err != nil {
 		return nil, ErrUncertain
 	}
 	for {
@@ -265,13 +284,8 @@ func (h *Codex) call(ctx context.Context, method string, params any) (json.RawMe
 				continue
 			}
 			if frame.Error != nil {
-				var data struct {
-					CodexErrorInfo map[string]json.RawMessage `json:"codexErrorInfo"`
-				}
-				if method == "turn/start" && json.Unmarshal(frame.Error.Data, &data) == nil {
-					if detail, ok := data.CodexErrorInfo["activeTurnNotSteerable"]; ok && len(detail) > 0 && detail[0] == '{' {
-						return nil, ErrBusy
-					}
+				if method == "turn/start" && activeTurnNotSteerable(frame.Error.Code, frame.Error.Message, frame.Error.Data) {
+					return nil, ErrBusy
 				}
 				return nil, ErrRejected
 			}
@@ -329,11 +343,35 @@ func (h *Codex) Deliver(ctx context.Context, event Event) error {
 func (h *Codex) Close() error {
 	h.closeOnce.Do(func() {
 		close(h.done)
-		_ = h.in.Close()
-		if h.command.Process != nil {
-			_ = h.command.Process.Kill()
-		}
-		_ = h.command.Wait()
+		_ = h.conn.CloseNow()
 	})
 	return nil
+}
+
+// beforeSubmission keeps transport uncertainty from setup and read requests
+// unambiguous: none of them can have submitted a turn, so only turn/start may
+// return ErrUncertain.
+func beforeSubmission(err error) error {
+	if errors.Is(err, ErrUncertain) {
+		return ErrUnavailable
+	}
+	return err
+}
+
+// activeTurnNotSteerable reports that turn/start was refused because a review or
+// compaction turn is already running. Codex 0.163 returns an internal error whose
+// message names the variant; the structured codexErrorInfo form from the schema
+// is accepted too. Any other refusal stays a rejection.
+func activeTurnNotSteerable(code int, message string, data json.RawMessage) bool {
+	if code == -32603 && strings.Contains(strings.ToLower(message), "activeturnnotsteerable") {
+		return true
+	}
+	var info struct {
+		CodexErrorInfo map[string]json.RawMessage `json:"codexErrorInfo"`
+	}
+	if json.Unmarshal(data, &info) != nil {
+		return false
+	}
+	detail, ok := info.CodexErrorInfo["activeTurnNotSteerable"]
+	return ok && len(detail) > 0 && detail[0] == '{'
 }

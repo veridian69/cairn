@@ -634,13 +634,13 @@ def profiles(ctx: Context) -> None:
             profile.update(
                 session_id="REPLACE_WITH_EXISTING_TASK_ID",
                 codex_socket="/REPLACE/WITH/EXISTING/CODEX/CONTROL.sock",
-                codex_binary="codex",
             )
         elif adapter == "opencode":
             profile.update(
                 session_id="REPLACE_WITH_EXISTING_SESSION_ID",
                 host_endpoint="http://127.0.0.1:4096",
                 host_username="opencode",
+                host_api_version="REPLACE_WITH_1_OR_2",
                 host_credential_file="REPLACE_WITH_HOST_PASSWORD_FILE",
             )
         filename = adapter + ".profile.example.json"
@@ -688,7 +688,9 @@ def profiles(ctx: Context) -> None:
         else:
             setup = (
                 "Copy opencode.profile.example.json to profile.json and replace its REPLACE "
-                "host-session values. In opencode.mcp.example.json, replace the REPLACE paths "
+                'host-session values. Set host_api_version to "2" for an OpenCode 2.x server '
+                'or "1" for 1.x; Garden cannot tell them apart. In opencode.mcp.example.json, '
+                "replace the REPLACE paths "
                 "with the installed garden binary and this bundle's profile.json. Explicitly configure "
                 "the local server endpoint and protected password file. "
             )
@@ -718,8 +720,8 @@ def profiles(ctx: Context) -> None:
             "`claude --dangerously-load-development-channels server:garden` only after reviewing "
             "the adapter and completing host channel consent. Organisation policy still applies. "
             "Claude must call acknowledge_delivery on receipt of each channel message.\n\n"
-            "Codex requires an existing app-server control socket supporting "
-            "`codex app-server proxy --sock` (inspected protocol 0.154.0). An arbitrary desktop "
+            "Codex requires an existing app-server control socket, which Garden reaches "
+            "directly over WebSocket (verified with Codex 0.163.0). An arbitrary desktop "
             "or CLI session without that endpoint cannot be attached.\n",
         )
         exports[name] = str(directory)

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -32,7 +33,7 @@ func copyTree(source, destination string) error {
 		if err != nil {
 			return err
 		}
-		if filepath.ToSlash(relative) == "memory.db.lock" || filepath.ToSlash(relative) == maintenance.StoreLockName {
+		if runtimeLockFile(relative) {
 			return nil
 		}
 		target := filepath.Join(destination, relative)
@@ -157,7 +158,7 @@ func treeBytes(root string) (uint64, uint64, error) {
 		if err != nil {
 			return err
 		}
-		if filepath.ToSlash(relative) == "memory.db.lock" || filepath.ToSlash(relative) == maintenance.StoreLockName {
+		if runtimeLockFile(relative) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -293,6 +294,13 @@ func hashFile(path string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
+}
+
+// runtimeLockFile reports lock files that name a live owner. They are never
+// snapshotted; restore and the next runtime start recreate them.
+func runtimeLockFile(relative string) bool {
+	name := filepath.ToSlash(relative)
+	return name == "memory.db.lock" || name == maintenance.StoreLockName || slices.Contains(gatewayLockNames, name)
 }
 
 func pathWithin(parent, child string) bool {
