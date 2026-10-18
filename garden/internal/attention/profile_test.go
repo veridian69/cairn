@@ -50,7 +50,13 @@ func TestProfileRejectsAmbiguousAndInsecureConfiguration(t *testing.T) {
 func TestCredentialRejectsSymlinksAndBroadPermissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token")
-	_ = os.WriteFile(path, []byte("credential"), 0644)
+	if err := os.WriteFile(path, []byte("credential"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Chmod, not the create mode, so the umask cannot narrow it.
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReadCredential(path); err == nil {
 		t.Fatal("world-readable credential accepted")
 	}
@@ -83,5 +89,50 @@ func TestProfileTLSVerificationOverridesAreExplicit(t *testing.T) {
 	_ = os.WriteFile(path, []byte(raw), 0600)
 	if _, err := LoadProfile(path); err == nil {
 		t.Fatal("TLS profile overrides were silently ignored for HTTP")
+	}
+}
+
+func TestProfileOpenCodeAPIVersionIsExplicit(t *testing.T) {
+	opencode := strings.Replace(validProfile, `"adapter":"codex","session_id":"thread-id","codex_socket":"/tmp/test-codex.sock"`, `"adapter":"opencode","session_id":"ses_target","host_endpoint":"http://127.0.0.1:4096"`, 1)
+	load := func(text string) (Profile, error) {
+		path := filepath.Join(t.TempDir(), "profile.json")
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return LoadProfile(path)
+	}
+	for version, want := range map[string]string{"": "1", "1": "1", "2": "2"} {
+		text := opencode
+		if version != "" {
+			text = strings.Replace(opencode, `"host_endpoint":"http://127.0.0.1:4096"`, `"host_endpoint":"http://127.0.0.1:4096","host_api_version":"`+version+`"`, 1)
+		}
+		p, err := load(text)
+		if err != nil || p.HostAPIVersion != want {
+			t.Fatalf("version %q: got %q, %v", version, p.HostAPIVersion, err)
+		}
+	}
+	if _, err := load(strings.Replace(opencode, `"host_endpoint"`, `"host_api_version":"3","host_endpoint"`, 1)); err == nil {
+		t.Fatal("unknown OpenCode API version accepted")
+	}
+	if _, err := load(strings.Replace(validProfile, `"session_id":"thread-id"`, `"session_id":"thread-id","host_api_version":"2"`, 1)); err == nil {
+		t.Fatal("API version accepted for a non-OpenCode adapter")
+	}
+	for _, text := range []string{
+		strings.Replace(opencode, `"host_endpoint"`, `"host_api_version":null,"host_endpoint"`, 1),
+		strings.Replace(validProfile, `"session_id":"thread-id"`, `"session_id":"thread-id","host_api_version":null`, 1),
+	} {
+		if _, err := load(text); err == nil {
+			t.Fatal("explicit null API version accepted")
+		}
+	}
+}
+
+func TestProfileOpenCodeExampleLoads(t *testing.T) {
+	p, err := LoadProfile(filepath.Join("..", "..", "deploy", "opencode.profile.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.HostAPIVersion != "2" {
+		t.Fatalf("example API version %q", p.HostAPIVersion)
 	}
 }

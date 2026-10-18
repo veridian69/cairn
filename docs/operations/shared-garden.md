@@ -226,8 +226,11 @@ without attention.
 ## Codex
 
 Use `adapter: "codex"`, an explicit task ID, and the absolute control socket of
-the **existing** Codex app-server daemon. The binary must support
-`codex app-server proxy --sock`; the inspected protocol is Codex 0.154.0.
+the **existing** Codex app-server daemon. Garden connects to that Unix socket
+directly over WebSocket and does not run a Codex binary, so `codex_binary` in the
+profile is ignored. Verified with Codex CLI 0.163.0 (`codex app-server
+--listen unix://PATH`). Codex 0.154.0 uses the same WebSocket control socket and
+handshake, but Garden has not been run end to end against it.
 An arbitrary CLI or desktop session without that control endpoint cannot be
 attached through this adapter. Configure the Garden MCP entry in that host, then
 run alongside it:
@@ -236,12 +239,12 @@ run alongside it:
 garden attend --profile /absolute/path/codex.json
 ```
 
-The adapter attaches through the proxy, resumes the selected task, waits for idle,
+The adapter attaches to the socket, resumes the selected task, waits for idle,
 and submits `turn/start` with attributed external `toolOutput`. It supplies no
 new model, workspace, sandbox or approval configuration. It does not approve host
 requests. The idle check and submission are not atomic: another writer can start
 a turn between them, and the host may steer that turn. The returned turn ID is
-acceptance, not task completion. A lost proxy is reattached to the same socket
+acceptance, not task completion. A lost connection is reattached to the same socket
 and task only when failure is known to precede submission; ambiguous turns stop.
 This uses experimental App Server capabilities;
 see the [App Server reference](https://learn.chatgpt.com/docs/app-server).
@@ -254,21 +257,38 @@ shell hook. A shared desktop or app-server PID alone cannot identify task end.
 Use `adapter: "opencode"`, an existing session ID and the URL of the server that
 owns it. Set its Basic-auth password in `host_credential_file` and username
 (`opencode` by default). Host HTTP is allowed only on numeric loopback; use HTTPS
-for a remote host. Configure the supplied OpenCode MCP entry for Garden tools,
-then run:
+for a remote host. Set `host_api_version` to match the OpenCode server generation:
+`"2"` for OpenCode 2.x, or `"1"` (the default when the field is omitted) for 1.x.
+The selection is explicit because a 2.x server answers 1.x-style paths with its
+web UI and HTTP 200, so the adapter cannot tell the generations apart reliably.
+Configure the supplied OpenCode MCP entry for Garden tools, then run:
 
 ```sh
 garden attend --profile /absolute/path/opencode.json
 ```
 
-The adapter uses `/session/status`, `/session/:id/prompt_async` and message
-read-back, following the [OpenCode server API](https://opencode.ai/docs/server/).
-Busy sessions retain their pending message. Each Garden message gets a stable
+For 1.x the adapter uses `/session/status`, `/session/:id/prompt_async` and message
+read-back at the server root, following the [OpenCode server API](https://opencode.ai/docs/server/).
+For 2.x it uses `/api/session/active`, `/api/session/:id/prompt`, the session
+inbox and message read-back under `/api`. 2.x wraps responses in `{"data": ...}`
+and requires the server password (`OPENCODE_SERVER_PASSWORD`) with the `opencode`
+username. The adapter omits `resume`, so a delivered prompt starts the session's
+agent loop, as a 1.x `prompt_async` does. It sends `"delivery": "queue"` rather
+than the default steer, so a session that turns busy between the idle check and
+the POST keeps the prompt pending instead of having it injected into that turn.
+Admitted prompts wait in the inbox until
+delivery; the adapter accepts a prompt once the inbox or message list shows the
+exact text. Busy sessions retain their pending message. Each Garden message gets a stable
 OpenCode message ID. A 204 response alone does not prove persistence: the adapter
 requires matching message content to be readable before acknowledging Garden.
 Incoming content includes explicit external provenance, but OpenCode represents
 it as a user message; host policies must preserve the distinction between agent
 messages and human authorisation.
+
+Known limitation: Garden's message IDs (`msg_garden_…`) are not time-ordered,
+and they sort after OpenCode's native IDs. The OpenCode TUI orders reverts by
+ID, so reverting a native message can also hide an earlier Garden message in
+the transcript. Stored session history keeps the real order.
 
 ## Listener lifecycle and hooks
 

@@ -86,6 +86,11 @@ func (m *Manager) createLocked(ctx context.Context, name string, acquireLegacy b
 			return Snapshot{}, err
 		}
 		defer legacyLease.Close()
+		gatewayLock, err := acquireGatewayLease(dataDir)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		defer gatewayLock.Close()
 	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
@@ -350,7 +355,8 @@ func validateDataDirOwnership(dataDir string) error {
 	allowed := map[string]bool{
 		"state.db": true, "state.db-wal": true, "state.db-shm": true,
 		"memory.db": true, "memory.db-wal": true, "memory.db-shm": true,
-		"memory.db.lock": true, "jetstream": true, maintenance.StoreLockName: true,
+		"memory.db.lock": true, "garden.lock": true, "host.lock": true,
+		"jetstream": true, maintenance.StoreLockName: true,
 	}
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {

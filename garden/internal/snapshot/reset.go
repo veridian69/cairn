@@ -75,6 +75,11 @@ func (m *Manager) Reset(ctx context.Context) error {
 		return err
 	}
 	defer legacyLease.Close()
+	gatewayLock, err := acquireGatewayLease(dataDir)
+	if err != nil {
+		return err
+	}
+	defer gatewayLock.Close()
 	parent := filepath.Dir(dataDir)
 	stage, err := os.MkdirTemp(parent, "."+filepath.Base(dataDir)+"-reset-")
 	if err != nil {

@@ -388,6 +388,12 @@ def test_enrol_is_idempotent_private_and_exactly_scoped(
             for f in files
             if ".profile." in f.name
         )
+        opencode = json.loads(
+            (
+                ctx.root / "garden/profiles/helper/opencode.profile.example.json"
+            ).read_text()
+        )
+        assert opencode["host_api_version"] == "REPLACE_WITH_1_OR_2"
 
 
 @pytest.mark.parametrize("problem", ["revoked", "no_grants", "bad_scope"])
@@ -900,6 +906,7 @@ def test_bundle_readme_points_at_install_user_and_garden_config(
         assert f"`garden-config --host {adapter} --profile" in readme
         assert "--binary /absolute/path/garden --config" in readme
         assert "Install garden. " not in readme
+        assert ("host_api_version" in readme) == (adapter == "opencode")
 
 
 @pytest.mark.parametrize("outage", ["http_503", "tool_unavailable"])

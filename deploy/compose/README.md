@@ -37,7 +37,7 @@ recovery procedure.
 
 ## Image and contract boundary
 
-`CAIRN_IMAGE=cairn:v0.7.18` in `../images.lock` is a local build tag, not a
+`CAIRN_IMAGE=cairn:v0.7.20` in `../images.lock` is a local build tag, not a
 published image. Use the reviewed local build produced below or a separately
 reviewed registry digest and record its exact identity.
 
@@ -149,8 +149,8 @@ repository root, verify the contracts, build the image named by
 ```sh
 (cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-make image IMAGE=cairn:v0.7.18
-docker image inspect --format '{{.Id}}' cairn:v0.7.18
+make image IMAGE=cairn:v0.7.20
+docker image inspect --format '{{.Id}}' cairn:v0.7.20
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
@@ -174,7 +174,7 @@ removes an object only when both still match.
 set -eu
 set -o pipefail
 
-preflight_image='cairn:v0.7.18'
+preflight_image='cairn:v0.7.20'
 preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 preflight_label_key='io.cairn.compose-preflight'
 preflight_network="cairn-preflight-$preflight_id"
@@ -880,8 +880,8 @@ Build the edge image with the tag `deploy/images.lock` pins (`make image-edge`
 runs from the repository root and requires `VERSION`):
 
 ```sh
-(cd ../.. && make image-edge VERSION=0.7.18 EDGE_IMAGE=cairn-edge:v0.7.18)
-docker image inspect --format '{{.Id}}' cairn-edge:v0.7.18
+(cd ../.. && make image-edge VERSION=0.7.20 EDGE_IMAGE=cairn-edge:v0.7.20)
+docker image inspect --format '{{.Id}}' cairn-edge:v0.7.20
 ```
 
 Validate before starting:

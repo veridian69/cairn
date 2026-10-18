@@ -27,6 +27,7 @@ module.
 | `github.com/charmbracelet/x/ansi` | `v0.10.1` | MIT |
 | `github.com/charmbracelet/x/cellbuf` | `v0.0.13-0.20250311204145-2c3ea96c31dd` | MIT |
 | `github.com/charmbracelet/x/term` | `v0.2.1` | MIT |
+| `github.com/coder/websocket` | `v1.8.15` | ISC |
 | `github.com/dustin/go-humanize` | `v1.0.1` | MIT |
 | `github.com/google/jsonschema-go` | `v0.4.3` | MIT |
 | `github.com/google/uuid` | `v1.6.0` | BSD-3-Clause |

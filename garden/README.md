@@ -87,9 +87,10 @@ Important files:
 - `~/.garden/daemon.log` - daemon log when started in background mode
 - `~/.garden/runtime.lock` - installation lease blocking stopped-only maintenance
 - `~/.garden/backups/` - validated runtime snapshots and saved raw configuration
-- `~/.garden/data/state.db` - SQLite state
+- `~/.garden/data/state.db` - SQLite state, plus the gateway's `garden_binding` and `garden_inbox` tables when a gateway shares the data directory
 - `~/.garden/data/memory.db` - versioned shared-memory store
 - `~/.garden/data/memory.db.lock` - process lock protecting memory reset
+- `~/.garden/data/garden.lock`, `host.lock` - process locks held by a running gateway (`garden serve`) or host (`garden host`); absent when neither has run here
 - `~/.garden/data/jetstream/` - JetStream data via embedded NATS
 
 The data directory is created with mode `0700`; SQLite database and lock files use `0600`.
@@ -269,7 +270,8 @@ It reports:
 
 ### Runtime snapshots and reset
 
-These are stopped-only maintenance operations. Stop the daemon, close the TUI,
+These are stopped-only maintenance operations. Stop the daemon, any gateway
+(`garden serve` or `garden host`), close the TUI,
 quit any editor session with a `garden mcp` server attached (Claude Code / Codex
 spawn it automatically and it keeps running in the background), and let every
 other `garden` command exit before using them:
@@ -287,10 +289,19 @@ Snapshots are stored under `~/.garden/backups/<snapshot-id>/` with directory mod
 `0700` and file mode `0600`. Each snapshot contains:
 
 - the complete JetStream message history, including accountant records;
-- `state.db` participants, checkpoints, counters, and redactions;
+- `state.db` participants, checkpoints, counters, and redactions, and, when a
+  gateway shares the data directory, its binding and inbox delivery state;
 - `memory.db` items, provenance, FTS data, and vectors;
 - an exact, unresolved copy of `config.yaml`;
 - a versioned checksum manifest.
+
+Gateway lock files (`garden.lock`, `host.lock`) are never copied; the gateway
+recreates them on start. Snapshot, restore and reset refuse while a running
+gateway or host holds either lock. A gateway that starts during these operations
+must still reach the daemon after taking its lock, so it fails before opening
+`state.db`. Snapshots with gateway tables need a Garden binary that recognises
+them, so an older binary refuses to restore them rather than guessing at their
+schema.
 
 Because the config is copied literally, any literal API key in it is copied too.
 Prefer `$ENV_VAR` references. Snapshot creation needs enough temporary space for
