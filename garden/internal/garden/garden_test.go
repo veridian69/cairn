@@ -35,6 +35,8 @@ type fixture struct {
 	mu       sync.Mutex
 	denied   map[string]bool
 	readonly map[string]bool
+	// now, when set before start, replaces the gateway clock for lease and loop-guard tests.
+	now func() time.Time
 }
 
 func newFixture(t *testing.T) *fixture { return fixtureBeforeStart(t, nil) }
@@ -88,6 +90,9 @@ func (f *fixture) start() {
 	f.srv, err = New(context.Background(), f.cfg)
 	if err != nil {
 		f.t.Fatal(err)
+	}
+	if f.now != nil {
+		f.srv.now = f.now
 	}
 	f.http = httptest.NewServer(f.srv.Handler())
 }

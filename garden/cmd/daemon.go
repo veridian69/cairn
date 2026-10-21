@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -123,15 +124,38 @@ var startCmd = &cobra.Command{
 		}
 		defer os.Remove(pidPath)
 
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
+		if err := notifyReady(); err != nil {
+			return fmt.Errorf("notifying readiness: %w", err)
+		}
+
 		fmt.Printf("garden daemon running (%s)\n", d.NATSUrl())
 		fmt.Printf("agents: %d configured\n", len(cfg.Agents))
 
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		fmt.Println("\nshutting down...")
 		return nil
 	},
+}
+
+func notifyReady() error {
+	socket := os.Getenv("NOTIFY_SOCKET")
+	if socket == "" {
+		return nil
+	}
+	// Go's Unix socket implementation accepts systemd's @ abstract addresses.
+	conn, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: socket, Net: "unixgram"})
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	_, err = conn.Write([]byte("READY=1"))
+	return err
 }
 
 func waitForLockHandoff(reader *os.File, timeout time.Duration) error {

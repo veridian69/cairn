@@ -17,14 +17,22 @@ CREATE TABLE IF NOT EXISTS garden_inbox (
  principal TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, participant TEXT NOT NULL UNIQUE,
  generation TEXT NOT NULL, cursor INTEGER NOT NULL, pending_seq INTEGER NOT NULL DEFAULT 0,
  pending_id TEXT NOT NULL DEFAULT '', receipt TEXT NOT NULL DEFAULT '', last_receipt TEXT NOT NULL DEFAULT '',
- consumer TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0
-);`
+ consumer TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, deliverable INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS garden_message_depth (message_id TEXT PRIMARY KEY, depth INTEGER NOT NULL, seq INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS garden_message_depth_seq ON garden_message_depth(seq);
+CREATE TABLE IF NOT EXISTS garden_attention (
+ pair_low TEXT NOT NULL, pair_high TEXT NOT NULL, attended_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS garden_attention_pair ON garden_attention(pair_low, pair_high, attended_at);
+CREATE INDEX IF NOT EXISTS garden_attention_expiry ON garden_attention(attended_at);`
 
 type inbox struct {
 	principal, name, participant, generation  string
 	cursor, pending                           uint64
 	pendingID, receipt, lastReceipt, consumer string
 	leaseUntil                                int64
+	deliverable                               bool
 }
 
 func (s *Server) initStore(ctx context.Context, generation string, tail uint64) error {
@@ -34,6 +42,9 @@ func (s *Server) initStore(ctx context.Context, generation string, tail uint64) 
 	}
 	defer tx.Rollback()
 	if _, err = tx.ExecContext(ctx, gardenSchema); err != nil {
+		return err
+	}
+	if err = addColumnIfMissing(ctx, tx, "garden_inbox", "deliverable", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	raw, _ := json.Marshal(s.binding)
@@ -73,13 +84,38 @@ func (s *Server) initStore(ctx context.Context, generation string, tail uint64) 
 	}
 	return tx.Commit()
 }
+
+// addColumnIfMissing upgrades tables created by an older schema; CREATE TABLE IF NOT EXISTS never adds columns.
+func addColumnIfMissing(ctx context.Context, tx *sql.Tx, table, column, definition string) error {
+	rows, err := tx.QueryContext(ctx, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		found = found || name == column
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if err = rows.Err(); err != nil || found {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
+	return err
+}
 func (s *Server) loadInbox(ctx context.Context, principal string) (inbox, error) {
 	var b inbox
 	b.principal = principal
-	err := s.sql.QueryRowContext(ctx, `SELECT name,participant,generation,cursor,pending_seq,pending_id,receipt,last_receipt,consumer,lease_until FROM garden_inbox WHERE principal=?`, principal).Scan(&b.name, &b.participant, &b.generation, &b.cursor, &b.pending, &b.pendingID, &b.receipt, &b.lastReceipt, &b.consumer, &b.leaseUntil)
+	err := s.sql.QueryRowContext(ctx, `SELECT name,participant,generation,cursor,pending_seq,pending_id,receipt,last_receipt,consumer,lease_until,deliverable FROM garden_inbox WHERE principal=?`, principal).Scan(&b.name, &b.participant, &b.generation, &b.cursor, &b.pending, &b.pendingID, &b.receipt, &b.lastReceipt, &b.consumer, &b.leaseUntil, &b.deliverable)
 	return b, err
 }
 func (s *Server) saveInbox(ctx context.Context, b inbox) error {
-	_, err := s.sql.ExecContext(ctx, `UPDATE garden_inbox SET cursor=?,pending_seq=?,pending_id=?,receipt=?,last_receipt=?,consumer=?,lease_until=? WHERE principal=?`, b.cursor, b.pending, b.pendingID, b.receipt, b.lastReceipt, b.consumer, b.leaseUntil, b.principal)
+	_, err := s.sql.ExecContext(ctx, `UPDATE garden_inbox SET cursor=?,pending_seq=?,pending_id=?,receipt=?,last_receipt=?,consumer=?,lease_until=?,deliverable=? WHERE principal=?`, b.cursor, b.pending, b.pendingID, b.receipt, b.lastReceipt, b.consumer, b.leaseUntil, b.deliverable, b.principal)
 	return err
 }

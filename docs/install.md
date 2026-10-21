@@ -531,7 +531,7 @@ explained in the [full round-trip procedure](operations/evidence-verification.md
 
 This path is for changing or validating Cairn, not a prerequisite for using it.
 It requires the native tools above, Python 3.12–3.14 (the repository defaults to
-3.14), uv 0.12.14, Go 1.26.8+, make,
+3.14), uv 0.12.14, Go 1.26.8+, Node.js 22.18+ (OpenCode plugin tests), make,
 a C compiler for Go race tests, Docker with the Compose plugin, and curl for the
 pinned kubectl that `make check` fetches and verifies on demand. Bubblewrap at
 `/usr/bin/bwrap` (verified with 0.9.0),

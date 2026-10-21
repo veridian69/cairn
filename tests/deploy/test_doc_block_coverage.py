@@ -49,6 +49,16 @@ EXECUTED_ELSEWHERE = {
 
 # Blocks deliberately not executed, each with the reason.
 EXCUSED = {
+    **{
+        ("docs/operations/managed-garden.md", section, index): EXAMPLE
+        for section, index in (
+            ("Add Garden to an existing installation", 1),
+            ("Upgrade Garden", 1),
+            ("Upgrade Garden", 2),
+            ("Back up Garden", 1),
+            ("Remove Garden only", 1),
+        )
+    },
     ("docs/install.md", "Quick install with the guided installer", 1): EXAMPLE,
     ("docs/install.md", "Quick install with the guided installer", 2): EXAMPLE,
     (

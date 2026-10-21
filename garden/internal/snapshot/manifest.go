@@ -28,6 +28,7 @@ type manifest struct {
 	CreatedAt           time.Time  `json:"created_at"`
 	BinaryVersion       string     `json:"binary_version"`
 	CanonicalDataDir    string     `json:"canonical_data_dir"`
+	ConfigFile          string     `json:"config_file,omitempty"`
 	ConfigSHA256        string     `json:"config_sha256"`
 	StateSchemaVersion  int        `json:"state_schema_version"`
 	MemorySchemaVersion int        `json:"memory_schema_version"`

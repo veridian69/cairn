@@ -10,6 +10,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import os
 import re
 import socket
 import ssl
@@ -23,7 +24,8 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from cairn_install.core import TOKEN, Context, InstallError, read_owned
-from cairn_install.verification import request, validate_instance
+from cairn_install.verification import request as _request
+from cairn_install.verification import validate_instance
 
 FIELDS = {
     "endpoint",
@@ -38,10 +40,21 @@ FIELDS = {
     "image",
     "kubernetes_service_type",
     "allowed_cidrs",
+    "listen_address",
+    "stream",
 }
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 KIND = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._~:/@+%-]{0,254}")
+# Units h, m and s only; fractions are deliberately refused, which is narrower
+# than Go's time.ParseDuration.
+GO_DURATION = re.compile(r"(?:(?P<h>[0-9]+)h)?(?:(?P<m>[0-9]+)m)?(?:(?P<s>[0-9]+)s)?")
+MAX_INT64 = 2**63 - 1
+ADD_RETENTION: dict[str, Any] = {"max_age": "168h", "max_bytes": 1073741824}
+REVOKE_REASON = "garden_remove"
+FINGERPRINT_EXCLUDED = frozenset(
+    {".cache", "__pycache__", ".codex", ".superpowers", ".worktrees"}
+)
 MAX_RESPONSE = 128 * 1024
 READY_SECONDS = 120
 
@@ -50,11 +63,22 @@ class _Unavailable(InstallError):
     """Garden answered, but its Cairn authority or store is still starting."""
 
 
-def require_listener_available(port: int, *, wildcard: bool) -> None:
+def require_listener_available(
+    port: int, *, wildcard: bool, address: str | None = None
+) -> None:
     """Fail before enrolment if Garden cannot claim its documented host port."""
-    host = "0.0.0.0" if wildcard else "127.0.0.1"
+    if address is None:
+        host = "0.0.0.0" if wildcard else "127.0.0.1"
+        family = socket.AF_INET
+    else:
+        host = address
+        family = (
+            socket.AF_INET6
+            if ipaddress.ip_address(address).version == 6
+            else socket.AF_INET
+        )
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        with socket.socket(family, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((host, port))
     except OSError as error:
@@ -101,9 +125,34 @@ def _uuid(value: Any) -> str:
     return value
 
 
-def load_options(path: Path | str, mode: str) -> dict[str, Any]:
+def garden_realm(ctx: Context) -> str:
+    return (
+        str(ctx.state["server"]["cairn"]["realm"])
+        if ctx.mode == "garden-server"
+        else "local"
+    )
+
+
+def request(
+    ctx: Context,
+    endpoint: str,
+    token: str = "",
+    *,
+    data: bytes | None = None,
+    key: str = "",
+) -> dict[str, Any]:
+    if ctx.mode == "garden-server":
+        from .garden_server import request as external_request
+
+        return external_request(ctx, endpoint, token, data=data, key=key)
+    return _request(ctx, endpoint, token, data=data, key=key)
+
+
+def load_options(
+    path: Path | str, mode: str, *, realm: str = "local"
+) -> dict[str, Any]:
     """Validate strict input and snapshot paths and PEM digests."""
-    if mode not in {"native", "docker", "kubernetes"}:
+    if mode not in {"native", "docker", "kubernetes", "garden-server"}:
         raise InstallError("Managed Garden requires native, docker or kubernetes mode")
     value = _document(read_owned(Path(path).absolute(), 128 * 1024))
     try:
@@ -153,11 +202,20 @@ def load_options(path: Path | str, mode: str) -> dict[str, Any]:
         if (
             not isinstance(scope, dict)
             or set(scope) != {"realm", "segments"}
-            or scope["realm"] != "local"
+            or scope["realm"] != (realm if mode == "garden-server" else "local")
             or not isinstance(scope["segments"], list)
             or len(scope["segments"]) > 16
         ):
-            raise ValueError("explicit local scope required")
+            raise ValueError(
+                "explicit binding scope required"
+                if mode == "garden-server"
+                else "explicit local scope required"
+            )
+        if mode == "garden-server" and {
+            "kubernetes_service_type",
+            "allowed_cidrs",
+        } & set(value):
+            raise ValueError("Kubernetes options are unavailable in garden-server mode")
         for segment in scope["segments"]:
             if (
                 not isinstance(segment, dict)
@@ -210,6 +268,12 @@ def load_options(path: Path | str, mode: str) -> dict[str, Any]:
             raise ValueError(
                 "Kubernetes requires a pinned image and explicit allowed_cidrs"
             )
+        # Optional keys are normalised only when present, so existing option
+        # files keep their stored bytes and digests.
+        if "listen_address" in value:
+            value["listen_address"] = _listen_address(value["listen_address"])
+        if "stream" in value:
+            _stream(value["stream"])
         hashes = {}
         for field in ("tls_cert_file", "tls_key_file", "tls_ca_file"):
             if field == "tls_ca_file" and field not in value:
@@ -233,6 +297,83 @@ def load_options(path: Path | str, mode: str) -> dict[str, Any]:
         return value
     except (KeyError, TypeError, ValueError, OSError) as error:
         raise InstallError("Invalid Garden options: " + str(error)) from None
+
+
+def _listen_address(value: Any) -> str:
+    """Canonical IP literal; IPv4-mapped IPv6 becomes IPv4, scopes are refused."""
+    if not isinstance(value, str) or "%" in value:
+        raise ValueError("listen_address must be an IP address literal")
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        raise ValueError("listen_address must be an IP address literal") from None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return str(address)
+
+
+def _stream(value: Any) -> None:
+    """Validate retention; max_age accepts Go duration units h, m and s only."""
+    if not isinstance(value, dict) or set(value) != {"max_age", "max_bytes"}:
+        raise ValueError("stream requires exactly max_age and max_bytes")
+    age, size = value["max_age"], value["max_bytes"]
+    if not isinstance(age, str):
+        raise ValueError("stream max_age must be a duration string")
+    if age != "0":
+        match = GO_DURATION.fullmatch(age)
+        if not age or match is None:
+            raise ValueError("stream max_age must be a duration such as 168h or 1h30m")
+        nanoseconds = (
+            int(match["h"] or 0) * 3600
+            + int(match["m"] or 0) * 60
+            + int(match["s"] or 0)
+        ) * 10**9
+        if nanoseconds > MAX_INT64:
+            raise ValueError("stream max_age is too large")
+    if type(size) is not int or not 0 <= size <= MAX_INT64:
+        raise ValueError("stream max_bytes must be a nonnegative integer")
+
+
+def listen_address(options: dict[str, Any]) -> str:
+    """Host Garden binds; options without the key keep the wildcard listener."""
+    address: str = options.get("listen_address", "0.0.0.0")
+    return address
+
+
+def connect_address(options: dict[str, Any]) -> str:
+    """Address the installer dials to verify Garden on this host.
+
+    A wildcard listener is reachable on loopback; a specific listen address may
+    be the only address the listener (or Docker's published port) accepts.
+    """
+    address = ipaddress.ip_address(listen_address(options))
+    if address.is_unspecified:
+        return "::1" if address.version == 6 else "127.0.0.1"
+    return str(address)
+
+
+def listen(options: dict[str, Any], port: int) -> str:
+    """host:port for the listener, with IPv6 literals bracketed."""
+    address = listen_address(options)
+    if ":" in address:
+        return f"[{address}]:{port}"
+    return f"{address}:{port}"
+
+
+def retention(
+    options: dict[str, Any], legacy: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Stream retention from options, else the backend's legacy value (None omits)."""
+    if "stream" in options:
+        return dict(options["stream"])
+    return None if legacy is None else dict(legacy)
+
+
+def with_add_defaults(options: dict[str, Any]) -> dict[str, Any]:
+    """Options recorded by garden-add; never applied by load_options."""
+    result = dict(options)
+    result.setdefault("stream", dict(ADD_RETENTION))
+    return result
 
 
 def source_version(source: Path) -> str:
@@ -296,6 +437,43 @@ def prepare(ctx: Context) -> None:
     ctx.save()
 
 
+def garden_fingerprint(source: Path) -> str:
+    """Hash Garden's sources, skipping caches, local state and the built binary.
+
+    Mirrors cli.source_fingerprint: a filesystem walk in sorted relative-path
+    order, refusing symlinks, without invoking Git.
+    """
+    root = source / "garden"
+    if not root.is_dir() or root.is_symlink():
+        raise InstallError(f"Garden source directory is missing or a symlink: {root}")
+    files: list[tuple[str, Path]] = []
+    for directory, dirnames, filenames in os.walk(root):
+        current = Path(directory)
+        for name in dirnames + filenames:
+            if (current / name).is_symlink():
+                raise InstallError(
+                    f"Garden source contains a symlink: {current / name}"
+                )
+        dirnames[:] = sorted(
+            name for name in dirnames if name not in FINGERPRINT_EXCLUDED
+        )
+        for name in filenames:
+            relative = (current / name).relative_to(root).as_posix()
+            if relative != "garden":
+                files.append((relative, current / name))
+    digest = hashlib.sha256()
+    for relative, path in sorted(files):
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise InstallError(f"Garden source is not a regular file: {path}")
+        encoded = relative.encode()
+        digest.update(len(encoded).to_bytes(4, "big"))
+        digest.update(encoded)
+        with path.open("rb") as stream:
+            while block := stream.read(1024 * 1024):
+                digest.update(block)
+    return digest.hexdigest()
+
+
 def _receipt(value: dict[str, Any]) -> dict[str, Any]:
     try:
         if value["outcome"] not in ("committed", "replayed"):
@@ -327,7 +505,7 @@ def _mutation(
     saved = operations[operation]
     if saved["body"] != body:
         raise InstallError(
-            "Garden enrolment request changed; retained key cannot be reused"
+            "Garden administration request changed; retained key cannot be reused"
         )
     if "receipt" in saved:
         _receipt(saved["receipt"])
@@ -429,6 +607,19 @@ def _diagnose(ctx: Context, name: str, agent: dict[str, Any], token: str) -> Non
         raise InstallError(
             "Garden diagnostic product version differs from authenticated Cairn identity"
         )
+    if ctx.mode == "garden-server":
+        observed = {
+            field: response[field]
+            for field in ("contract_digest", "mcp_contract_digest")
+        }
+        pins = ctx.state["server"].setdefault("memory_contracts", observed)
+        if pins != observed:
+            raise InstallError(
+                "External Cairn memory contract digests changed; explicit recovery is required"
+            )
+        agent["diagnostic"] = response
+        ctx.save()
+        return
     for field, filename in (
         ("contract_digest", "cairn-memory-openapi-v1.json"),
         ("mcp_contract_digest", "cairn-memory-mcp-tools-v1.json"),
@@ -467,7 +658,11 @@ def enrol(ctx: Context, admin_token: str) -> None:
                 ctx,
                 agent,
                 "create-principal",
-                {"realm_id": "local", "kind": "workload", "label": "garden-" + name},
+                {
+                    "realm_id": garden_realm(ctx),
+                    "kind": "workload",
+                    "label": "garden-" + name,
+                },
                 admin_token,
             )
         )
@@ -491,7 +686,7 @@ def enrol(ctx: Context, admin_token: str) -> None:
                 agent,
                 "issue-credential",
                 {
-                    "realm_id": "local",
+                    "realm_id": garden_realm(ctx),
                     "principal_id": principal_id,
                     "expires_at": options["expires_at"],
                 },
@@ -525,10 +720,10 @@ def enrol(ctx: Context, admin_token: str) -> None:
                 agent,
                 "create-grant",
                 {
-                    "realm_id": "local",
+                    "realm_id": garden_realm(ctx),
                     "grant": {
                         "principal_id": principal_id,
-                        "realm_id": "local",
+                        "realm_id": garden_realm(ctx),
                         "segments": options["scope"]["segments"],
                         "operations": ["retrieve", "ingest"],
                         "read_clearance": options["classification"],
@@ -544,6 +739,55 @@ def enrol(ctx: Context, admin_token: str) -> None:
         except (KeyError, TypeError, ValueError):
             raise InstallError("Garden grant response is invalid") from None
         _diagnose(ctx, name, agent, token)
+    ctx.save()
+
+
+def revoke(ctx: Context, admin_token: str) -> None:
+    """Revoke each recorded participant's credential, then its grant, once.
+
+    Each mutation reuses the same capture-once discipline as enrolment: its key
+    is saved before the request, and a committed receipt is never re-sent.
+    """
+    garden = _state(ctx)
+    ctx.add_secret(admin_token)
+    validate_instance(request(ctx, "/v1/instance", admin_token), ctx.instance_id)
+    revocations = garden.setdefault("revocations", {})
+    for name in sorted(garden.get("agents", {})):
+        agent = garden["agents"][name]
+        steps: list[tuple[str, str, str]] = []
+        if "credential_id" in agent:
+            steps.append(("revoke-credential", "credential_id", agent["credential_id"]))
+        if "grant_id" in agent:
+            steps.append(("revoke-grant", "grant_id", agent["grant_id"]))
+        if not steps:
+            continue
+        record = revocations.setdefault(name, {})
+        for operation, field, identifier in steps:
+            body = {
+                "realm_id": garden_realm(ctx),
+                field: identifier,
+                "reason_code": REVOKE_REASON,
+            }
+            try:
+                response = _mutation(ctx, record, operation, body, admin_token)
+            except InstallError as error:
+                # Cairn's coarse refusal cannot distinguish an out-of-band
+                # revocation from any other invalid request (I-26).
+                raise InstallError(
+                    f"Revoking {name}'s {field.removesuffix('_id')} {identifier} "
+                    f"failed: {error}. If it was already revoked outside the "
+                    "installer, recover it manually before retrying.",
+                    error.code,
+                ) from None
+            result = _receipt(response)
+            try:
+                if _uuid(result[field]) != identifier:
+                    raise ValueError("identifier mismatch")
+                _timestamp(result["revoked_at"])
+            except (KeyError, TypeError, ValueError):
+                raise InstallError(
+                    "Garden revocation response differs from removal"
+                ) from None
     ctx.save()
 
 
@@ -605,16 +849,26 @@ def gateway_config(
 
 
 def profiles(ctx: Context) -> None:
-    """Write per-participant bundles with explicit host-session placeholders."""
+    """Write per-participant plugin bundles and legacy profile examples."""
     garden = _state(ctx)
     options = garden["options"]
     exports = {}
     for name, adapter in options["participants"].items():
         directory = ctx.root / "garden" / "profiles" / name
+        home: dict[str, Any] = {
+            "garden_endpoint": options["endpoint"],
+            "instance_id": ctx.instance_id,
+            "scope": options["scope"],
+            "classification": options["classification"],
+            "defaults": {adapter: name},
+        }
         credential = Path(garden["agents"][name]["token_file"])
         ctx.check_file(credential)
-        ctx.write_file(
-            directory / "agent.token", ctx.read_secret(credential) + "\n", secret=True
+        _publish_profile_file(
+            ctx,
+            directory / "agent.token",
+            ctx.read_secret(credential) + "\n",
+            secret=True,
         )
         profile: dict[str, Any] = {
             "garden_endpoint": options["endpoint"],
@@ -628,8 +882,15 @@ def profiles(ctx: Context) -> None:
         if garden["tls"].get("ca_file"):
             ca = Path(garden["tls"]["ca_file"])
             ctx.check_file(ca)
-            ctx.write_file(directory / "ca.crt", read_owned(ca).decode("ascii"))
+            _publish_profile_file(
+                ctx, directory / "ca.crt", read_owned(ca).decode("ascii")
+            )
+            _publish_profile_file(
+                ctx, directory / "tls" / "ca.crt", read_owned(ca).decode("ascii")
+            )
+            home["garden_tls_ca_file"] = "tls/ca.crt"
             profile["garden_tls_ca_file"] = "ca.crt"
+        _publish_profile_json(ctx, directory / "garden.json", home)
         if adapter == "codex":
             profile.update(
                 session_id="REPLACE_WITH_EXISTING_TASK_ID",
@@ -644,11 +905,12 @@ def profiles(ctx: Context) -> None:
                 host_credential_file="REPLACE_WITH_HOST_PASSWORD_FILE",
             )
         filename = adapter + ".profile.example.json"
-        write_json_config(ctx, directory / filename, profile)
+        _publish_profile_json(ctx, directory / filename, profile)
         command = "/REPLACE/WITH/INSTALLED/garden"
         arguments = ["connect", "--profile", "/REPLACE/WITH/BUNDLE/profile.json"]
         if adapter == "codex":
-            ctx.write_file(
+            _publish_profile_file(
+                ctx,
                 directory / "codex.mcp.example.toml",
                 "[mcp_servers.garden]\ncommand = "
                 + json.dumps(command)
@@ -672,7 +934,7 @@ def profiles(ctx: Context) -> None:
                         }
                     }
                 }
-            write_json_config(ctx, directory / (adapter + ".mcp.example.json"), mcp)
+            _publish_profile_json(ctx, directory / (adapter + ".mcp.example.json"), mcp)
         if adapter == "claude":
             setup = (
                 "Copy claude.profile.example.json to profile.json; it needs no edits. "
@@ -694,10 +956,12 @@ def profiles(ctx: Context) -> None:
                 "with the installed garden binary and this bundle's profile.json. Explicitly configure "
                 "the local server endpoint and protected password file. "
             )
-        ctx.write_file(
+        _publish_profile_file(
+            ctx,
             directory / "README.md",
-            f"# Garden participant {name}\n\n"
-            "Copy only this participant's directory to its agent machine, using a secure channel.\n"
+            _plugin_readme(name, adapter)
+            + "## Legacy MCP profiles\n\n"
+            + "Copy only this participant's directory to its agent machine, using a secure channel.\n"
             "Keep agent.token mode 0600 and this directory mode 0700. Do not distribute installer "
             "administrator credentials, issuance captures or other participants' directories.\n\n"
             "Install the garden binary and helper scripts on this machine with "
@@ -727,6 +991,55 @@ def profiles(ctx: Context) -> None:
         exports[name] = str(directory)
     garden["profiles"] = exports
     ctx.save()
+
+
+def _publish_profile_file(
+    ctx: Context, path: Path, content: str, *, secret: bool = False
+) -> None:
+    # replace_file requires an ownership record, even on first publication.
+    if not path.exists() and not path.is_symlink():
+        ctx.write_file(path, content, secret=secret)
+    ctx.replace_file(path, content, secret=secret)
+
+
+def _publish_profile_json(ctx: Context, path: Path, value: dict[str, Any]) -> None:
+    content = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    if (path.exists() or path.is_symlink()) and str(
+        path.absolute()
+    ) not in ctx.pending_replacements():
+        ctx.check_file(path)
+        raw = read_owned(path)
+        if _json(_document(raw)) == _json(value):
+            content = raw.decode("utf-8")
+    _publish_profile_file(ctx, path, content)
+
+
+def _plugin_readme(name: str, adapter: str) -> str:
+    plugin_dir = f"/absolute/path/to/garden/plugins/{adapter}"
+    if adapter == "claude":
+        install = f"`/plugin marketplace add {plugin_dir}` then `/plugin install garden@garden-local`. Launch with `claude --dangerously-load-development-channels plugin:garden@garden-local`."
+    elif adapter == "codex":
+        install = f"`codex plugin marketplace add {plugin_dir}` then `codex plugin add garden@garden-local`. Enable it with `alias codex='codex -c plugins.\"garden@garden-local\".enabled=true'`."
+    else:
+        install = f"Copy `{plugin_dir}/garden.ts` to `.opencode/plugins/` and launch `opencode --standalone`."
+    return (
+        f"# Garden participant {name}\n\n"
+        "Copy only this participant's directory to its agent machine using a secure channel. Keep `agent.token` mode 0600 and the directory mode 0700.\n\n"
+        "Install the Garden binary and put it on `PATH`, for example with "
+        "`garden/scripts/install-user` from the Cairn source checkout.\n\n"
+        "## Configure the Garden home\n\n"
+        "Garden uses `$GARDEN_HOME`, else `~/.garden`. Initialise only a home directory "
+        "that does not exist yet, so nothing in it is overwritten: run "
+        "`install -d -m0700 ~/.garden ~/.garden/tls`, "
+        "then `install -m0600 /absolute/path/to/garden.json ~/.garden/garden.json`; "
+        "when this bundle has `tls/ca.crt`, also run "
+        "`install -m0600 /absolute/path/to/tls/ca.crt ~/.garden/tls/ca.crt`. "
+        "If `~/.garden` already exists, leave it unchanged: set `GARDEN_HOME` to a new "
+        "absolute directory, initialise that the same way, and keep `GARDEN_HOME` set "
+        "for this agent and its plugin.\n\n"
+        f"Run `garden home add-identity {name} --token-file /absolute/path/to/agent.token --default {adapter}`.\n\n"
+        "## Install the plugin\n\n" + install + "\n\n"
+    )
 
 
 class _LocalTLS(http.client.HTTPSConnection):
@@ -802,11 +1115,13 @@ def _rpc(
 
 
 def verify(
-    ctx: Context, connect_host: str = "127.0.0.1", connect_port: int | None = None
+    ctx: Context, connect_host: str | None = None, connect_port: int | None = None
 ) -> None:
     """Bounded TLS readiness and per-agent MCP status; validate public-name SNI."""
     garden = _state(ctx)
     options = garden["options"]
+    if connect_host is None:
+        connect_host = connect_address(options)
     endpoint = urlsplit(options["endpoint"])
     if garden["tls"].get("ca_file"):
         ctx.check_file(Path(garden["tls"]["ca_file"]))

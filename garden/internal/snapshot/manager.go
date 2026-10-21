@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/veridian69/cairn/garden/internal/config"
 	"github.com/veridian69/cairn/garden/internal/maintenance"
 )
 
@@ -29,6 +28,7 @@ type ownershipMarkerDocument struct {
 // Manager owns snapshot storage below one Garden configuration directory.
 type Manager struct {
 	configDir      string
+	layout         layout
 	binaryVersion  string
 	now            func() time.Time
 	availableBytes func(string) (uint64, error)
@@ -36,20 +36,17 @@ type Manager struct {
 
 // NewManager constructs a snapshot manager.
 func NewManager(configDir, binaryVersion string) *Manager {
-	return &Manager{
-		configDir: configDir, binaryVersion: binaryVersion,
-		now: time.Now, availableBytes: filesystemAvailableBytes,
-	}
+	return NewManagerWithBackupDir(configDir, "", binaryVersion)
 }
 
 // Create saves the exact configuration and complete stopped runtime data.
 func (m *Manager) Create(ctx context.Context, name string) (Snapshot, error) {
-	lease, err := maintenance.Acquire(m.configDir, maintenance.Exclusive)
+	lease, err := maintenance.Acquire(m.layout.leaseDir, maintenance.Exclusive)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	defer lease.Close()
-	if err := ensureLegacyDaemonStopped(m.configDir); err != nil {
+	if err := ensureLegacyDaemonStopped(m.layout.leaseDir); err != nil {
 		return Snapshot{}, err
 	}
 	return m.createLocked(ctx, name, true)
@@ -59,16 +56,11 @@ func (m *Manager) createLocked(ctx context.Context, name string, acquireLegacy b
 	if !snapshotNamePattern.MatchString(name) {
 		return Snapshot{}, fmt.Errorf("snapshot name %q must match %s", name, snapshotNamePattern)
 	}
-	configPath := filepath.Join(m.configDir, "config.yaml")
-	configBytes, err := os.ReadFile(configPath)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("reading config: %w", err)
-	}
-	cfg, err := config.Parse(configBytes)
+	configBytes, configuredDataDir, err := m.readConfig()
 	if err != nil {
 		return Snapshot{}, err
 	}
-	dataDir, backupRoot, err := m.preparePaths(cfg.Stream.DataDir)
+	dataDir, backupRoot, err := m.preparePaths(configuredDataDir)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -125,7 +117,7 @@ func (m *Manager) createLocked(ctx context.Context, name string, acquireLegacy b
 	if err := os.Chmod(stage, 0700); err != nil {
 		return Snapshot{}, err
 	}
-	if err := writeFileSynced(filepath.Join(stage, "config.yaml"), configBytes, 0600); err != nil {
+	if err := writeFileSynced(filepath.Join(stage, m.layout.configFile), configBytes, 0600); err != nil {
 		return Snapshot{}, err
 	}
 	stagedData := filepath.Join(stage, "data")
@@ -153,6 +145,7 @@ func (m *Manager) createLocked(ctx context.Context, name string, acquireLegacy b
 	doc := manifest{
 		FormatVersion: manifestFormatVersion, ID: id, CreatedAt: createdAt,
 		BinaryVersion: m.binaryVersion, CanonicalDataDir: dataDir,
+		ConfigFile:         m.manifestConfigFile(),
 		ConfigSHA256:       fmt.Sprintf("%x", configDigest[:]),
 		StateSchemaVersion: stateVersion, MemorySchemaVersion: memoryVersion,
 		TotalBytes: total, Files: files,
@@ -193,15 +186,15 @@ func nextSnapshotPath(backupRoot, base string) (string, string, error) {
 
 // List returns saved snapshots newest first.
 func (m *Manager) List(ctx context.Context) ([]Snapshot, error) {
-	lease, err := maintenance.Acquire(m.configDir, maintenance.Exclusive)
+	lease, err := maintenance.Acquire(m.layout.leaseDir, maintenance.Exclusive)
 	if err != nil {
 		return nil, err
 	}
 	defer lease.Close()
-	if err := ensureLegacyDaemonStopped(m.configDir); err != nil {
+	if err := ensureLegacyDaemonStopped(m.layout.leaseDir); err != nil {
 		return nil, err
 	}
-	backupRoot := filepath.Join(m.configDir, "backups")
+	backupRoot := m.layout.backupRoot
 	entries, err := os.ReadDir(backupRoot)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -225,7 +218,8 @@ func (m *Manager) List(ctx context.Context) ([]Snapshot, error) {
 		if err := json.Unmarshal(data, &doc); err != nil {
 			return nil, fmt.Errorf("parsing snapshot %q: %w", entry.Name(), err)
 		}
-		if doc.FormatVersion != manifestFormatVersion || doc.ID != entry.Name() {
+		_, configErr := doc.configFile()
+		if doc.FormatVersion != manifestFormatVersion || doc.ID != entry.Name() || configErr != nil {
 			return nil, fmt.Errorf("invalid snapshot manifest %q", entry.Name())
 		}
 		snapshots = append(snapshots, Snapshot{
@@ -247,7 +241,10 @@ func (m *Manager) preparePaths(configuredDataDir string) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
-	backupPath := filepath.Join(configPath, "backups")
+	backupPath, err := filepath.Abs(m.layout.backupRoot)
+	if err != nil {
+		return "", "", err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", err
@@ -265,7 +262,7 @@ func (m *Manager) preparePaths(configuredDataDir string) (string, string, error)
 	if err := os.MkdirAll(m.configDir, 0700); err != nil {
 		return "", "", err
 	}
-	backupRoot := filepath.Join(m.configDir, "backups")
+	backupRoot := m.layout.backupRoot
 	if err := os.MkdirAll(backupRoot, 0700); err != nil {
 		return "", "", err
 	}

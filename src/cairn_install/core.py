@@ -17,10 +17,10 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, BinaryIO
 from uuid import uuid4
 
 NAME = re.compile(r"[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?")
@@ -256,6 +256,14 @@ def read_owned(path: Path, limit: int = MAX_OUTPUT) -> bytes:
         raise InstallError(f"Cannot safely read {path}: {error.strerror}") from error
 
 
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
     secure_directory(path.parent)
     if path.exists() or path.is_symlink():
@@ -316,6 +324,8 @@ class Context:
 
     @property
     def instance_id(self) -> str:
+        if self.mode == "garden-server":
+            return str(self.state["server"]["cairn"]["instance_id"])
         return str(self.state["instance_id"])
 
     @property
@@ -433,6 +443,7 @@ class Context:
         key = str(path)
         owned = self.state["owned_files"]
         intents = self.state.setdefault("file_intents", {})
+        self._refuse_pending_replacement(path)
         if secret:
             self.add_secret(content.strip())
         if path.exists() or path.is_symlink():
@@ -481,7 +492,104 @@ class Context:
         owned[key] = digest
         self.save()
 
+    def _refuse_pending_replacement(self, path: Path) -> None:
+        if str(path.absolute()) in self.state.get("file_replacements", {}):
+            raise InstallError(
+                f"Owned file has an interrupted replacement; resume the operation: {path}"
+            )
+
+    def pending_replacements(self) -> dict[str, dict[str, str]]:
+        return {
+            key: dict(entry)
+            for key, entry in self.state.get("file_replacements", {}).items()
+        }
+
+    def replace_file(
+        self, path: Path, content: str, *, mode: int = 0o600, secret: bool = False
+    ) -> bool:
+        path = Path(os.path.normpath(path.absolute()))
+        # Overwriting is only safe where no other user can substitute content
+        # between inspection and publish: inside the private instance tree.
+        if path == self.root or not path.is_relative_to(self.root):
+            raise InstallError(
+                f"Replacement target must be inside the private instance tree: {path}"
+            )
+        secure_directory(self.root, private=True)
+        secure_directory(path.parent)
+        digest = hashlib.sha256(content.encode()).hexdigest()
+        key = str(path)
+        owned = self.state["owned_files"]
+        intents = self.state.setdefault("file_intents", {})
+        if secret:
+            self.add_secret(content.strip())
+        pending = self.state.get("file_replacements", {}).get(key)
+        if pending is not None:
+            observed = hashlib.sha256(read_owned(path)).hexdigest()
+            if stat.S_IMODE(path.stat().st_mode) != mode:
+                raise InstallError(f"Owned file permissions changed: {path}")
+            if observed == pending["new"]:
+                # The journaled publish landed; make its rename durable and adopt
+                # it before any new request, so a restore can follow it.
+                _fsync_directory(path.parent)
+                owned[key] = pending["new"]
+                del self.state["file_replacements"][key]
+                self.save()
+                if digest == pending["new"]:
+                    return True
+            elif observed != pending["old"]:
+                raise InstallError(
+                    f"Interrupted replacement left unexpected content; preserve and inspect: {path}"
+                )
+            elif observed == digest:
+                # Publish never landed and the old content is what is requested.
+                del self.state["file_replacements"][key]
+                self.save()
+                return False
+            # Otherwise the publish never landed; the request supersedes the intent.
+            pending = None
+        expected = owned.get(key) or intents.get(key)
+        if expected is None:
+            raise InstallError(f"Refusing to replace unowned file: {path}")
+        observed = hashlib.sha256(read_owned(path)).hexdigest()
+        if observed != expected:
+            raise InstallError(f"Owned file changed; refusing replacement: {path}")
+        if stat.S_IMODE(path.stat().st_mode) != mode:
+            raise InstallError(f"Owned file permissions changed: {path}")
+        if observed == digest and pending is None:
+            return False
+        replacements = self.state.setdefault("file_replacements", {})
+        replacements[key] = {"old": observed, "new": digest}
+        self.save()
+        if secret:
+            self.note(
+                f"Replace protected credential file {shlex.quote(key)}; contents omitted.",
+                detail=True,
+            )
+        else:
+            self.note(
+                f"# Replace {key} (mode {mode:04o})\ncat > {shlex.quote(key)} <<'CAIRN_FILE'\n{content.rstrip()}\nCAIRN_FILE",
+                detail=True,
+            )
+        secure_directory(path.parent)
+        fd, temp = tempfile.mkstemp(prefix=".replace-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                os.fchmod(stream.fileno(), mode)
+                stream.write(content.encode())
+                stream.flush()
+                sync_regular_file(stream.fileno())
+            os.replace(temp, path)
+            _fsync_directory(path.parent)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+        owned[key] = digest
+        del self.state["file_replacements"][key]
+        self.save()
+        return True
+
     def check_file(self, path: Path) -> None:
+        self._refuse_pending_replacement(path)
         key = str(path.absolute())
         expected = self.state["owned_files"].get(key) or self.state.get(
             "file_intents", {}
@@ -503,11 +611,27 @@ class Context:
         timeout: float = 120,
         private: bool = False,
         stdout_path: Path | None = None,
+        stdout_limit: int = MAX_OUTPUT,
         stdin_data: bytes | None = None,
+        stdin_path: Path | None = None,
         allowed: tuple[int, ...] = (0,),
     ) -> str:
-        if stdin_data is not None and not private:
+        """Run a bounded command, optionally streaming protected file input.
+
+        stdout_limit applies only to stdout_path; stderr and returned stdout
+        retain MAX_OUTPUT. stdin_path streams an owned regular file without
+        symlinks, requires private=True and is exclusive with stdin_data.
+        """
+        if (stdin_data is not None or stdin_path is not None) and not private:
             raise InstallError("Command stdin requires private output")
+        if stdin_data is not None and stdin_path is not None:
+            raise InstallError(
+                "Command stdin_data and stdin_path are mutually exclusive"
+            )
+        if stdout_path is not None and (
+            type(stdout_limit) is not int or stdout_limit <= 0
+        ):
+            raise InstallError("Command stdout_limit must be a positive integer")
         working = cwd or self.source
         command = [str(arg) for arg in argv]
         # Children inherit the operator's proxy and index configuration
@@ -575,6 +699,26 @@ class Context:
         )
         if not hidden:
             self._display_cwd = display_cwd
+        # Validate file input before creating the capture, so a refused input
+        # never leaves an exclusive capture behind to block a retry.
+        input_file: BinaryIO | None = None
+        if stdin_path is not None:
+            secure_directory(stdin_path.parent)
+            try:
+                input_file = os.fdopen(
+                    os.open(stdin_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK),
+                    "rb",
+                )
+            except OSError as error:
+                raise InstallError(
+                    f"Expected an owned regular stdin file: {stdin_path}"
+                ) from error
+            info = os.fstat(input_file.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                input_file.close()
+                raise InstallError(
+                    f"Expected an owned regular stdin file: {stdin_path}"
+                )
         capture_fd: int | None = None
         if stdout_path:
             secure_directory(stdout_path.parent)
@@ -585,6 +729,8 @@ class Context:
                     0o600,
                 )
             except OSError as error:
+                if input_file is not None:
+                    input_file.close()
                 raise InstallError(
                     f"Cannot exclusively create capture {stdout_path}"
                 ) from error
@@ -593,10 +739,14 @@ class Context:
                 tempfile.TemporaryFile() as out,
                 tempfile.TemporaryFile() as err,
                 tempfile.TemporaryFile() as private_input,
+                ExitStack() as inputs,
             ):
+                input_stream: BinaryIO = private_input
                 if stdin_data is not None:
                     private_input.write(stdin_data)
                     private_input.seek(0)
+                elif input_file is not None:
+                    input_stream = inputs.enter_context(input_file)
                 process: subprocess.Popen[bytes] | None = None
                 try:
                     with defer_spawn_signals() as cancelled:
@@ -604,8 +754,8 @@ class Context:
                             command,
                             cwd=working,
                             env=environment,
-                            stdin=private_input
-                            if stdin_data is not None
+                            stdin=input_stream
+                            if stdin_data is not None or stdin_path is not None
                             else subprocess.DEVNULL,
                             stdout=capture_fd if capture_fd is not None else out,
                             stderr=err,
@@ -624,11 +774,16 @@ class Context:
                             next_update = time.monotonic() + 15
                         if time.monotonic() >= deadline:
                             raise subprocess.TimeoutExpired(command, timeout)
-                        descriptors = [
-                            err.fileno(),
-                            capture_fd if capture_fd is not None else out.fileno(),
-                        ]
-                        if any(os.fstat(fd).st_size > MAX_OUTPUT for fd in descriptors):
+                        output_fd = (
+                            capture_fd if capture_fd is not None else out.fileno()
+                        )
+                        output_limit = (
+                            stdout_limit if capture_fd is not None else MAX_OUTPUT
+                        )
+                        if (
+                            os.fstat(err.fileno()).st_size > MAX_OUTPUT
+                            or os.fstat(output_fd).st_size > output_limit
+                        ):
                             raise InstallError(
                                 "Command output exceeded the safe capture limit"
                             )
@@ -658,6 +813,10 @@ class Context:
                         "interrupted",
                     )
                 if capture_fd is not None:
+                    if os.fstat(capture_fd).st_size > stdout_limit:
+                        raise InstallError(
+                            "Command output exceeded limit; inspect the stage before resuming."
+                        )
                     os.fsync(capture_fd)
                     output = ""
                 else:
@@ -686,11 +845,17 @@ class Context:
                     if private or not self.verbose:
                         # A private command never shows stdout; its redacted
                         # stderr tail is the only diagnostic a tester gets.
-                        excerpt = "\n".join(
-                            self.redact(
-                                errors if private else errors or output
-                            ).splitlines()[-8:]
-                        )[-1600:]
+                        # File input is arbitrary data redact() cannot know,
+                        # so a command reading it shows no stderr at all.
+                        excerpt = (
+                            ""
+                            if stdin_path is not None
+                            else "\n".join(
+                                self.redact(
+                                    errors if private else errors or output
+                                ).splitlines()[-8:]
+                            )[-1600:]
+                        )
                         self.note(
                             f"Command failed (exit {code})."
                             + (f"\n{excerpt}" if excerpt else ""),
@@ -703,6 +868,8 @@ class Context:
                 f"Could not execute {command[0]}: {error.strerror}"
             ) from error
         finally:
+            if input_file is not None:
+                input_file.close()
             if capture_fd is not None:
                 os.close(capture_fd)
 

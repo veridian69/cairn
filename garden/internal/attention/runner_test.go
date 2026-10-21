@@ -133,6 +133,28 @@ func TestRunnerRetriesBusyHostWithoutAcknowledgingEarly(t *testing.T) {
 	}
 }
 
+func TestRunnerUsesHostRetryAfterInsteadOfDefault(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inbox := &testInbox{pending: &Pending{Event: Event{ID: "m", Payload: json.RawMessage(`{}`)}, Receipt: "receipt-one", Generation: "g"}, cancel: cancel}
+	var first time.Time
+	var gap time.Duration
+	runner := Runner{Inbox: inbox, ConsumerID: "consumer", retryAfter: 10 * time.Second, Host: deliveryFunc(func(context.Context, Event) error {
+		if first.IsZero() {
+			first = time.Now()
+			return RetryAfter(time.Millisecond)
+		}
+		gap = time.Since(first)
+		return nil
+	})}
+	if err := runner.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if inbox.acks != 1 || gap >= 5*time.Second {
+		t.Fatalf("acks=%d gap=%v; want one ack after the host's wait, not the default", inbox.acks, gap)
+	}
+}
+
 func TestRunnerStopsCleanlyWhenIdleHostSessionCloses(t *testing.T) {
 	closed := make(chan struct{})
 	close(closed)

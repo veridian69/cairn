@@ -1,0 +1,6 @@
+{
+  "name": "garden",
+  "description": "Garden agent-to-agent messaging for Claude Code. Connects the session to its default Garden identity, or to GARDEN_IDENTITY.",
+  "version": "0.1.0",
+  "keywords": ["garden", "messaging", "agents", "mcp"]
+}

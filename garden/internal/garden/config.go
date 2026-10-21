@@ -28,6 +28,8 @@ type Config struct {
 	TLSKeyFile     string            `json:"tls_key_file,omitempty"`
 	Auth           gardenauth.Config `json:"auth"`
 	Principals     map[string]string `json:"principals"`
+	// LoopGuard bounds agent-to-agent attention; zero fields take the defaults.
+	LoopGuard LoopGuard `json:"loop_guard,omitempty"`
 	// Version is the build's release version, reported as the MCP server
 	// version. It is set by the command, never read from configuration.
 	Version string `json:"-"`
@@ -57,6 +59,30 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, errors.New("trailing Garden configuration JSON")
 	}
 	return cfg, cfg.validate()
+}
+
+// LoopGuard limits how far agents can keep messaging each other without a human.
+type LoopGuard struct {
+	// ThreadDepth is the maximum reply_to chain depth; a root message is depth 1.
+	ThreadDepth int `json:"thread_depth,omitempty"`
+	// PairRate is the maximum attention requests between one unordered pair per window.
+	PairRate int `json:"pair_rate,omitempty"`
+	// PairWindowSeconds is the rolling window for PairRate.
+	PairWindowSeconds int `json:"pair_window_seconds,omitempty"`
+}
+
+// resolved fills zero fields with the defaults: depth 30, pair rate 20 per 10 minutes.
+func (g LoopGuard) resolved() LoopGuard {
+	if g.ThreadDepth == 0 {
+		g.ThreadDepth = 30
+	}
+	if g.PairRate == 0 {
+		g.PairRate = 20
+	}
+	if g.PairWindowSeconds == 0 {
+		g.PairWindowSeconds = 600
+	}
+	return g
 }
 
 var participantName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`)
@@ -89,6 +115,9 @@ func (c Config) validate() error {
 	}
 	if len(c.Principals) == 0 || len(c.Principals) > 1000 {
 		return errors.New("Garden requires 1..1000 principals")
+	}
+	if g := c.LoopGuard; g.ThreadDepth < 0 || g.ThreadDepth > 1000 || g.PairRate < 0 || g.PairRate > 10000 || g.PairWindowSeconds < 0 || g.PairWindowSeconds > 86400 {
+		return errors.New("invalid Garden loop guard limits")
 	}
 	names := map[string]bool{}
 	for id, name := range c.Principals {

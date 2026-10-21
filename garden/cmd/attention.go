@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -49,11 +50,16 @@ func newDoctorCommand() *cobra.Command {
 }
 
 func newConnectCommand() *cobra.Command {
-	var profile string
+	var profile, harness string
 	command := &cobra.Command{Use: "connect", Short: "Expose a remote Garden through local MCP stdio", PersistentPreRunE: func(*cobra.Command, []string) error { return nil }}
 	command.Flags().StringVar(&profile, "profile", "", "Explicit Garden adapter profile")
-	_ = command.MarkFlagRequired("profile")
+	command.Flags().StringVar(&harness, "harness", "", "Connect as this harness's default identity from the Garden home (claude, opencode, codex)")
+	command.MarkFlagsMutuallyExclusive("profile", "harness")
+	command.MarkFlagsOneRequired("profile", "harness")
 	command.RunE = func(cmd *cobra.Command, args []string) error {
+		if harness != "" {
+			return connectHarness(cmd, harness)
+		}
 		p, err := attention.LoadProfile(profile)
 		if err != nil {
 			return err
@@ -65,7 +71,11 @@ func newConnectCommand() *cobra.Command {
 			return err
 		}
 		defer remote.Close()
-		server := attention.NewStdio(cmd.OutOrStdout(), remote, p.Adapter == "claude")
+		instructions := attention.ProfileInstructions
+		if p.Adapter == "claude" {
+			instructions = attention.ProfileChannelInstructions
+		}
+		server := attention.NewStdio(cmd.OutOrStdout(), remote, p.Adapter == "claude", instructions)
 		in, ok := cmd.InOrStdin().(io.ReadCloser)
 		if !ok {
 			in = io.NopCloser(cmd.InOrStdin())
@@ -77,6 +87,74 @@ func newConnectCommand() *cobra.Command {
 		return server.Run(ctx, in, nil)
 	}
 	return command
+}
+
+// connectHarness serves the harness's default (or GARDEN_IDENTITY) Garden identity.
+// Connection failures stay up as a status-only server with the reason.
+func connectHarness(cmd *cobra.Command, harness string) error {
+	if harness != "claude" && harness != "opencode" && harness != "codex" {
+		return fmt.Errorf("harness %s is not supported yet", harness)
+	}
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if harness == "codex" {
+		return connectCodex(ctx, cmd)
+	}
+	session := attention.OpenHarness(ctx, harness, os.Getenv("GARDEN_IDENTITY"))
+	defer session.Close()
+	// Codex has no channel: its messages reach the thread through `codex queue`, not the Stdio server.
+	server := attention.NewStdio(cmd.OutOrStdout(), session.Tools, session.Remote != nil && harness != "codex", session.Instructions)
+	if harness == "opencode" && session.Remote != nil {
+		server.UseOpenCode(session.Remote.SessionReported, session.Remote.DeliveryFailed)
+		session.Remote.OnInstructions(server.SetInstructions)
+	}
+	in, ok := cmd.InOrStdin().(io.ReadCloser)
+	if !ok {
+		in = io.NopCloser(cmd.InOrStdin())
+	}
+	if session.Remote != nil {
+		host := session.Host
+		if host == nil {
+			host = server
+		}
+		runner := attention.Runner{Inbox: session.Remote, Host: host, ConsumerID: session.ConsumerID}
+		return server.Run(ctx, in, func(ctx context.Context) error {
+			if err := session.Remote.StartDelivery(ctx, server); err != nil {
+				return err
+			}
+			return runner.Run(ctx)
+		})
+	}
+	return server.Run(ctx, in, nil)
+}
+
+// connectCodex serves one embedded Codex thread. A sibling core of the same Codex process asks
+// for the identity with SIGUSR1, so the handler is registered before the identity is claimed.
+func connectCodex(ctx context.Context, cmd *cobra.Command) error {
+	yield := make(chan os.Signal, 1)
+	signal.Notify(yield, syscall.SIGUSR1)
+	defer signal.Stop(yield)
+	session := attention.OpenHarness(ctx, "codex", os.Getenv("GARDEN_IDENTITY"))
+	defer session.Close()
+	core := attention.NewCodexCore(session)
+	// Codex has no channel: its messages reach the thread through `codex queue`, not the Stdio server.
+	server := attention.NewStdio(cmd.OutOrStdout(), core, false, core.Instructions())
+	server.UseCodex(core.Learn)
+	go func() {
+		for {
+			select {
+			case <-yield:
+				core.Yield()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	in, ok := cmd.InOrStdin().(io.ReadCloser)
+	if !ok {
+		in = io.NopCloser(cmd.InOrStdin())
+	}
+	return server.Run(ctx, in, func(ctx context.Context) error { return core.Run(ctx, server) })
 }
 
 func newAttendCommand() *cobra.Command {

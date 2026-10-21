@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Pre-blind rehearsal: replay the blind acceptance matrix on a real host before
-# a release goes to an independent blind tester.
+# a release goes to an independent blind tester. Includes Garden add, upgrade,
+# rollback data choices, interruption recovery, backup and Garden-only removal.
 #
 # It drives `cairn-install` through every documented mode and feature, runs
 # the documented prerequisite and removal procedures by extracting their
@@ -17,8 +18,9 @@
 #
 # Environment (defaults suit reference):
 #   PRE_BLIND_STAGES     preflight prereqs matrix isolation removal
-#   PRE_BLIND_CONFIGS    disp-attic nat-attic nat-sem nat-garden dock-attic
-#                        dock-sem dock-garden kube-attic kube-sem kube-garden
+#   PRE_BLIND_CONFIGS    disp-attic nat-attic nat-sem nat-garden nat-gops dock-attic
+#                        dock-sem dock-garden dock-gops kube-attic kube-sem kube-garden
+#   *-gops installs Attic only, then exercises the Garden operations.
 #   PRE_BLIND_REUSE_BUILDS=1  keep retained FalkorDB/Cairn/Garden builds
 #   PRE_BLIND_KEEP=1     leave instances in place after the matrix
 #   KUBE_CONTEXT KUBE_NODE NODE_SSH KUBE_STORAGE_CLASS GATEWAY_PROFILE
@@ -28,7 +30,7 @@ set -E  # the ERR trap below must fire inside functions too
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 : "${PRE_BLIND_STAGES:=preflight prereqs matrix isolation removal}"
-: "${PRE_BLIND_CONFIGS:=disp-attic nat-attic nat-sem nat-garden dock-attic dock-sem dock-garden kube-attic kube-sem kube-garden}"
+: "${PRE_BLIND_CONFIGS:=disp-attic nat-attic nat-sem nat-garden nat-gops dock-attic dock-sem dock-garden dock-gops kube-attic kube-sem kube-garden}"
 : "${PRE_BLIND_REUSE_BUILDS:=0}"
 : "${PRE_BLIND_KEEP:=0}"
 : "${KUBE_CONTEXT:=kubernetes-admin@kubernetes}"
@@ -55,6 +57,10 @@ checks="$run_dir/checks.jsonl"
 findings="$run_dir/findings.md"
 touch "$checks" "$findings"
 state_root="$HOME/.local/state/cairn-install"
+adapter_marker="$HOME/.local/state/cairn-pre-blind/garden-adapter-owned"
+# Everything removal deletes; prereqs refuses to install over any of it.
+adapter_paths=("$HOME/.local/bin/garden" "$HOME/.local/bin/garden-config"
+  "$HOME/.local/bin/garden-session" "$HOME/.local/share/garden")
 installer_dir="$PWD"
 check_dir="$PWD/tests/acceptance/installer"
 doc_blocks="$PWD/scripts/doc_blocks.py"
@@ -71,12 +77,14 @@ failed=0
 # --- configuration table -----------------------------------------------------
 # name -> mode port feature namespace garden-port
 config_mode()      { case $1 in disp-*) echo disposable;; nat-*) echo native;; dock-*) echo docker;; kube-*) echo kubernetes;; esac; }
-config_port()      { case $1 in disp-attic) echo 8201;; nat-attic) echo 8211;; nat-sem) echo 8212;; nat-garden) echo 8213;; dock-attic) echo 8221;; dock-sem) echo 8222;; dock-garden) echo 8223;; kube-attic) echo 8231;; kube-sem) echo 8232;; kube-garden) echo 8233;; esac; }
+config_port()      { case $1 in disp-attic) echo 8201;; nat-attic) echo 8211;; nat-sem) echo 8212;; nat-garden) echo 8213;; nat-gops) echo 8214;; dock-attic) echo 8221;; dock-sem) echo 8222;; dock-garden) echo 8223;; dock-gops) echo 8224;; kube-attic) echo 8231;; kube-sem) echo 8232;; kube-garden) echo 8233;; esac; }
 config_feature()   { case $1 in *-sem) echo semantic;; *-garden) echo garden;; *) echo attic;; esac; }
 config_namespace() { echo "cairn-$1"; }
-config_garden_port() { case $1 in nat-garden) echo 8413;; dock-garden) echo 8423;; kube-garden) echo 8433;; esac; }
-config_garden_host() { case $1 in nat-garden) echo "garden-nat.$GARDEN_DOMAIN";; dock-garden) echo "garden-dock.$GARDEN_DOMAIN";; kube-garden) echo "garden-k8s.$GARDEN_DOMAIN";; esac; }
+config_garden_port() { case $1 in nat-garden) echo 8413;; nat-gops) echo 8414;; dock-garden) echo 8423;; dock-gops) echo 8424;; kube-garden) echo 8433;; esac; }
+config_garden_host() { case $1 in nat-garden) echo "garden-nat.$GARDEN_DOMAIN";; nat-gops) echo "garden-nat-gops.$GARDEN_DOMAIN";; dock-garden) echo "garden-dock.$GARDEN_DOMAIN";; dock-gops) echo "garden-dock-gops.$GARDEN_DOMAIN";; kube-garden) echo "garden-k8s.$GARDEN_DOMAIN";; esac; }
 config_garden_dir()  { echo "$HOME/garden-tls-${1%-garden}"; }
+garden_configured() { [[ $1 == *-garden || $1 == *-gops ]]; }
+any_garden_configured() { any_config_matching '*-garden' || any_config_matching '*-gops'; }
 has_config() { case " $PRE_BLIND_CONFIGS " in *" $1 "*) return 0;; *) return 1;; esac; }
 has_stage()  { case " $PRE_BLIND_STAGES " in *" $1 "*) return 0;; *) return 1;; esac; }
 # shellcheck disable=SC2254  # $1 is a glob pattern by design
@@ -240,9 +248,9 @@ prereqs() {
     done
   fi
 
-  if any_config_matching '*-garden'; then
+  if any_garden_configured; then
     for name in $PRE_BLIND_CONFIGS; do
-      [[ $(config_feature "$name") == garden ]] || continue
+      garden_configured "$name" || continue
       local dir host port
       dir=$(config_garden_dir "$name"); host=$(config_garden_host "$name"); port=$(config_garden_port "$name")
       rm -rf "$dir"
@@ -255,15 +263,27 @@ prereqs() {
     # during removal.
     local hosts_line="$GARDEN_ADDRESS"
     for name in $PRE_BLIND_CONFIGS; do
-      [[ $(config_feature "$name") == garden ]] && hosts_line+=" $(config_garden_host "$name")"
+      garden_configured "$name" && hosts_line+=" $(config_garden_host "$name")"
     done
     sudo -n sed -i "/ ${HOSTS_MARKER}\$/d" /etc/hosts  # a line left by an interrupted run
     printf '%s %s\n' "$hosts_line" "$HOSTS_MARKER" | sudo -n tee -a /etc/hosts >/dev/null
     local first_host; first_host=${hosts_line#* }; first_host=${first_host%% *}
     record "garden names resolve" "$GARDEN_ADDRESS" "$(getent hosts "$first_host" | awk '{print $1}')"
 
-    # Adapter binary for participant verification (managed-garden guide).
+    # Adapter binary for participant verification (managed-garden guide). The
+    # guide's prefix is shared, so never replace an install this rehearsal did
+    # not make; the marker lives outside the install it vouches for.
+    if [[ ! -e $adapter_marker ]]; then
+      local adapter_path
+      for adapter_path in "${adapter_paths[@]}"; do
+        if [[ -e $adapter_path || -L $adapter_path ]]; then
+          finding "existing Garden adapter in ~/.local" "move $adapter_path aside; the rehearsal installs and removes its own"
+          return 1
+        fi
+      done
+    fi
     run_step garden-build make -C garden build
+    mkdir -p "${adapter_marker%/*}" && : >"$adapter_marker"
     run_step garden-install ./garden/scripts/install-user --prefix "$HOME/.local" --binary "$PWD/garden/garden"
     record "garden reports release version" "garden version $(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" \
       "$("$HOME/.local/bin/garden" --version)"
@@ -562,6 +582,212 @@ lifecycle_config() {
   persisted_check "$name" after-resume
 }
 
+# --- Garden operations -------------------------------------------------------
+garden_operations_source() {
+  # A separate numeric release and a harmless Garden file defeat both no-op checks.
+  garden_source_b="$run_dir/garden-source"
+  if [[ -d $garden_source_b ]]; then
+    [[ -f $garden_source_b/garden/pre-blind-source.txt ]]
+    return $?
+  fi
+  mkdir -p "$garden_source_b" || return 1
+  git archive HEAD | tar -x -C "$garden_source_b" || return 1
+  python3 - "$garden_source_b" <<'PY'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+root = Path(sys.argv[1])
+path = root / "pyproject.toml"
+text = path.read_text()
+version = tomllib.loads(text)["project"]["version"]
+if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", version):
+    raise SystemExit("pre-blind needs a numeric dotted source version")
+parts = version.split(".")
+parts[-1] = str(int(parts[-1]) + 1)
+new = ".".join(parts)
+path.write_text(text.replace(f'version = "{version}"', f'version = "{new}"', 1))
+(root / "garden/pre-blind-source.txt").write_text(f"Pre-blind release {new}\n")
+PY
+}
+garden_state() { jq -r "$2" "$state_root/$1/state.json"; }
+garden_container() {
+  docker ps -q --filter "label=com.docker.compose.project=cairn-install-$1" \
+    --filter "label=com.docker.compose.service=$2" | head -1
+}
+garden_python() {
+  # Read-only probe of Docker data using the owned Cairn image, as in the trial.
+  local name=$1; shift
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+    -v "cairn-install-${name}_garden-data:/g:ro" --entrypoint python3 \
+    "$(docker inspect -f '{{.Image}}' "$(garden_container "$name" cairn)")" -c "$@"
+}
+garden_version() {
+  local name=$1
+  if [[ $(config_mode "$name") == native ]]; then
+    "$state_root/$name/instance/garden/bin/garden" --version
+  else
+    docker run --rm --network none --entrypoint /usr/local/bin/garden \
+      "$(docker inspect -f '{{.Image}}' "$(garden_container "$name" garden)")" --version
+  fi
+}
+garden_data_has() {
+  # garden_data_has NAME GLOB NONCE — also works on data.pre-restore-*.
+  local name=$1 pattern=$2 nonce=$3 probe
+  # An empty nonce would match every file; the probe answers no instead.
+  probe='import glob, pathlib, sys
+roots = glob.glob(str(pathlib.Path(sys.argv[1]) / sys.argv[2]))
+print("yes" if sys.argv[3] and any(sys.argv[3].encode() in p.read_bytes() for r in roots for p in pathlib.Path(r).rglob("*") if p.is_file()) else "no")'
+  if [[ $(config_mode "$name") == native ]]; then
+    python3 -c "$probe" "$state_root/$name/instance/garden" "$pattern" "$nonce"
+  else
+    garden_python "$name" "$probe" /g "$pattern" "$nonce"
+  fi
+}
+message_nonce() {
+  # message_nonce NAME LABEL — the sent message's content, or nothing.
+  jq -er '.content | select(type == "string" and length > 0)' "$run_dir/messages/$1/$2.json" 2>/dev/null || true
+}
+garden_messages() {
+  # garden_messages NAME LABEL OP... — one session; wait out any retained lease.
+  local name=$1 label=$2; shift 2
+  run_step "$name-$label" timeout 300 python3 -I "$check_dir/gup_msg.py" \
+    --garden "$installer_dir/garden/garden" --bundle-dir "$state_root/$name/instance/garden/profiles" \
+    --store "$run_dir/messages/$name" --lease-wait 160 "$@"
+}
+garden_message_checks() {
+  # garden_message_checks NAME LABEL G0 NAME:present|absent...
+  local name=$1 label=$2 generation=$3 check; shift 3
+  record "$name $label generation equals G0" "$generation" \
+    "$(sed -n 's/^generation=//p' "$run_dir/logs/$name-$label.log")"
+  for check in "$@"; do
+    record "$name $label ${check%%:*} visibility" "${check%%:*} ${check#*:}" \
+      "$(sed -n "/^${check%%:*} /p" "$run_dir/logs/$name-$label.log")"
+  done
+}
+garden_refusal() {
+  # garden_refusal NAME LABEL CODE COMMAND... — refusal must leave state untouched.
+  local name=$1 label=$2 code=$3 status=0; shift 3
+  cp "$state_root/$name/state.json" "$run_dir/logs/$name-$label-before.json"
+  installer "$@" --name "$name" --non-interactive --yes >"$run_dir/logs/$name-$label.log" 2>&1 || status=$?
+  record "$name $label exit status" 2 "$status"
+  record "$name $label refusal code" yes "$(log_has "$name-$label" "[$code]" && echo yes || echo no)"
+  record "$name $label state byte-identical" yes \
+    "$(cmp -s "$state_root/$name/state.json" "$run_dir/logs/$name-$label-before.json" && echo yes || echo no)"
+}
+garden_backup_config() {
+  local name=$1
+  run_step "$name-backup" installer garden-backup --name "$name" --non-interactive --yes || return 1
+  record "$name backup complete" complete "$(garden_state "$name" .garden.backup.phase)"
+  local archive; archive=$(garden_state "$name" .garden.backup.archive)
+  run_step "$name-backup-verify" python3 -I -c \
+    'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import garden_common; p = Path(sys.argv[2]); garden_common.verify_garden(p.parent, p.stem); print("archive verified")' \
+    "$installer_dir/scripts/backup" "$archive"
+}
+garden_operations_config() {
+  local name=$1 original target generation
+  original=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+  # garden-backup needs a 0.8.0+ Garden (snapshot --host-config); rehearse a release candidate.
+  if ! python3 -c 'import sys; sys.exit(tuple(map(int, sys.argv[1].split("."))) < (0, 8, 0))' "$original"; then
+    finding "$name needs a 0.8.0+ checkout" "pyproject.toml says $original; bump the release version first"
+    return 1
+  fi
+  run_step "$name-upgrade-source" garden_operations_source || return 1
+  target=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "$garden_source_b/pyproject.toml")
+  record "$name initially attic-only" null "$(garden_state "$name" .garden)"
+  run_step "$name-garden-add" installer garden-add --name "$name" --non-interactive --yes \
+    --garden-config "$(config_garden_dir "$name")/garden.json" || return 1
+  record "$name add verified" verified "$(garden_state "$name" .status)"
+  verify_garden "$name"
+  run_step "$name-roundtrip" timeout 600 python3 -I "$check_dir/garden_roundtrip.py" \
+    --garden "$installer_dir/garden/garden" --bundle-dir "$state_root/$name/instance/garden/profiles" || return 1
+  # The round trip closes both identities; gup_msg waits through their 120 s lease.
+  garden_messages "$name" initial generation send:M1 || return 1
+  generation=$(sed -n 's/^generation=//p' "$run_dir/logs/$name-initial.log")
+  record "$name G0 recorded" yes "$([[ -n $generation ]] && echo yes || echo no)"
+  run_step "$name-upgrade" installer garden-upgrade --name "$name" --non-interactive --yes --source "$garden_source_b" || return 1
+  record "$name upgrade verified" verified "$(garden_state "$name" .status)"
+  record "$name upgrade complete" complete "$(garden_state "$name" .garden.upgrade.phase)"
+  record "$name upgrade reports B version" "garden version $target" "$(garden_version "$name")"
+  garden_messages "$name" upgraded generation has:M1 send:M2 || return 1
+  garden_message_checks "$name" upgraded "$generation" M1:present
+  garden_refusal "$name" rollback-no-choice data_choice_required garden-upgrade --rollback
+  run_step "$name-restore-data" installer garden-upgrade --name "$name" --non-interactive --yes --rollback --restore-data || return 1
+  record "$name restore original version" "garden version $original" "$(garden_version "$name")"
+  garden_messages "$name" restored generation has:M1 has:M2 || return 1
+  garden_message_checks "$name" restored "$generation" M1:present M2:absent
+  record "$name data.pre-restore holds M2" yes \
+    "$(garden_data_has "$name" 'data.pre-restore-*' "$(message_nonce "$name" M2)")"
+  run_step "$name-upgrade-again" installer garden-upgrade --name "$name" --non-interactive --yes --source "$garden_source_b" || return 1
+  garden_messages "$name" before-keep generation send:M3 || return 1
+  run_step "$name-keep-data" installer garden-upgrade --name "$name" --non-interactive --yes --rollback --keep-data || return 1
+  record "$name keep original version" "garden version $original" "$(garden_version "$name")"
+  garden_messages "$name" kept generation has:M3 || return 1
+  garden_message_checks "$name" kept "$generation" M3:present
+  garden_backup_config "$name" || return 1
+
+  garden_interruption_config "$name" "$generation" || return 1
+  garden_backup_config "$name" || return 1
+}
+garden_interruption_config() {
+  local name=$1 generation=$2 state="$state_root/$1/state.json" old_id interrupted_id pid status killer id
+  # `staged` is journalled before the build, a long enough mid phase to catch.
+  old_id=$(garden_state "$name" .garden.upgrade.id)
+  ( cd "$installer_dir" && exec ./cairn-install garden-upgrade --name "$name" --non-interactive --yes --source "$garden_source_b" ) \
+    >"$run_dir/logs/$name-upgrade-term.log" 2>&1 &
+  pid=$!
+  killer=0
+  python3 -I "$check_dir/phase_kill.py" "$state" staged "$old_id" "$pid" \
+    >"$run_dir/logs/$name-phase-kill.log" 2>&1 || killer=$?
+  status=0; wait "$pid" || status=$?
+  interrupted_id=$(garden_state "$name" .garden.upgrade.id)
+  record "$name interrupted journal is new" yes "$([[ -n $interrupted_id && $interrupted_id != null && $interrupted_id != "$old_id" ]] && echo yes || echo no)"
+  record "$name interruption phase caught" killed "$(cat "$run_dir/logs/$name-phase-kill.log")"
+  record "$name interruption watcher exit" 0 "$killer"
+  record "$name interrupted upgrade exits nonzero" yes "$([[ $status != 0 ]] && echo yes || echo no)"
+  run_step "$name-upgrade-rerun" installer garden-upgrade --name "$name" --non-interactive --yes --source "$garden_source_b" || return 1
+  id=$(garden_state "$name" .garden.upgrade.id)
+  record "$name rerun retains interrupted journal" "$interrupted_id" "$id"
+  record "$name resumed upgrade complete" 'complete verified' "$(garden_state "$name" .garden.upgrade.phase) $(garden_state "$name" .status)"
+  record "$name resumed history entry once" 1 "$(jq --arg id "$id" '[.garden.upgrades[] | select(.id == $id)] | length' "$state")"
+  garden_messages "$name" resumed generation has:M1 has:M3 || return 1
+  garden_message_checks "$name" resumed "$generation" M1:present M3:present
+}
+kubernetes_garden_refusals() {
+  local operation
+  for operation in garden-add garden-upgrade garden-backup; do
+    # Supply a config path for add so its mode check, not a missing flag, refuses.
+    local args=()
+    [[ $operation != garden-add ]] || args=(--garden-config "$run_dir/unused-garden.json")
+    garden_refusal kube-attic "$operation-refused" invalid_arguments "$operation" "${args[@]}"
+  done
+}
+garden_token_status() {
+  # Read this rehearsal's generated token without putting it in argv or logs.
+  local name=$1 token_file=$2
+  { printf 'header = "Authorization: Bearer '; tr -d '\n' <"$token_file"; printf '"\n'; } |
+    curl --disable --silent --show-error --noproxy '*' --max-time 15 --config - \
+      --header 'Content-Type: application/json' --data-binary @"$run_dir/$name-diagnose.json" \
+      --output /dev/null --write-out '%{http_code}' "$(base_url "$name")/memory/v1/diagnose"
+}
+garden_remove_config() {
+  local name=$1 token_file="$run_dir/$1-old-participant.token" status=0
+  rm -f "$token_file"
+  ( umask 077; install -m 0600 "$state_root/$name/instance/garden/profiles/spike/agent.token" "$token_file" ) || return 1
+  jq '.garden.options | {scope, classification}' "$state_root/$name/state.json" >"$run_dir/$name-diagnose.json"
+  record "$name participant token initially accepted" 200 "$(garden_token_status "$name" "$token_file")"
+  run_step "$name-garden-remove" installer garden-remove --name "$name" --non-interactive --yes || status=$?
+  [[ $status != 0 ]] || record "$name removed participant token rejected" 401 "$(garden_token_status "$name" "$token_file")"
+  rm -f "$token_file"
+  [[ $status == 0 ]] || return "$status"
+  record "$name Garden data retained by default" yes \
+    "$(garden_data_has "$name" data "$(message_nonce "$name" M1)")"
+  run_step "$name-cairn-after-garden-remove" installer resume --name "$name" --non-interactive || return 1
+  record "$name Cairn verifies after garden-remove" verified "$(garden_state "$name" .status)"
+  persisted_check "$name" after-garden-remove
+}
+
 matrix() {
   local name
   for name in $PRE_BLIND_CONFIGS; do
@@ -580,7 +806,12 @@ matrix() {
     log "=== verify $name ==="
     verify_config "$name" || { finding "$name verification failed" "see logs/$name-*.log"; continue; }
     restart_config "$name" || finding "$name restart retention failed" "see logs/$name-restart*.log"
-    lifecycle_config "$name" || finding "$name rollback/resume failed" "see logs/$name-rollback.log and $name-resume.log"
+    lifecycle_config "$name" || { finding "$name rollback/resume failed" "see logs/$name-rollback.log and $name-resume.log"; continue; }
+    if [[ $name == *-gops ]]; then
+      garden_operations_config "$name" || finding "$name Garden operations failed" "see logs/$name-*.log"
+    elif [[ $name == kube-attic ]]; then
+      kubernetes_garden_refusals
+    fi
   done
 }
 
@@ -625,6 +856,9 @@ removal() {
   local name
   for name in $PRE_BLIND_CONFIGS; do
     [[ -d $state_root/$name ]] || continue
+    if [[ $name == *-gops ]]; then
+      garden_remove_config "$name" || { finding "$name Garden removal failed" "see logs/$name-garden-remove.log"; continue; }
+    fi
     run_step "blitz-$name" installer blitz --non-interactive --yes --name "$name" || true
   done
   run_step ls-after-blitz installer ls || true
@@ -649,14 +883,16 @@ removal() {
     record "no persistent volumes remain" "" "$(kubectl --context "$KUBE_CONTEXT" get pv -o name 2>/dev/null | tr '\n' ' ' || true)"
     rm -rf "$HOME/cairn-site-gitops"
   fi
-  if any_config_matching '*-garden'; then
+  if any_garden_configured; then
     sudo -n sed -i "/ ${HOSTS_MARKER}\$/d" /etc/hosts
     record "hosts line removed" "" "$(grep -F "$HOSTS_MARKER" /etc/hosts || true)"
     for name in $PRE_BLIND_CONFIGS; do
-      [[ $(config_feature "$name") == garden ]] && rm -rf "$(config_garden_dir "$name")"
+      garden_configured "$name" && rm -rf "$(config_garden_dir "$name")"
     done
-    rm -f "$HOME/.local/bin/garden" "$HOME/.local/bin/garden-config" "$HOME/.local/bin/garden-session"
-    rm -rf "$HOME/.local/share/garden"
+    if [[ -e $adapter_marker ]]; then
+      rm -rf "${adapter_paths[@]}"
+      rm -f "$adapter_marker"
+    fi
   fi
   record "provider key file untouched" "0600 regular" "$(stat -c '%a' "$PROVIDER_KEY_FILE" | sed 's/^600$/0600/') regular"
 }
@@ -681,11 +917,11 @@ report() {
   } >"$run_dir/report.md"
   log "report: $run_dir/report.md ($passed passed, $failed_count failed)"
 }
-trap 'forward_stop; garden_unreachable; stop_keep_running; report' EXIT
+trap 'forward_stop; garden_unreachable; stop_keep_running; rm -f "$run_dir"/*-old-participant.token; report' EXIT
 trap 'finding "rehearsal aborted" "stage ${stage:-setup} stopped at line $LINENO: $BASH_COMMAND"' ERR
 
 cairn_image=${CAIRN_IMAGE_REFERENCE:-}
-if [[ -z $GARDEN_ADDRESS ]] && any_config_matching '*-garden'; then
+if [[ -z $GARDEN_ADDRESS ]] && any_garden_configured; then
   GARDEN_ADDRESS=$(kubectl --context "$KUBE_CONTEXT" get node "$KUBE_NODE" \
     -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
 fi

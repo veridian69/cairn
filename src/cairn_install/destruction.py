@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import os
 import platform
@@ -258,6 +259,63 @@ def _sync(path: Path) -> None:
         os.close(fd)
 
 
+def _restore_owner_write(path: Path) -> None:
+    """Give the owner write access to every read-only directory under path.
+
+    Go extracts a downloaded toolchain into the instance's module cache with
+    0555 directories, and -modcacherw does not cover it, so rmtree would fail.
+    Repair works only through directory descriptors opened without following
+    symlinks, relative to their verified parent, so a concurrent swap cannot
+    redirect a permission change outside the tree.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    def enter(fd: int) -> list[str]:
+        # Repair one directory and list its child directories by name only.
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise InstallError(f"Blitz refuses a foreign-owned directory: {path}")
+        mode = stat.S_IMODE(info.st_mode)
+        if mode & stat.S_IRWXU != stat.S_IRWXU:
+            os.fchmod(fd, mode | stat.S_IRWXU)
+        with os.scandir(fd) as entries:
+            return [e.name for e in entries if e.is_dir(follow_symlinks=False)]
+
+    # Depth first, holding only the ancestors' descriptors: a wide directory,
+    # such as Go's 256 cache shards, never exhausts the descriptor limit.
+    stack: list[tuple[int, list[str]]] = []
+    try:
+        root = os.open(path, flags)
+        try:
+            stack.append((root, enter(root)))
+        except BaseException:
+            os.close(root)
+            raise
+        while stack:
+            fd, pending = stack[-1]
+            if not pending:
+                os.close(fd)
+                stack.pop()
+                continue
+            name = pending.pop()
+            try:
+                child = os.open(name, flags, dir_fd=fd)
+            except (FileNotFoundError, NotADirectoryError):
+                continue  # removed or replaced since listing; rmtree decides
+            except OSError as error:
+                if error.errno == errno.ELOOP:
+                    continue  # now a symlink: rmtree unlinks, never follows
+                raise
+            try:
+                stack.append((child, enter(child)))
+            except BaseException:
+                os.close(child)
+                raise
+    finally:
+        for fd, _ in stack:
+            os.close(fd)
+
+
 def remove_instance_files(ctx: Context) -> None:
     root = ctx.directory.parent
     with state_root_guard(root, exclusive=True):
@@ -275,6 +333,7 @@ def remove_instance_files(ctx: Context) -> None:
         atomic_write(journal, (json.dumps(ctx.state, sort_keys=True) + "\n").encode())
         _sync(root)
         try:
+            _restore_owner_write(ctx.directory)
             shutil.rmtree(ctx.directory)
             _sync(root)
             journal.unlink()

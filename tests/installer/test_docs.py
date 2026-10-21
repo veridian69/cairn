@@ -6,6 +6,17 @@ ROOT = Path(__file__).parents[2]
 GUIDE = ROOT / "docs" / "operations" / "guided-installation.md"
 
 
+def test_server_status_and_sudo_authority_are_explicit() -> None:
+    text = " ".join(GUIDE.read_text().split())
+    assert "`status --name X` reports recorded values only" in text
+    assert "`digest_check: not_checked`" in text
+    assert "root-equivalent" in text and "not a containment boundary" in text
+    assert (
+        "`resume --name X` checks the retained configuration and installed digests"
+        in text
+    )
+
+
 def test_guided_installation_stage_headings_match_workflow() -> None:
     text = GUIDE.read_text()
     headings = [
