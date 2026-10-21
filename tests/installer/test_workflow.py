@@ -7,6 +7,85 @@ from cairn_install import workflow
 from cairn_install.core import InstallError, open_context
 
 
+def test_shared_spine_stages_have_operator_facing_titles() -> None:
+    expected = {
+        "garden_stage": "Build and check the new Garden release",
+        "garden_copy": "Stop Garden and take a cold copy of its data",
+        "garden_swap": "Switch Garden to the selected release, keeping the other",
+        "garden_restore_data": "Restore Garden data from the cold copy",
+        "garden_snapshot": "Stop Garden and take a validated snapshot",
+        "garden_archive": "Write and verify the Garden backup archive",
+        "server_account": "Create Garden service account",
+        "server_install": "Install Garden server files",
+        "server_hook": "Install Garden backup hook",
+        "garden_enable": "Enable Garden services",
+    }
+    assert {key: dict(workflow.STAGES)[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize("pending", ["upgrade", "backup"])
+@pytest.mark.parametrize("operation", ["install", "add", "remove", "rollback"])
+def test_pending_garden_operations_refuse_workflow_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pending: str,
+    operation: str,
+) -> None:
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "docker",
+            "port": 8000,
+            "semantic": False,
+            "garden": {pending: {"phase": "recorded"}},
+        },
+    ) as ctx:
+        saved = (ctx.directory / "state.json").read_bytes()
+        monkeypatch.setattr(
+            workflow,
+            "backend",
+            lambda *a, **kw: pytest.fail("backend must not be opened"),
+        )
+        with pytest.raises(
+            InstallError, match=f"run garden-{pending} --name demo again"
+        ):
+            if operation == "install":
+                workflow.run_install(ctx)
+            elif operation == "add":
+                workflow.add_garden(ctx, {})
+            elif operation == "remove":
+                workflow.remove_garden(ctx, delete_data=False)
+            else:
+                workflow.rollback_install(ctx)
+        assert (ctx.directory / "state.json").read_bytes() == saved
+
+
+@pytest.mark.parametrize("phase", ["recorded", "complete"])
+@pytest.mark.parametrize("operation", ["upgrade", "backup"])
+def test_garden_pending_only_refuses_incomplete_operations(
+    tmp_path: Path, phase: str, operation: str
+) -> None:
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "source": str(tmp_path),
+            "mode": "docker",
+            "port": 8000,
+            "semantic": False,
+            "garden": {operation: {"phase": phase}},
+        },
+    ) as ctx:
+        pending = workflow._garden_pending(ctx)
+        assert pending == (
+            f"Garden {operation} is in progress; run garden-{operation} --name demo again"
+            if phase != "complete"
+            else None
+        )
+
+
 def test_every_managed_garden_stage_has_an_operator_facing_title() -> None:
     titles = dict(workflow.STAGES)
 
@@ -125,7 +204,7 @@ def test_managed_garden_enrols_before_attach_and_rechecks_after_restart(
         ctx.state["receipts"]["ingest"] = {"proof": "same"}
         return {"proof": "same"}
 
-    def verify(ctx: Any) -> None:
+    def verify(ctx: Any, **_: Any) -> None:
         calls.append("garden_verify")
         if fail_garden:
             raise InstallError("Garden TLS certificate mismatch")
@@ -523,3 +602,27 @@ def test_status_and_summary_report_managed_garden_as_a_feature(
         result = workflow.status_install(ctx)
 
     assert result["features"] == "Attic only; Garden"
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"), [("kubernetes", "127.0.0.1"), ("docker", None)]
+)
+def test_garden_verification_dials_loopback_only_for_kubernetes_forward(
+    monkeypatch: pytest.MonkeyPatch, mode: str, expected: str | None
+) -> None:
+    from types import SimpleNamespace
+
+    from cairn_install import garden
+
+    calls: list[str | None] = []
+    monkeypatch.setattr(
+        garden,
+        "verify",
+        lambda ctx, connect_host=None, connect_port=None: calls.append(connect_host),
+    )
+    monkeypatch.setattr(garden, "profiles", lambda ctx: None)
+    adapter = SimpleNamespace(
+        garden_open_endpoint=lambda: None, garden_close_endpoint=lambda: None
+    )
+    workflow._verify_garden(SimpleNamespace(mode=mode), adapter)  # type: ignore[arg-type]
+    assert calls == [expected]

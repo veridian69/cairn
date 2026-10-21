@@ -8,18 +8,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/veridian69/cairn/garden/internal/config"
 	"github.com/veridian69/cairn/garden/internal/maintenance"
 )
 
 // Restore atomically replaces live runtime data with a validated snapshot.
 func (m *Manager) Restore(ctx context.Context, id string) (RestoreResult, error) {
-	lease, err := maintenance.Acquire(m.configDir, maintenance.Exclusive)
+	lease, err := maintenance.Acquire(m.layout.leaseDir, maintenance.Exclusive)
 	if err != nil {
 		return RestoreResult{}, err
 	}
 	defer lease.Close()
-	if err := ensureLegacyDaemonStopped(m.configDir); err != nil {
+	if err := ensureLegacyDaemonStopped(m.layout.leaseDir); err != nil {
 		return RestoreResult{}, err
 	}
 
@@ -27,7 +26,10 @@ func (m *Manager) Restore(ctx context.Context, id string) (RestoreResult, error)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	configBytes, err := os.ReadFile(filepath.Join(m.configDir, "config.yaml"))
+	if doc.ConfigFile != m.manifestConfigFile() {
+		return RestoreResult{}, fmt.Errorf("snapshot configuration layout does not match current layout")
+	}
+	configBytes, configuredDataDir, err := m.readConfig()
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("reading current config: %w", err)
 	}
@@ -35,14 +37,10 @@ func (m *Manager) Restore(ctx context.Context, id string) (RestoreResult, error)
 	if fmt.Sprintf("%x", currentDigest[:]) != doc.ConfigSHA256 {
 		return RestoreResult{}, fmt.Errorf(
 			"current config does not match snapshot %s; review %s",
-			id, filepath.Join(snapshotPath, "config.yaml"),
+			id, filepath.Join(snapshotPath, m.layout.configFile),
 		)
 	}
-	cfg, err := config.Parse(configBytes)
-	if err != nil {
-		return RestoreResult{}, err
-	}
-	dataDir, backupRoot, err := m.preparePaths(cfg.Stream.DataDir)
+	dataDir, backupRoot, err := m.preparePaths(configuredDataDir)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -185,7 +183,7 @@ func (m *Manager) validateSnapshot(id string) (manifest, string, error) {
 	if !validSnapshotID(id) {
 		return manifest{}, "", fmt.Errorf("invalid snapshot ID %q", id)
 	}
-	path := filepath.Join(m.configDir, "backups", id)
+	path := filepath.Join(m.layout.backupRoot, id)
 	manifestBytes, err := os.ReadFile(filepath.Join(path, "manifest.json"))
 	if err != nil {
 		return manifest{}, "", fmt.Errorf("reading snapshot manifest: %w", err)
@@ -207,7 +205,11 @@ func (m *Manager) validateSnapshot(id string) (manifest, string, error) {
 	if total != doc.TotalBytes || !sameFiles(files, doc.Files) {
 		return manifest{}, "", fmt.Errorf("snapshot %s failed file integrity validation", id)
 	}
-	savedConfig, err := os.ReadFile(filepath.Join(path, "config.yaml"))
+	configFile, err := doc.configFile()
+	if err != nil {
+		return manifest{}, "", err
+	}
+	savedConfig, err := os.ReadFile(filepath.Join(path, configFile))
 	if err != nil {
 		return manifest{}, "", err
 	}

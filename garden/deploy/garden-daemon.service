@@ -3,7 +3,9 @@ Description=Garden local message daemon
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=60s
 User=garden
 Group=garden
 Environment=HOME=/var/lib/garden

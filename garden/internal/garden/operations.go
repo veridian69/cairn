@@ -2,10 +2,12 @@ package garden
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -38,26 +40,31 @@ func (s *Server) render(m model.Message, seq uint64) (Message, error) {
 	return out, nil
 }
 func messageRecipients(m model.Message) ([]string, error) {
-	recipients := []string{}
-	raw, ok := m.Metadata["garden_recipients"]
+	return messageNames(m, "garden_recipients")
+}
+
+// messageNames reads a metadata list of participant names; a missing key is an empty list.
+func messageNames(m model.Message, key string) ([]string, error) {
+	names := []string{}
+	raw, ok := m.Metadata[key]
 	if !ok {
-		return recipients, nil
+		return names, nil
 	}
 	switch value := raw.(type) {
 	case []string:
-		recipients = append(recipients, value...)
+		names = append(names, value...)
 	case []any:
 		for _, item := range value {
 			name, ok := item.(string)
 			if !ok {
 				return nil, failure("retention_gap", "Malformed Garden recipient metadata")
 			}
-			recipients = append(recipients, name)
+			names = append(names, name)
 		}
 	default:
 		return nil, failure("retention_gap", "Malformed Garden recipient metadata")
 	}
-	return recipients, nil
+	return names, nil
 }
 func (s *Server) exact(ctx context.Context, seq uint64) (model.Message, error) {
 	m, err := s.stream.Exact(ctx, seq)
@@ -72,9 +79,9 @@ func (s *Server) exact(ctx context.Context, seq uint64) (model.Message, error) {
 	}
 	return m, nil
 }
-func (s *Server) send(ctx context.Context, principal string, a SendArgs) (Message, error) {
+func (s *Server) send(ctx context.Context, principal string, a SendArgs) (SendResult, error) {
 	if strings.TrimSpace(a.Content) == "" || len(a.Content) > 64*1024 || !utf8.ValidString(a.Content) || len(a.Recipients) > 100 || (a.ReplyTo != "" && !canonicalUUID(a.ReplyTo)) {
-		return Message{}, failure("invalid_argument", "Invalid message content, recipients or reply ID")
+		return SendResult{}, failure("invalid_argument", "Invalid message content, recipients or reply ID")
 	}
 	names := map[string]bool{}
 	for _, name := range s.cfg.Principals {
@@ -83,28 +90,226 @@ func (s *Server) send(ctx context.Context, principal string, a SendArgs) (Messag
 	seen := map[string]bool{}
 	for _, name := range a.Recipients {
 		if !names[name] || seen[name] {
-			return Message{}, failure("invalid_argument", "Recipients must be unique configured participants")
+			return SendResult{}, failure("invalid_argument", "Recipients must be unique configured participants")
 		}
 		seen[name] = true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, b, err := s.position(ctx, principal)
+	p, b, err := s.position(ctx, principal)
 	if err != nil {
-		return Message{}, err
+		return SendResult{}, err
 	}
+	now := s.now()
 	var reply *string
+	depth := 1
 	if a.ReplyTo != "" {
 		reply = &a.ReplyTo
+		parent, found, e := s.messageDepth(ctx, a.ReplyTo, p.First)
+		if e != nil {
+			return SendResult{}, e
+		}
+		// An unknown parent, such as one from before the upgrade, counts as a root.
+		if found {
+			depth = parent + 1
+		}
+	}
+	presence, err := s.presenceByName(ctx, now)
+	if err != nil {
+		return SendResult{}, err
+	}
+	limits := s.cfg.LoopGuard.resolved()
+	window := time.Duration(limits.PairWindowSeconds) * time.Second
+	deliveries := make([]Delivery, 0, len(a.Recipients))
+	var suppressed, attended []string
+	for _, r := range a.Recipients {
+		// pollOnce never leases a participant its own message, so self-attention cannot happen.
+		if r == b.name {
+			deliveries = append(deliveries, Delivery{Recipient: r, Delivery: "suppressed", Reason: "self"})
+			continue
+		}
+		if depth > limits.ThreadDepth {
+			deliveries = append(deliveries, Delivery{Recipient: r, Delivery: "suppressed", Reason: "thread_depth"})
+			suppressed = append(suppressed, r)
+			continue
+		}
+		count, e := s.pairCount(ctx, b.name, r, now.Add(-window))
+		if e != nil {
+			return SendResult{}, e
+		}
+		if count >= limits.PairRate {
+			deliveries = append(deliveries, Delivery{Recipient: r, Delivery: "suppressed", Reason: "pair_rate"})
+			suppressed = append(suppressed, r)
+			continue
+		}
+		attended = append(attended, r)
+		if p := presence[r]; p.Online && p.Deliverable {
+			deliveries = append(deliveries, Delivery{Recipient: r, Delivery: "notified"})
+		} else {
+			deliveries = append(deliveries, Delivery{Recipient: r, Delivery: "queued"})
+		}
+	}
+	notice := ""
+	if len(suppressed) > 0 {
+		notice = fmt.Sprintf("Loop guard suppressed attention for %s (%s). This exchange has gone too far without a human; involve the human before continuing.", strings.Join(suppressed, ", "), suppressionReasons(deliveries))
 	}
 	m := model.NewMessage(model.Participant{ID: b.participant, Name: b.name, Kind: model.KindAgent}, a.Content, reply)
 	m.Metadata["garden_recipients"] = append([]string{}, a.Recipients...)
+	if len(suppressed) > 0 {
+		m.Metadata["garden_suppressed"] = suppressed
+	}
 	seq, err := s.stream.PublishSequence(ctx, m)
 	if err != nil {
-		return Message{}, failure("unavailable", "Publish outcome uncertain; do not automatically retry")
+		return SendResult{}, failure("unavailable", "Publish outcome uncertain; do not automatically retry")
 	}
-	return s.render(m, seq)
+	if err = s.recordLoopGuard(ctx, m.ID, seq, p.First, depth, b.name, attended, now, window); err != nil {
+		return SendResult{}, failure("unavailable", "Message published but loop guard state failed; do not automatically retry")
+	}
+	msg, err := s.render(m, seq)
+	if err != nil {
+		return SendResult{}, err
+	}
+	return SendResult{Message: msg, Deliveries: deliveries, Notice: notice}, nil
 }
+func suppressionReasons(deliveries []Delivery) string {
+	reasons := []string{}
+	for _, d := range deliveries {
+		if d.Delivery == "suppressed" && d.Reason != "self" && !slices.Contains(reasons, d.Reason) {
+			reasons = append(reasons, d.Reason)
+		}
+	}
+	return strings.Join(reasons, ", ")
+}
+
+// messageDepth returns the stored thread depth of a message the stream still retains (sequence
+// at or above first); found is false for unknown or no longer retained IDs, which count as roots.
+func (s *Server) messageDepth(ctx context.Context, id string, first uint64) (depth int, found bool, err error) {
+	err = s.sql.QueryRowContext(ctx, "SELECT depth FROM garden_message_depth WHERE message_id=? AND seq>=?", id, first).Scan(&depth)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, failure("unavailable", "Garden loop guard state unavailable")
+	}
+	return depth, true, nil
+}
+
+// pairCount counts attention requests between an unordered pair since the cutoff.
+func (s *Server) pairCount(ctx context.Context, a, b string, cutoff time.Time) (int, error) {
+	low, high := pairKey(a, b)
+	var n int
+	err := s.sql.QueryRowContext(ctx, "SELECT COUNT(*) FROM garden_attention WHERE pair_low=? AND pair_high=? AND attended_at>?", low, high, cutoff.UnixNano()).Scan(&n)
+	if err != nil {
+		return 0, failure("unavailable", "Garden loop guard state unavailable")
+	}
+	return n, nil
+}
+
+func pairKey(a, b string) (string, string) {
+	if a > b {
+		return b, a
+	}
+	return a, b
+}
+
+// recordLoopGuard stores the message depth, the attention requests it made, and prunes expired pair rows
+// and the depths of messages the stream no longer retains (sequence below first).
+func (s *Server) recordLoopGuard(ctx context.Context, id string, seq, first uint64, depth int, author string, recipients []string, now time.Time, window time.Duration) error {
+	tx, err := s.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "INSERT INTO garden_message_depth(message_id,depth,seq) VALUES(?,?,?)", id, depth, seq); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM garden_message_depth WHERE seq<?", first); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM garden_attention WHERE attended_at<=?", now.Add(-window).UnixNano()); err != nil {
+		return err
+	}
+	for _, r := range recipients {
+		low, high := pairKey(author, r)
+		if _, err = tx.ExecContext(ctx, "INSERT INTO garden_attention(pair_low,pair_high,attended_at) VALUES(?,?,?)", low, high, now.UnixNano()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// presenceByName reports, for every configured participant, whether its lease is live and whether it
+// is deliverable. Inbox rows of principals removed from the configuration are retained but not listed.
+func (s *Server) presenceByName(ctx context.Context, now time.Time) (map[string]Presence, error) {
+	configured := map[string]bool{}
+	for _, name := range s.cfg.Principals {
+		configured[name] = true
+	}
+	rows, err := s.sql.QueryContext(ctx, "SELECT name,consumer,lease_until,deliverable FROM garden_inbox ORDER BY name")
+	if err != nil {
+		return nil, failure("unavailable", "Garden presence unavailable")
+	}
+	defer rows.Close()
+	out := map[string]Presence{}
+	for rows.Next() {
+		var name, consumer string
+		var leaseUntil int64
+		var deliverable bool
+		if err = rows.Scan(&name, &consumer, &leaseUntil, &deliverable); err != nil {
+			return nil, err
+		}
+		if !configured[name] {
+			continue
+		}
+		online := consumer != "" && leaseUntil > now.UnixNano()
+		out[name] = Presence{Name: name, Online: online, Deliverable: online && deliverable}
+	}
+	return out, rows.Err()
+}
+
+// who lists participants with live-lease presence. It does not change any inbox.
+func (s *Server) who(ctx context.Context, principal string) (WhoResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, _, err := s.position(ctx, principal); err != nil {
+		return WhoResult{}, err
+	}
+	presence, err := s.presenceByName(ctx, s.now())
+	if err != nil {
+		return WhoResult{}, err
+	}
+	out := WhoResult{Participants: make([]Presence, 0, len(presence))}
+	for _, p := range presence {
+		out.Participants = append(out.Participants, p)
+	}
+	sort.Slice(out.Participants, func(i, j int) bool { return out.Participants[i].Name < out.Participants[j].Name })
+	return out, nil
+}
+
+// heartbeat takes or renews the session lease and records deliverability without leasing a message.
+func (s *Server) heartbeat(ctx context.Context, principal string, a HeartbeatArgs) (HeartbeatResult, error) {
+	if !canonicalUUID(a.ConsumerID) {
+		return HeartbeatResult{}, failure("invalid_argument", "Heartbeat requires a consumer UUID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, b, err := s.position(ctx, principal)
+	if err != nil {
+		return HeartbeatResult{}, err
+	}
+	now := s.now()
+	if b.consumer != "" && b.consumer != a.ConsumerID && b.leaseUntil > now.UnixNano() {
+		return HeartbeatResult{}, failure("inbox_busy", "Another adapter owns this inbox lease")
+	}
+	b.consumer = a.ConsumerID
+	b.leaseUntil = now.Add(sessionLease).UnixNano()
+	b.deliverable = a.Deliverable
+	if err = s.saveInbox(ctx, b); err != nil {
+		return HeartbeatResult{}, err
+	}
+	return HeartbeatResult{Generation: b.generation, LeaseExpiresAt: time.Unix(0, b.leaseUntil).UTC().Format(time.RFC3339Nano), Deliverable: b.deliverable}, nil
+}
+
 func (s *Server) read(ctx context.Context, principal string, a ReadArgs) (ReadResult, error) {
 	if a.Limit < 0 || a.Limit > 100 || (a.AfterSeq > 0 && a.Generation == "") {
 		return ReadResult{}, failure("invalid_argument", "History requires limit 1..100 and a generation with after_seq")
@@ -192,12 +397,14 @@ func (s *Server) pollOnce(ctx context.Context, principal, consumer string) (Poll
 	if err != nil {
 		return PollResult{}, err
 	}
-	now := time.Now()
+	now := s.now()
 	if b.consumer != "" && b.consumer != consumer && b.leaseUntil > now.UnixNano() {
 		return PollResult{}, failure("inbox_busy", "Another adapter owns this inbox lease")
 	}
 	b.consumer = consumer
-	b.leaseUntil = now.Add(120 * time.Second).UnixNano()
+	b.leaseUntil = now.Add(sessionLease).UnixNano()
+	// Polling is itself proof of delivery, so an old adapter that only polls stays deliverable.
+	b.deliverable = true
 	out := PollResult{Generation: b.generation, LeaseExpiresAt: time.Unix(0, b.leaseUntil).UTC().Format(time.RFC3339Nano)}
 	if b.pending != 0 {
 		m, e := s.exact(ctx, b.pending)
@@ -229,7 +436,12 @@ func (s *Server) pollOnce(ctx context.Context, principal, consumer string) (Poll
 			if e != nil {
 				return out, e
 			}
-			if m.AuthorID != b.participant && slices.Contains(recipients, b.name) {
+			suppressed, e := messageNames(m, "garden_suppressed")
+			if e != nil {
+				return out, e
+			}
+			// Suppressed attention stays in history but is never leased to the recipients it was denied.
+			if m.AuthorID != b.participant && slices.Contains(recipients, b.name) && !slices.Contains(suppressed, b.name) {
 				msg, e := s.render(m, seq)
 				if e != nil {
 					return out, e

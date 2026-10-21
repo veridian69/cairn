@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/veridian69/cairn/garden/internal/config"
 	"github.com/veridian69/cairn/garden/internal/maintenance"
 	"golang.org/x/sys/unix"
 )
@@ -36,24 +35,20 @@ func (e *CommittedCleanupError) Unwrap() error { return e.Cause }
 
 // Reset atomically replaces all runtime state with an owned empty directory.
 func (m *Manager) Reset(ctx context.Context) error {
-	lease, err := maintenance.Acquire(m.configDir, maintenance.Exclusive)
+	lease, err := maintenance.Acquire(m.layout.leaseDir, maintenance.Exclusive)
 	if err != nil {
 		return err
 	}
 	defer lease.Close()
-	if err := ensureLegacyDaemonStopped(m.configDir); err != nil {
+	if err := ensureLegacyDaemonStopped(m.layout.leaseDir); err != nil {
 		return err
 	}
 
-	configBytes, err := os.ReadFile(filepath.Join(m.configDir, "config.yaml"))
+	_, configuredDataDir, err := m.readConfig()
 	if err != nil {
 		return fmt.Errorf("reading config: %w", err)
 	}
-	cfg, err := config.Parse(configBytes)
-	if err != nil {
-		return err
-	}
-	dataDir, _, err := m.preparePaths(cfg.Stream.DataDir)
+	dataDir, _, err := m.preparePaths(configuredDataDir)
 	if err != nil {
 		return err
 	}

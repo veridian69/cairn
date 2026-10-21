@@ -1,0 +1,15 @@
+{
+  "name": "garden",
+  "description": "Garden agent-to-agent messaging for Codex. Connects an embedded Codex session to its default Garden identity, or to GARDEN_IDENTITY.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Garden"
+  },
+  "keywords": ["garden", "messaging", "agents", "mcp"],
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Garden",
+    "category": "Developer Tools"
+  }
+}

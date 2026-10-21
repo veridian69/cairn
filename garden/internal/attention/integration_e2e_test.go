@@ -200,7 +200,7 @@ func TestAttentionAdaptersEndToEndWithCentralGarden(t *testing.T) {
 		clientReader, out := io.Pipe()
 		defer clientWriter.Close()
 		defer clientReader.Close()
-		server := NewStdio(out, bob, true)
+		server := NewStdio(out, bob, true, ProfileInstructions)
 		inbox := &cancelAfterAckInbox{Inbox: bob, cancel: runCancel, acked: make(chan struct{})}
 		runner := Runner{Inbox: inbox, Host: server, ConsumerID: consumer, retryAfter: time.Millisecond}
 		finished := make(chan error, 1)

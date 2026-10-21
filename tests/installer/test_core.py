@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -5,10 +6,25 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from cairn_install.core import Context, InstallError, open_context
+from cairn_install.core import MAX_OUTPUT, Context, InstallError, open_context
+
+
+def reopen(tmp_path: Path) -> Context:
+    return open_context(tmp_path / "state", "demo")
+
+
+REAL_REPLACE = os.replace
+
+
+def publish_crashes(src: Any, dst: Any) -> None:
+    # Only the replacement's publish crashes; state.json uses os.replace too.
+    if Path(str(src)).name.startswith(".replace-"):
+        raise RuntimeError("simulated crash")
+    REAL_REPLACE(src, dst)
 
 
 def create(tmp_path: Path) -> Context:
@@ -23,6 +39,150 @@ def create(tmp_path: Path) -> Context:
             "source_fingerprint": "test",
         },
     )
+
+
+def test_command_capture_limit_is_configurable_only_for_stdout_path(
+    tmp_path: Path,
+) -> None:
+    size = MAX_OUTPUT + 1
+    argv = [sys.executable, "-c", f"import sys; sys.stdout.buffer.write(b'x' * {size})"]
+    with create(tmp_path) as ctx:
+        with pytest.raises(InstallError, match="limit"):
+            ctx.command(argv, stdout_path=ctx.root / "default.tar")
+        capture = ctx.root / "large.tar"
+        assert ctx.command(argv, stdout_path=capture, stdout_limit=size) == ""
+        assert capture.stat().st_size == size
+        with pytest.raises(InstallError, match="limit"):
+            ctx.command(argv, stdout_limit=size)
+        with pytest.raises(InstallError, match="limit"):
+            ctx.command(
+                [
+                    sys.executable,
+                    "-c",
+                    f"import sys; sys.stderr.buffer.write(b'x' * {size})",
+                ],
+                stdout_path=ctx.root / "stderr.tar",
+                stdout_limit=size,
+            )
+
+
+def test_command_capture_enforces_limit_after_a_fast_child_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn_install import core
+
+    def already_exited(process: subprocess.Popen[bytes]) -> bool:
+        # Observe exit without reaping, so the normal completion path still owns it.
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        return False
+
+    monkeypatch.setattr(core, "owned_child_running", already_exited)
+    with create(tmp_path) as ctx:
+        with pytest.raises(InstallError, match="limit"):
+            ctx.command(
+                [sys.executable, "-c", "print('too much output')"],
+                stdout_path=ctx.root / "short.tar",
+                stdout_limit=4,
+            )
+
+
+def test_command_streams_private_stdin_file_without_logging_contents(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with create(tmp_path) as ctx:
+        data = b"private archive contents\x00" * 100000
+        source = ctx.root / "input.tar"
+        source.write_bytes(data)
+        capture = ctx.root / "output.tar"
+        assert (
+            ctx.command(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+                ],
+                private=True,
+                stdin_path=source,
+                stdout_path=capture,
+                stdout_limit=len(data),
+            )
+            == ""
+        )
+        assert capture.read_bytes() == data
+        assert "private archive contents" not in capsys.readouterr().out
+        assert (
+            "private archive contents"
+            not in (ctx.directory / "commands.log").read_text()
+        )
+        with pytest.raises(InstallError, match="exit 3"):
+            ctx.command(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stderr.buffer.write(sys.stdin.buffer.read(64)); sys.exit(3)",
+                ],
+                private=True,
+                stdin_path=source,
+            )
+        assert "private archive contents" not in capsys.readouterr().out
+        assert (
+            "private archive contents"
+            not in (ctx.directory / "commands.log").read_text()
+        )
+        with pytest.raises(InstallError, match="private"):
+            ctx.command([sys.executable], stdin_path=source)
+        with pytest.raises(InstallError, match="both|exclusive"):
+            ctx.command(
+                [sys.executable], private=True, stdin_path=source, stdin_data=b"other"
+            )
+
+
+@pytest.mark.parametrize(
+    "kind", ["symlink", "parent-symlink", "fifo", "directory", "missing"]
+)
+def test_command_stdin_path_refuses_unsafe_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *a, **kw: pytest.fail("unsafe stdin must be refused before spawning"),
+    )
+    with create(tmp_path) as ctx:
+        source = ctx.root / "input.tar"
+        if kind == "symlink":
+            target = ctx.root / "real.tar"
+            target.write_bytes(b"protected")
+            source.symlink_to(target)
+        elif kind == "fifo":
+            os.mkfifo(source)
+        elif kind == "directory":
+            source.mkdir()
+        elif kind == "parent-symlink":
+            real = ctx.root / "real"
+            real.mkdir()
+            (real / "input.tar").write_bytes(b"protected")
+            (ctx.root / "link").symlink_to(real, target_is_directory=True)
+            source = ctx.root / "link" / "input.tar"
+        capture = ctx.root / "output.tar"
+        with pytest.raises(InstallError):
+            ctx.command(
+                [sys.executable, "-c", "raise Exception('must not run')"],
+                private=True,
+                stdin_path=source,
+                stdout_path=capture,
+            )
+        # A refused input leaves no exclusive capture to block the retry.
+        assert not capture.exists()
+
+
+@pytest.mark.parametrize("limit", [0, -1, True])
+def test_command_capture_refuses_invalid_limits(tmp_path: Path, limit: int) -> None:
+    with create(tmp_path) as ctx:
+        capture = ctx.root / "output.tar"
+        with pytest.raises(InstallError, match="positive integer"):
+            ctx.command([sys.executable], stdout_path=capture, stdout_limit=limit)
+        assert not capture.exists()
 
 
 def test_state_preserves_identity_and_serialises_mutation(tmp_path: Path) -> None:
@@ -366,3 +526,311 @@ def test_stdin_requires_private_output(tmp_path: Path) -> None:
     with create(tmp_path) as ctx:
         with pytest.raises(InstallError, match="private"):
             ctx.command([sys.executable, "-c", "pass"], stdin_data=b"secret")
+
+
+def sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_replace_unchanged_content_is_a_no_op(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "original")
+        before = copy.deepcopy(ctx.state)
+        assert ctx.replace_file(path, "original") is False
+        assert ctx.state == before
+        assert "file_replacements" not in ctx.state
+        assert ctx.pending_replacements() == {}
+
+
+def test_replace_updates_bytes_mode_ownership_and_clears_journal(
+    tmp_path: Path,
+) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old", mode=0o640)
+        assert ctx.replace_file(path, "new", mode=0o640) is True
+        assert path.read_text() == "new"
+        assert path.stat().st_mode & 0o777 == 0o640
+        assert ctx.state["owned_files"][str(path)] == sha("new")
+        assert ctx.pending_replacements() == {}
+        assert ctx.state["file_replacements"] == {}
+        assert not list(path.parent.glob(".replace-*"))
+    with reopen(tmp_path) as resumed:
+        assert resumed.state["owned_files"][str(path)] == sha("new")
+        assert resumed.pending_replacements() == {}
+
+
+def test_replace_refuses_unowned_file(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        path.write_text("foreign")
+        path.chmod(0o600)
+        with pytest.raises(InstallError, match="Refusing to replace unowned file"):
+            ctx.replace_file(path, "new")
+        assert path.read_text() == "foreign"
+        assert ctx.pending_replacements() == {}
+
+
+def test_replace_refuses_externally_modified_file(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "original")
+        path.write_text("changed")
+        with pytest.raises(
+            InstallError, match="Owned file changed; refusing replacement"
+        ):
+            ctx.replace_file(path, "new")
+        assert path.read_text() == "changed"
+        assert ctx.pending_replacements() == {}
+
+
+def test_replace_refuses_mode_drift(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "original")
+        path.chmod(0o640)
+        with pytest.raises(InstallError, match="permissions changed"):
+            ctx.replace_file(path, "new")
+        assert path.read_text() == "original"
+        assert ctx.pending_replacements() == {}
+
+
+def test_replace_refuses_symlink_and_leaves_target_alone(tmp_path: Path) -> None:
+    foreign = tmp_path / "foreign"
+    foreign.write_text("keep")
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "original")
+        path.unlink()
+        path.symlink_to(foreign)
+        with pytest.raises(InstallError):
+            ctx.replace_file(path, "new")
+        assert foreign.read_text() == "keep"
+        assert ctx.pending_replacements() == {}
+
+
+def test_crash_before_publish_resumes_with_same_content(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(os, "replace", publish_crashes)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    assert path.read_text() == "old"
+    assert not list(path.parent.glob(".replace-*"))
+    with reopen(tmp_path) as resumed:
+        assert resumed.pending_replacements() == {
+            str(path): {"old": sha("old"), "new": sha("new")}
+        }
+        assert resumed.replace_file(path, "new") is True
+        assert path.read_text() == "new"
+        assert resumed.state["owned_files"][str(path)] == sha("new")
+        assert resumed.pending_replacements() == {}
+
+
+def test_crash_after_publish_finalises_on_resume(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        real_save = Context.save
+        saves: list[int] = []
+
+        def crash_before_final_save(self: Context) -> None:
+            saves.append(1)
+            # First save journals the intent; the second follows the publish.
+            if len(saves) == 2:
+                raise RuntimeError("simulated crash")
+            real_save(self)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Context, "save", crash_before_final_save)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    assert path.read_text() == "new"
+    with reopen(tmp_path) as resumed:
+        assert resumed.pending_replacements() == {
+            str(path): {"old": sha("old"), "new": sha("new")}
+        }
+        assert resumed.replace_file(path, "new") is True
+        assert resumed.state["owned_files"][str(path)] == sha("new")
+        assert resumed.pending_replacements() == {}
+
+
+def test_restore_after_unfinalised_publish_adopts_then_replaces(
+    tmp_path: Path,
+) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        real_save = Context.save
+        saves: list[int] = []
+
+        def crash_before_final_save(self: Context) -> None:
+            saves.append(1)
+            if len(saves) == 2:
+                raise RuntimeError("simulated crash")
+            real_save(self)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Context, "save", crash_before_final_save)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    with reopen(tmp_path) as resumed:
+        assert resumed.replace_file(path, "old") is True
+        assert path.read_text() == "old"
+        assert resumed.state["owned_files"][str(path)] == sha("old")
+        assert resumed.pending_replacements() == {}
+
+
+def test_request_for_old_content_after_failed_publish_clears_journal(
+    tmp_path: Path,
+) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(os, "replace", publish_crashes)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    with reopen(tmp_path) as resumed:
+        assert resumed.replace_file(path, "old") is False
+        assert path.read_text() == "old"
+        assert resumed.pending_replacements() == {}
+        resumed.check_file(path)
+
+
+def test_resume_with_different_content_replaces_when_old_remains(
+    tmp_path: Path,
+) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(os, "replace", publish_crashes)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "first")
+    with reopen(tmp_path) as resumed:
+        assert resumed.replace_file(path, "second") is True
+        assert path.read_text() == "second"
+        assert resumed.state["owned_files"][str(path)] == sha("second")
+        assert resumed.pending_replacements() == {}
+
+
+def test_resume_refuses_unexpected_third_content(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(os, "replace", publish_crashes)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    path.write_text("surprise")
+    path.chmod(0o600)
+    with reopen(tmp_path) as resumed:
+        with pytest.raises(InstallError, match="Interrupted replacement"):
+            resumed.replace_file(path, "new")
+        assert path.read_text() == "surprise"
+        assert resumed.pending_replacements() == {
+            str(path): {"old": sha("old"), "new": sha("new")}
+        }
+
+
+def test_pending_journal_blocks_check_and_write(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(os, "replace", publish_crashes)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    with reopen(tmp_path) as resumed:
+        with pytest.raises(InstallError, match="interrupted replacement"):
+            resumed.check_file(path)
+        with pytest.raises(InstallError, match="interrupted replacement"):
+            resumed.write_file(path, "other")
+        assert path.read_text() == "old"
+
+
+def test_secret_replacement_content_never_enters_log(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "credentials.env"
+        ctx.write_file(path, "placeholder")
+        assert ctx.replace_file(path, "secret-value", secret=True) is True
+        assert path.read_text() == "secret-value"
+        log = (ctx.directory / "commands.log").read_text()
+        assert "secret-value" not in log
+        assert "Replace protected credential file" in log
+        assert "contents omitted" in log
+
+
+def test_cancelled_replacement_still_checks_permissions(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(os, "replace", publish_crashes)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    path.chmod(0o644)
+    with reopen(tmp_path) as resumed:
+        with pytest.raises(InstallError, match="permissions changed"):
+            resumed.replace_file(path, "old")
+        assert str(path) in resumed.pending_replacements()
+
+
+def test_replace_refuses_targets_outside_private_tree(tmp_path: Path) -> None:
+    with create(tmp_path) as ctx:
+        outside = tmp_path / "shared" / "compose.yaml"
+        outside.parent.mkdir(mode=0o777)
+        outside.write_text("old")
+        ctx.state["owned_files"][str(outside)] = sha("old")
+        for target in (outside, ctx.root / ".." / "state.json", ctx.root):
+            with pytest.raises(InstallError, match="private instance tree"):
+                ctx.replace_file(target, "new")
+        assert outside.read_text() == "old"
+        assert ctx.pending_replacements() == {}
+
+
+def test_adoption_makes_rename_durable_before_clearing_journal(
+    tmp_path: Path,
+) -> None:
+    import cairn_install.core as core
+
+    with create(tmp_path) as ctx:
+        path = ctx.root / "compose.yaml"
+        ctx.write_file(path, "old")
+        real_save = Context.save
+        saves: list[int] = []
+
+        def crash_before_final_save(self: Context) -> None:
+            saves.append(1)
+            if len(saves) == 2:
+                raise RuntimeError("simulated crash")
+            real_save(self)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(Context, "save", crash_before_final_save)
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                ctx.replace_file(path, "new")
+    events: list[str] = []
+    real_fsync = core._fsync_directory
+
+    def record_fsync(directory: Path) -> None:
+        events.append(f"fsync:{directory}")
+        real_fsync(directory)
+
+    def record_save(self: Context) -> None:
+        events.append(
+            "save:" + ",".join(sorted(self.state.get("file_replacements", {})))
+        )
+        real_save(self)
+
+    with reopen(tmp_path) as resumed:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(core, "_fsync_directory", record_fsync)
+            patch.setattr(Context, "save", record_save)
+            assert resumed.replace_file(path, "new") is True
+    assert events[0] == f"fsync:{path.parent}"
+    assert events[1] == "save:"

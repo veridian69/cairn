@@ -82,3 +82,56 @@ func TestDoctorReadinessEmitsObservationRatherThanTreatingExitZeroAsReady(t *tes
 		t.Fatal("readiness leaked a credential")
 	}
 }
+
+func TestConnectProfileAndHarnessAreExclusiveAndOneIsRequired(t *testing.T) {
+	for _, args := range [][]string{{}, {"--profile", "/missing", "--harness", "claude"}} {
+		command := newConnectCommand()
+		command.SetOut(io.Discard)
+		command.SetErr(io.Discard)
+		command.SetArgs(args)
+		if err := command.Execute(); err == nil {
+			t.Fatalf("connect %v accepted", args)
+		}
+	}
+}
+
+func TestConnectHarnessRejectsUnsupportedHarnessBeforeTouchingHome(t *testing.T) {
+	t.Setenv("GARDEN_HOME", "")
+	command := newConnectCommand()
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	command.SetArgs([]string{"--harness", "gemini"})
+	err := command.Execute()
+	if err == nil || err.Error() != "harness gemini is not supported yet" {
+		t.Fatalf("unsupported harness not reported: %v", err)
+	}
+}
+
+func TestConnectHarnessWithoutHomeServesStatusOnly(t *testing.T) {
+	t.Setenv("GARDEN_HOME", t.TempDir())
+	t.Setenv("GARDEN_IDENTITY", "")
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{}}}`,
+	}, "\n") + "\n"
+	command := newConnectCommand()
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetErr(io.Discard)
+	command.SetIn(strings.NewReader(input))
+	command.SetArgs([]string{"--harness", "claude"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	for _, want := range []string{`"name":"status"`, `\"connected\":false`, "Garden is not connected in this session"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("disconnected output lacks %s: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "notifications/claude/channel") || strings.Contains(text, `"claude/channel"`) {
+		t.Fatalf("disconnected session advertised a channel: %s", text)
+	}
+}

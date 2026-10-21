@@ -104,19 +104,51 @@ func stagedSchemaVersion(db *sql.DB, kind string) (int, error) {
 	}
 }
 
+// gatewayBaseTables and gatewayLoopGuardTables group the gateway tables by the upgrade that created them.
+var gatewayBaseTables = []string{"garden_binding", "garden_inbox"}
+var gatewayLoopGuardTables = []string{"garden_message_depth", "garden_attention", "garden_attention_pair", "garden_attention_expiry", "garden_message_depth_seq"}
+
+// gatewayIndexesV1 are the loop-guard indexes, created in the same upgrade as their table.
+var gatewayIndexesV1 = map[string]string{
+	"garden_attention_pair":    `CREATE INDEX garden_attention_pair ON garden_attention(pair_low, pair_high, attended_at)`,
+	"garden_attention_expiry":  `CREATE INDEX garden_attention_expiry ON garden_attention(attended_at)`,
+	"garden_message_depth_seq": `CREATE INDEX garden_message_depth_seq ON garden_message_depth(seq)`,
+}
+
 // gatewaySchemaV1 is the state.db schema the gateway adds in internal/garden/store.go.
 // It is optional, because a daemon-only data directory never has it, but when present
-// all of it must match exactly. The gateway creates both tables in one transaction.
-var gatewaySchemaV1 = map[string]string{
-	"garden_binding": `
-CREATE TABLE garden_binding (singleton INTEGER PRIMARY KEY CHECK(singleton=1), binding TEXT NOT NULL)`,
-	"garden_inbox": `
+// all of it must match one of the accepted shapes exactly. garden_inbox has three stored
+// texts: the original create, the same table after the in-place deliverable migration
+// (SQLite rewrites the stored SQL on ALTER TABLE ADD COLUMN, placing the new column after a
+// newline and before the closing parenthesis), and a fresh create that includes the column.
+var gatewaySchemaV1 = map[string][]string{
+	"garden_binding": {`
+CREATE TABLE garden_binding (singleton INTEGER PRIMARY KEY CHECK(singleton=1), binding TEXT NOT NULL)`},
+	"garden_inbox": {`
 CREATE TABLE garden_inbox (
  principal TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, participant TEXT NOT NULL UNIQUE,
  generation TEXT NOT NULL, cursor INTEGER NOT NULL, pending_seq INTEGER NOT NULL DEFAULT 0,
  pending_id TEXT NOT NULL DEFAULT '', receipt TEXT NOT NULL DEFAULT '', last_receipt TEXT NOT NULL DEFAULT '',
  consumer TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0
-)`,
+)`, `
+CREATE TABLE garden_inbox (
+ principal TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, participant TEXT NOT NULL UNIQUE,
+ generation TEXT NOT NULL, cursor INTEGER NOT NULL, pending_seq INTEGER NOT NULL DEFAULT 0,
+ pending_id TEXT NOT NULL DEFAULT '', receipt TEXT NOT NULL DEFAULT '', last_receipt TEXT NOT NULL DEFAULT '',
+ consumer TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0
+, deliverable INTEGER NOT NULL DEFAULT 0)`, `
+CREATE TABLE garden_inbox (
+ principal TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, participant TEXT NOT NULL UNIQUE,
+ generation TEXT NOT NULL, cursor INTEGER NOT NULL, pending_seq INTEGER NOT NULL DEFAULT 0,
+ pending_id TEXT NOT NULL DEFAULT '', receipt TEXT NOT NULL DEFAULT '', last_receipt TEXT NOT NULL DEFAULT '',
+ consumer TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, deliverable INTEGER NOT NULL DEFAULT 0
+)`},
+	"garden_message_depth": {`
+CREATE TABLE garden_message_depth (message_id TEXT PRIMARY KEY, depth INTEGER NOT NULL, seq INTEGER NOT NULL)`},
+	"garden_attention": {`
+CREATE TABLE garden_attention (
+ pair_low TEXT NOT NULL, pair_high TEXT NOT NULL, attended_at INTEGER NOT NULL
+)`},
 }
 
 func validateStateSchemaV1(db *sql.DB) error {
@@ -158,7 +190,7 @@ func validateStateSchemaV1(db *sql.DB) error {
 		return err
 	}
 	defer rows.Close()
-	seen := make(map[string]bool, len(expected)+len(gatewaySchemaV1))
+	seen := make(map[string]bool, len(expected)+len(gatewaySchemaV1)+len(gatewayIndexesV1))
 	for rows.Next() {
 		var objectType string
 		var name string
@@ -166,12 +198,21 @@ func validateStateSchemaV1(db *sql.DB) error {
 		if err := rows.Scan(&objectType, &name, &definition); err != nil {
 			return err
 		}
-		want, ok := expected[name]
-		if !ok {
-			want, ok = gatewaySchemaV1[name]
+		matchesType := func(kind, want string) bool {
+			return objectType == kind && definition.Valid && normaliseSchemaSQL(definition.String) == normaliseSchemaSQL(want)
 		}
-		if !ok || objectType != "table" || !definition.Valid ||
-			normaliseSchemaSQL(definition.String) != normaliseSchemaSQL(want) {
+		matches := func(want string) bool { return matchesType("table", want) }
+		matched := false
+		if want, ok := expected[name]; ok {
+			matched = matches(want)
+		} else if want, ok := gatewayIndexesV1[name]; ok {
+			matched = matchesType("index", want)
+		} else {
+			for _, want := range gatewaySchemaV1[name] {
+				matched = matched || matches(want)
+			}
+		}
+		if !matched {
 			return fmt.Errorf("unexpected schema object %s %s", objectType, name)
 		}
 		seen[name] = true
@@ -179,15 +220,25 @@ func validateStateSchemaV1(db *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	gatewaySeen := 0
-	for name := range gatewaySchemaV1 {
+	// The first gateway created two tables. The loop guard added two tables and two
+	// indexes in one upgrade transaction, so a snapshot holds either both groups or only the first.
+	baseSeen, laterSeen := 0, 0
+	for _, name := range gatewayBaseTables {
 		if seen[name] {
-			gatewaySeen++
+			baseSeen++
 		}
 	}
-	if gatewaySeen != 0 && gatewaySeen != len(gatewaySchemaV1) {
+	for _, name := range gatewayLoopGuardTables {
+		if seen[name] {
+			laterSeen++
+		}
+	}
+	if (baseSeen != 0 && baseSeen != len(gatewayBaseTables)) ||
+		(baseSeen == 0 && laterSeen != 0) ||
+		(laterSeen != 0 && laterSeen != len(gatewayLoopGuardTables)) {
 		return fmt.Errorf("partial gateway state schema objects")
 	}
+	gatewaySeen := baseSeen + laterSeen
 	if len(seen)-gatewaySeen != len(expected) {
 		return fmt.Errorf("missing state schema objects")
 	}
@@ -196,5 +247,6 @@ func validateStateSchemaV1(db *sql.DB) error {
 
 func normaliseSchemaSQL(definition string) string {
 	normalised := strings.ToLower(strings.Join(strings.Fields(definition), " "))
-	return strings.Replace(normalised, "create table if not exists ", "create table ", 1)
+	normalised = strings.Replace(normalised, "create table if not exists ", "create table ", 1)
+	return strings.Replace(normalised, "create index if not exists ", "create index ", 1)
 }

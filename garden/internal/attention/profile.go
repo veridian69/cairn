@@ -37,11 +37,17 @@ type Profile struct {
 }
 
 func LoadProfile(path string) (Profile, error) {
-	var p Profile
 	data, err := readRegular(path, 32*1024, false)
 	if err != nil {
-		return p, errors.New("cannot read adapter profile")
+		return Profile{}, errors.New("cannot read adapter profile")
 	}
+	return parseProfile(data, path)
+}
+
+// parseProfile validates profile bytes already read from path; relative paths resolve
+// against path's directory.
+func parseProfile(data []byte, path string) (Profile, error) {
+	var p Profile
 	if err := strictJSON(data, &p); err != nil {
 		return p, errors.New("invalid adapter profile JSON")
 	}
@@ -60,30 +66,48 @@ func LoadProfile(path string) (Profile, error) {
 	if raw, ok := fields["host_api_version"]; ok && string(bytes.TrimSpace(raw)) == "null" {
 		return p, errors.New("invalid adapter profile field")
 	}
+	base, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return p, errors.New("invalid profile location")
+	}
+	return validateProfile(p, base)
+}
+
+// validateBinding checks the pinned Garden endpoint, instance, scope and classification.
+// Harness homes share it, so both entry points refuse the same bindings.
+func validateBinding(p Profile) error {
 	u, err := endpoint(p.GardenEndpoint)
 	if err != nil {
-		return p, err
+		return err
 	}
 	if u.Path != "/mcp" || u.RawPath != "" {
-		return p, errors.New("Garden endpoint must end in /mcp")
+		return errors.New("Garden endpoint must end in /mcp")
 	}
 	if u.Scheme != "https" && (p.GardenTLSCAFile != "" || p.GardenTLSServerName != "") {
-		return p, errors.New("Garden TLS settings require HTTPS")
+		return errors.New("Garden TLS settings require HTTPS")
 	}
 	id, err := uuid.Parse(p.InstanceID)
 	if err != nil || id.String() != p.InstanceID || id.Version() != 4 || id.Variant() != uuid.RFC4122 {
-		return p, errors.New("invalid expected Cairn instance")
+		return errors.New("invalid expected Cairn instance")
 	}
 	if p.Scope.Realm == "" || p.Scope.Segments == nil {
-		return p, errors.New("explicit expected scope is required")
+		return errors.New("explicit expected scope is required")
 	}
 	for _, segment := range p.Scope.Segments {
 		if segment.Kind == "" || segment.Identifier == "" {
-			return p, errors.New("invalid expected scope segment")
+			return errors.New("invalid expected scope segment")
 		}
 	}
 	if p.Classification != "public" && p.Classification != "internal" && p.Classification != "restricted" {
-		return p, errors.New("invalid expected classification")
+		return errors.New("invalid expected classification")
+	}
+	return nil
+}
+
+// validateProfile checks one adapter profile and resolves its relative paths against base.
+func validateProfile(p Profile, base string) (Profile, error) {
+	if err := validateBinding(p); err != nil {
+		return p, err
 	}
 	if p.Participant == "" || p.CredentialFile == "" {
 		return p, errors.New("participant and credential file are required")
@@ -115,10 +139,6 @@ func LoadProfile(path string) (Profile, error) {
 	}
 	if p.Adapter != "opencode" && p.HostAPIVersion != "" {
 		return p, errors.New("host API version applies only to OpenCode")
-	}
-	base, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return p, errors.New("invalid profile location")
 	}
 	if !filepath.IsAbs(p.CredentialFile) {
 		p.CredentialFile = filepath.Join(base, p.CredentialFile)

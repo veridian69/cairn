@@ -323,7 +323,13 @@ required CA material through your existing secure transfer mechanism. Keep
 tokens private. Do not copy the server TLS key or Cairn administrator token.
 
 Install the `garden` binary and helper scripts on each agent machine using
-`garden/scripts/install-user`, then follow the generated bundle README. Only native
+`garden/scripts/install-user`, then follow the generated bundle README. Each
+participant directory's README sets up the Garden home (`~/.garden`, or a new
+`GARDEN_HOME` when one already exists), runs `garden home add-identity` with that
+participant's `agent.token`, and installs the host plugin from
+`garden/plugins/<host>` in the Cairn checkout: a Claude Code or Codex plugin
+marketplace entry, or `garden.ts` copied to `.opencode/plugins/` for OpenCode.
+The profile examples beside it remain for `garden doctor` below. Only native
 installation supplies a host-side binary at `instance/garden/bin/garden` under the
 named installation state directory. Docker and Kubernetes installations run
 Garden in a container; install the adapter binary separately on the machine
@@ -366,6 +372,85 @@ the profile's participant and credential before diagnosing either side. The
 server-side `garden_verify` result and an HTTPS handshake ending in
 unauthenticated `401` establish the deployment before adapter bundles are
 distributed; each adapter still needs its own DNS, route and firewall test.
+
+## Add, upgrade, back up and remove Garden
+
+These operations work on a verified native or Docker installation. Kubernetes
+refuses them for now; for a Garden server against an existing Cairn, see the
+[guided installation guide](guided-installation.md#install-garden-against-an-existing-cairn-server).
+Each one records a journal in the installation state. An interrupted
+`garden-add` is finished with `resume --name team`; an interrupted upgrade,
+backup or removal continues when you run the same command again, and while it
+is in progress `resume`, `rollback` and the other Garden operations refuse.
+
+### Add Garden to an existing installation
+
+```sh
+./cairn-install garden-add --name team --garden-config "$HOME/garden-tls/garden.json"
+```
+
+The installation must be verified and must not already have Garden. Docker
+restarts Cairn to attach Garden; the command announces the outage and asks for
+confirmation (`--yes` confirms without a prompt). The result prints the
+participant bundle directory, as a fresh install does.
+
+### Upgrade Garden
+
+```sh
+./cairn-install garden-upgrade --name team --source /path/to/new/cairn-checkout
+```
+
+`--source` is a Cairn checkout carrying the new Garden release; Cairn itself is
+not changed. The upgrade builds the new release beside the current one, stops
+Garden, takes a cold copy of its data under `instance/garden-upgrades/`, switches
+release, starts Garden and checks the same participant bindings and data
+generation. It needs free space of twice the data size and refuses data over
+8 GiB. A downgrade is refused, the same release is a no-op, and the same version
+with different Garden sources is announced as a rebuild. The previous release
+and the last two cold copies are kept.
+
+To go back to the previous release:
+
+```sh
+./cairn-install garden-upgrade --name team --rollback --restore-data
+./cairn-install garden-upgrade --name team --rollback --keep-data
+```
+
+Before the new release has started, `--rollback` alone aborts the upgrade.
+After that, choose one. `--restore-data` restores the cold copy and moves the
+current data aside to `data.pre-restore-<id>`, which is kept: messages since the
+upgrade are not lost, but they are no longer in the running Garden.
+`--keep-data` keeps the current data with the older binary; `garden-backup`
+then refuses until Garden is upgraded again, because the older binary cannot
+snapshot the newer data.
+
+### Back up Garden
+
+```sh
+./cairn-install garden-backup --name team --output /safe/garden-backups
+```
+
+Garden is stopped while its snapshot is taken, then started and verified again
+(`--yes` confirms the outage without a prompt). The result is
+`garden-backup-<UTC stamp>.tar` with a `.tar.sha256` sidecar, holding the snapshot
+and Garden's deployment files; it is verified before the staged snapshot is
+removed. Without `--output`, archives go to `garden-backups/` in the
+installation's state directory, which `blitz` deletes: copy them elsewhere. The
+snapshot label is the installation name with everything except `a-z` and `0-9`
+removed (lower-cased), and must be 1 to 16 characters, so `team-1` becomes
+`team1`. Backup needs Garden 0.8.0 or later.
+
+### Remove Garden only
+
+```sh
+./cairn-install garden-remove --name team --yes
+./cairn-install garden-remove --name team --yes --delete-data
+```
+
+`garden-remove` revokes every participant's credential and grant, removes the
+Garden runtime and verifies Cairn again; distributed participant tokens stop
+working. Garden's data is kept unless `--delete-data` is given. Cairn and its
+catalogue are untouched; `garden-add` can add Garden again later.
 
 ## Recovery and removal
 

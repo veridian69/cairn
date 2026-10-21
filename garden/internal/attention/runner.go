@@ -28,6 +28,9 @@ type Runner struct {
 	Inbox      Inbox
 	Host       Host
 	ConsumerID string
+	// Stop, when closed, ends Run between deliveries with a nil error: a delivery in flight and
+	// its acknowledgement finish first, and a waiting poll or retry wait is abandoned.
+	Stop       <-chan struct{}
 	retryAfter time.Duration
 	renewEvery time.Duration
 }
@@ -62,17 +65,30 @@ func (r Runner) Run(ctx context.Context) error {
 			}
 		}
 	}
+	// idle covers the waits between deliveries, which Stop may cut short; deliveries and their
+	// acknowledgements keep ctx.
+	idle, stopIdle := context.WithCancel(ctx)
+	defer stopIdle()
+	if r.Stop != nil {
+		go func() {
+			select {
+			case <-r.Stop:
+				stopIdle()
+			case <-idle.Done():
+			}
+		}()
+	}
 	for {
-		if ctx.Err() != nil {
+		if idle.Err() != nil {
 			return nil
 		}
-		pending, err := r.Inbox.Poll(ctx, r.ConsumerID)
+		pending, err := r.Inbox.Poll(idle, r.ConsumerID)
 		if err != nil {
-			if ctx.Err() != nil {
+			if idle.Err() != nil {
 				return nil
 			}
 			if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrBusy) {
-				if !pause(ctx, r.retryAfter) {
+				if !pause(idle, r.retryAfter) {
 					return nil
 				}
 				continue
@@ -80,7 +96,7 @@ func (r Runner) Run(ctx context.Context) error {
 			return err
 		}
 		if pending == nil {
-			if !pause(ctx, 100*time.Millisecond) {
+			if !pause(idle, 100*time.Millisecond) {
 				return nil
 			}
 			continue
@@ -90,7 +106,12 @@ func (r Runner) Run(ctx context.Context) error {
 			return ErrUncertain
 		}
 		if errors.Is(err, ErrBusy) || errors.Is(err, ErrUnavailable) {
-			if !pause(ctx, r.retryAfter) {
+			wait := r.retryAfter
+			var after RetryAfter
+			if errors.As(err, &after) {
+				wait = time.Duration(after)
+			}
+			if !pause(idle, wait) {
 				return nil
 			}
 			continue

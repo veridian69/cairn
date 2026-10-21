@@ -32,7 +32,12 @@ type Server struct {
 	lock     *os.File
 	closed   bool
 	done     chan struct{}
+	// now is the lease and loop-guard clock; tests replace it.
+	now func() time.Time
 }
+
+// sessionLease is how long a heartbeat or poll keeps the session lease without renewal.
+const sessionLease = 120 * time.Second
 
 // afterEnsure is a test seam that runs after the daemon check and before the gateway lock.
 var afterEnsure func()
@@ -48,6 +53,7 @@ func New(ctx context.Context, cfg Config) (s *Server, err error) {
 		principals[k] = v
 	}
 	cfg.Principals = principals
+	cfg.LoopGuard = cfg.LoopGuard.resolved()
 	if cfg.Version == "" {
 		cfg.Version = "dev"
 	}
@@ -55,7 +61,7 @@ func New(ctx context.Context, cfg Config) (s *Server, err error) {
 	if err != nil {
 		return nil, err
 	}
-	s = &Server{cfg: cfg, auth: auth, binding: Binding{cfg.Auth.InstanceID, cfg.Auth.Scope, cfg.Auth.Classification}, done: make(chan struct{})}
+	s = &Server{cfg: cfg, auth: auth, binding: Binding{cfg.Auth.InstanceID, cfg.Auth.Scope, cfg.Auth.Classification}, done: make(chan struct{}), now: time.Now}
 	defer func(owned *Server) {
 		if err != nil {
 			_ = owned.Close()
@@ -252,11 +258,15 @@ func (s *Server) register(m *mcp.Server, id gardenauth.Identity, token string) {
 		out, err := s.status(ctx, id.PrincipalID)
 		return recheck(ctx, out, err)
 	})
-	register(m, "send_message", "Send shared room content; explicit recipients route attention, not private access.", func(ctx context.Context, a SendArgs) (any, error) {
+	register(m, "send_message", "Send shared room content; explicit recipients route attention, not private access. The result reports delivery per recipient.", func(ctx context.Context, a SendArgs) (any, error) {
 		if !id.CanWrite {
 			return nil, failure("forbidden", "Garden sending requires retrieve and ingest")
 		}
-		return s.send(ctx, id.PrincipalID, a)
+		out, err := s.send(ctx, id.PrincipalID, a)
+		if err != nil || a.ReportDelivery {
+			return out, err
+		}
+		return out.Message, nil
 	})
 	register(m, "read_messages", "Read retained shared room history without advancing your inbox.", func(ctx context.Context, a ReadArgs) (any, error) {
 		out, err := s.read(ctx, id.PrincipalID, a)
@@ -264,6 +274,14 @@ func (s *Server) register(m *mcp.Server, id gardenauth.Identity, token string) {
 	})
 	register(m, "poll_inbox", "Lease and return your first pending addressed message. Acknowledge only after host acceptance.", func(ctx context.Context, a PollArgs) (any, error) {
 		out, err := s.poll(ctx, id.PrincipalID, a)
+		return recheck(ctx, out, err)
+	})
+	register(m, "heartbeat", "Renew your session lease and declare whether this session can receive attention.", func(ctx context.Context, a HeartbeatArgs) (any, error) {
+		out, err := s.heartbeat(ctx, id.PrincipalID, a)
+		return recheck(ctx, out, err)
+	})
+	register(m, "who", "List Garden participants and whether each is online and deliverable. Read-only.", func(ctx context.Context, _ struct{}) (any, error) {
+		out, err := s.who(ctx, id.PrincipalID)
 		return recheck(ctx, out, err)
 	})
 	register(m, "acknowledge", "Acknowledge accepted delivery using your current adapter lease and receipt.", func(ctx context.Context, a AckArgs) (any, error) {

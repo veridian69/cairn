@@ -17,12 +17,24 @@ func newSnapshotCmd() *cobra.Command {
 		Long: "Creates, lists, and restores complete Garden runtime snapshots. Snapshot\n" +
 			"operations refuse while any other Garden command is running.",
 	}
+	var hostConfig, backupDir string
+	command.PersistentFlags().StringVar(&hostConfig, "host-config", "", "Garden host JSON configuration")
+	command.PersistentFlags().StringVar(&backupDir, "backup-dir", "", "snapshot storage directory (default: backups beside configuration)")
+	managerForCommand := func() (*snapshot.Manager, error) {
+		if hostConfig != "" {
+			return snapshot.NewHostManager(hostConfig, backupDir, version)
+		}
+		return snapshot.NewManagerWithBackupDir(DefaultConfigDir(), backupDir, version), nil
+	}
 	create := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a complete stopped runtime snapshot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager := snapshot.NewManager(DefaultConfigDir(), version)
+			manager, err := managerForCommand()
+			if err != nil {
+				return err
+			}
 			created, err := manager.Create(cmd.Context(), args[0])
 			if err != nil {
 				return err
@@ -37,7 +49,10 @@ func newSnapshotCmd() *cobra.Command {
 		Short: "List runtime snapshots",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			manager := snapshot.NewManager(DefaultConfigDir(), version)
+			manager, err := managerForCommand()
+			if err != nil {
+				return err
+			}
 			snapshots, err := manager.List(cmd.Context())
 			if err != nil {
 				return err
@@ -66,7 +81,10 @@ func newSnapshotCmd() *cobra.Command {
 			if err != nil || !confirmed {
 				return err
 			}
-			manager := snapshot.NewManager(DefaultConfigDir(), version)
+			manager, err := managerForCommand()
+			if err != nil {
+				return err
+			}
 			result, err := manager.Restore(cmd.Context(), args[0])
 			if err != nil {
 				return err
