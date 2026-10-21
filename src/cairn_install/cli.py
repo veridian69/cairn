@@ -18,11 +18,11 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Never
 
-from .core import InstallError, atomic_write, open_context, open_read_context
+from .core import Context, InstallError, atomic_write, open_context, open_read_context
 from .output import features_label, paint
 
 DEFAULT_PORT = 8000
-MODES = ("disposable", "native", "docker", "kubernetes")
+MODES = ("disposable", "native", "docker", "kubernetes", "garden-server")
 _IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
 _RECEIPT_IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
 _LOCAL_IMAGE_TAG = re.compile(r"[^@\s]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
@@ -112,13 +112,17 @@ def validate_source(value: Path) -> Path:
     return source
 
 
-def _fingerprint_paths(source: Path) -> list[Path]:
+def _fingerprint_paths(source: Path, *, exclude_garden: bool = False) -> list[Path]:
     paths: list[Path] = []
     for relative in FINGERPRINT_FILES:
+        if exclude_garden and relative.startswith("garden/"):
+            continue
         candidate = source / relative
         if candidate.exists():
             paths.append(candidate)
     for relative in FINGERPRINT_TREES:
+        if exclude_garden and relative.startswith("garden/"):
+            continue
         root = source / relative
         if not root.exists():
             continue
@@ -132,11 +136,11 @@ def _fingerprint_paths(source: Path) -> list[Path]:
     return sorted(paths, key=lambda item: item.relative_to(source).as_posix())
 
 
-def source_fingerprint(source: Path) -> str:
+def source_fingerprint(source: Path, *, exclude_garden: bool = False) -> str:
     """Hash stable, installation-relevant source content without invoking Git."""
     source = validate_source(source)
     digest = hashlib.sha256()
-    for path in _fingerprint_paths(source):
+    for path in _fingerprint_paths(source, exclude_garden=exclude_garden):
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode):
             raise InstallError(f"Install source is not a regular file: {path}")
@@ -149,6 +153,32 @@ def source_fingerprint(source: Path) -> str:
     return digest.hexdigest()
 
 
+def cairn_fingerprint(state: Mapping[str, Any]) -> str:
+    """Return the retained Cairn digest for this record's fingerprint scope.
+
+    Garden upgrade records set source_fingerprint_scope to excluding_garden
+    and save cairn_fingerprint before changing Garden. The original full
+    source_fingerprint stays unchanged because Docker image tags depend on it.
+    """
+    scoped = state.get("source_fingerprint_scope") == "excluding_garden"
+    key = "cairn_fingerprint" if scoped else "source_fingerprint"
+    value = state.get(key)
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise InstallError(f"Recorded {key} is missing or invalid")
+    return value
+
+
+def _assert_cairn_source(ctx: Context, source: Path) -> None:
+    """Check the immutable source path and the record's retained Cairn scope."""
+    _assert_immutable(ctx.state, {"source": str(source)})
+    scoped = ctx.state.get("source_fingerprint_scope") == "excluding_garden"
+    key = "cairn_fingerprint" if scoped else "source_fingerprint"
+    _assert_immutable(
+        {key: cairn_fingerprint(ctx.state)},
+        {key: source_fingerprint(source, exclude_garden=scoped)},
+    )
+
+
 def _parser() -> ArgumentParser:
     parser = ArgumentParser(
         prog="cairn-install",
@@ -157,7 +187,18 @@ def _parser() -> ArgumentParser:
     parser.add_argument(
         "operation",
         nargs="?",
-        choices=("install", "status", "resume", "rollback", "blitz", "ls"),
+        choices=(
+            "install",
+            "status",
+            "resume",
+            "rollback",
+            "blitz",
+            "ls",
+            "garden-add",
+            "garden-remove",
+            "garden-upgrade",
+            "garden-backup",
+        ),
         default="install",
     )
     parser.add_argument("--mode", choices=MODES)
@@ -191,8 +232,18 @@ def _parser() -> ArgumentParser:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="confirm the irreversible blitz operation without a prompt",
+        help="confirm blitz, garden-add, garden-remove, garden-upgrade or garden-backup without a prompt",
     )
+    parser.add_argument(
+        "--delete-data",
+        action="store_true",
+        help="with garden-remove, also permanently delete Garden's retained data",
+    )
+    parser.add_argument("--rollback", action="store_true")
+    parser.add_argument("--restore-data", action="store_true")
+    parser.add_argument("--keep-data", action="store_true")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--server-config", type=Path)
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -273,6 +324,27 @@ def _confirm_blitz(name: str, *, non_interactive: bool, yes: bool) -> None:
     if confirmation != name:
         raise InstallError(
             "Confirmation did not match the installation name; nothing was deleted.",
+            "confirmation_required",
+        )
+
+
+def _confirm_garden_change(
+    *, operation: str, announcements: list[str], non_interactive: bool, yes: bool
+) -> None:
+    for line in announcements:
+        print(line)
+    sys.stdout.flush()
+    if yes:
+        return
+    if non_interactive:
+        raise InstallError(
+            f"--yes is required for {operation} in non-interactive mode",
+            "confirmation_required",
+        )
+    answer = input("Continue? [y/N]: ").strip().lower()
+    if answer not in {"y", "yes"}:
+        raise InstallError(
+            "Garden change was not confirmed; nothing was changed.",
             "confirmation_required",
         )
 
@@ -810,6 +882,10 @@ def _render_result(result: object, *, operation: str, verbose: bool) -> None:
         "resume": "Resume complete",
         "rollback": "Rollback complete",
         "blitz": "Blitz complete",
+        "garden-add": "Garden add complete",
+        "garden-remove": "Garden removal complete",
+        "garden-upgrade": "Garden upgrade complete",
+        "garden-backup": "Garden backup complete",
     }[operation]
     print(paint(heading, "success"))
     if operation == "blitz":
@@ -885,7 +961,276 @@ def _transcript_footer(args: argparse.Namespace | None, *, failed: bool) -> None
         )
 
 
-def _run(args: argparse.Namespace, default_source: Path | None) -> None:
+def _assert_garden_add_allowed(ctx: Any, args: argparse.Namespace) -> None:
+    from .workflow import _garden_pending
+
+    if pending := _garden_pending(ctx):
+        raise InstallError(pending)
+    if ctx.mode == "kubernetes":
+        raise InstallError(
+            "Kubernetes garden-add arrives in a later release", "invalid_arguments"
+        )
+    if ctx.mode not in {"native", "docker"}:
+        raise InstallError(
+            "Garden add needs a native or docker installation", "invalid_arguments"
+        )
+    garden = ctx.state.get("garden")
+    if isinstance(garden, dict):
+        if "remove" in garden:
+            raise InstallError(
+                f"Garden removal is in progress; run garden-remove --name {ctx.name} again"
+            )
+        if (
+            garden.get("origin") == "added"
+            and garden.get("add", {}).get("phase") != "complete"
+        ):
+            raise InstallError(
+                f"Garden add is incomplete; run resume --name {ctx.name}"
+            )
+        raise InstallError("Garden is already managed by this installation")
+    if ctx.state["status"] != "verified":
+        raise InstallError(
+            f"Garden add needs a verified installation (status {ctx.state['status']}); "
+            f"run resume --name {ctx.name} first"
+        )
+    _validate_garden_platform(ctx.mode, enabled=True)
+    source = validate_source(args.source or ctx.source)
+    _assert_cairn_source(ctx, source)
+
+
+def _run_garden_add(args: argparse.Namespace, state_root: Path) -> None:
+    from . import workflow
+    from .garden import load_options, require_unexpired, with_add_defaults
+
+    if args.garden_config is None:
+        raise InstallError(
+            "--garden-config is required for garden-add", "invalid_arguments"
+        )
+    name = _required(
+        args.name,
+        "--name",
+        "Installation name: ",
+        non_interactive=args.non_interactive,
+    )
+    with open_context(state_root, name) as ctx:
+        ctx.verbose = args.verbose
+        args.transcript_path = ctx.directory / "commands.log"
+        _assert_garden_add_allowed(ctx, args)
+        options = with_add_defaults(load_options(args.garden_config, ctx.mode))
+        if options["port"] == ctx.port:
+            raise InstallError("Garden and Cairn need different listening ports")
+        require_unexpired(options)
+        _show_configuration(
+            operation="garden-add",
+            name=ctx.name,
+            mode=ctx.mode,
+            port=ctx.port,
+            semantic=ctx.semantic,
+            garden=True,
+            source=ctx.source,
+            state_root=state_root,
+        )
+        print(f"  Garden HTTPS endpoint: {options['endpoint']}")
+        if ctx.mode == "docker":
+            _confirm_garden_change(
+                operation="garden-add",
+                announcements=[
+                    "Cairn will be recreated to join Garden's network and is "
+                    "briefly unavailable while Garden is attached."
+                ],
+                non_interactive=args.non_interactive,
+                yes=args.yes,
+            )
+        _render_result(
+            workflow.add_garden(ctx, options),
+            operation="garden-add",
+            verbose=args.verbose,
+        )
+
+
+def _run_garden_remove(args: argparse.Namespace, state_root: Path) -> None:
+    from . import workflow
+
+    name = _required(
+        args.name,
+        "--name",
+        "Installation name: ",
+        non_interactive=args.non_interactive,
+    )
+    with open_context(state_root, name) as ctx:
+        ctx.verbose = args.verbose
+        args.transcript_path = ctx.directory / "commands.log"
+        if ctx.mode == "kubernetes":
+            raise InstallError(
+                "Kubernetes garden-remove arrives in a later release",
+                "invalid_arguments",
+            )
+        if ctx.mode == "garden-server":
+            from . import garden_server
+
+            garden_server.check_remove(ctx, delete_data=args.delete_data)
+            _confirm_garden_change(
+                operation="garden-remove",
+                announcements=[
+                    "Garden credentials and grants are revoked; system services and unchanged installed files are removed. /var/lib/garden is kept."
+                ],
+                non_interactive=args.non_interactive,
+                yes=args.yes,
+            )
+            _render_result(
+                garden_server.remove(ctx, delete_data=args.delete_data),
+                operation="garden-remove",
+                verbose=args.verbose,
+            )
+            return
+        workflow.check_garden_remove(ctx, delete_data=args.delete_data)
+        _show_configuration(
+            operation="garden-remove",
+            name=ctx.name,
+            mode=ctx.mode,
+            port=ctx.port,
+            semantic=ctx.semantic,
+            garden=True,
+            source=None,
+            state_root=state_root,
+        )
+        announcements = [
+            "Garden participant credentials are revoked, then their grants.",
+            (
+                "--delete-data: Garden's retained data is permanently deleted."
+                if args.delete_data
+                else "Garden's retained data is kept; add --delete-data to delete it."
+            ),
+        ]
+        if ctx.mode == "docker":
+            announcements.append(
+                "Cairn will be recreated to detach Garden and is briefly unavailable."
+            )
+        _confirm_garden_change(
+            operation="garden-remove",
+            announcements=announcements,
+            non_interactive=args.non_interactive,
+            yes=args.yes,
+        )
+        _render_result(
+            workflow.remove_garden(ctx, delete_data=args.delete_data),
+            operation="garden-remove",
+            verbose=args.verbose,
+        )
+
+
+def _server_flags(args: argparse.Namespace) -> None:
+    refused = (
+        "port",
+        "falkordb_runtime",
+        "provider_key_file",
+        "kube_context",
+        "kube_namespace",
+        "kube_storage_class",
+        "kube_image",
+        "kube_preloaded_image",
+        "kube_falkordb_receipt",
+        "kube_garden_receipt",
+    )
+    if (
+        args.semantic
+        or args.keep_running
+        or any(getattr(args, key) is not None for key in refused)
+    ):
+        raise InstallError(
+            "garden-server refuses --port, --semantic, --keep-running, provider, FalkorDB and --kube-* options",
+            "invalid_arguments",
+        )
+
+
+def _server_resume(ctx: Context, args: argparse.Namespace) -> dict[str, Any]:
+    from . import garden_server
+    from .garden import load_options
+
+    _server_flags(args)
+    if args.mode is not None and args.mode != ctx.mode:
+        raise InstallError("Recorded installation mode differs", "invalid_arguments")
+    source = validate_source(args.source or ctx.source)
+    _assert_cairn_source(ctx, source)
+    if args.server_config is not None:
+        options = garden_server.load_options(args.server_config)
+        if any(ctx.state["server"].get(key) != value for key, value in options.items()):
+            raise InstallError(
+                "Recorded server options differ; use the original configuration"
+            )
+    if args.garden_config is not None:
+        options = load_options(
+            args.garden_config, ctx.mode, realm=ctx.state["server"]["cairn"]["realm"]
+        )
+        if options != ctx.state["garden"]["options"]:
+            raise InstallError(
+                "Recorded Garden options differ; use the original configuration"
+            )
+    return garden_server.run(ctx)
+
+
+def _run_server_install(
+    args: argparse.Namespace, state_root: Path, default_source: Path | None
+) -> None:
+    from urllib.parse import urlsplit
+
+    from . import garden_server
+    from .garden import load_options
+
+    _server_flags(args)
+    _validate_garden_platform("garden-server", enabled=True)
+    if args.server_config is None or args.garden_config is None:
+        raise InstallError(
+            "garden-server requires --server-config and --garden-config",
+            "invalid_arguments",
+        )
+    name = _required(
+        args.name, "--name", "Installation name: ", non_interactive=args.non_interactive
+    )
+    source_value = args.source or default_source
+    if source_value is None:
+        raise InstallError("--source is required", "invalid_arguments")
+    source = validate_source(source_value)
+    server = garden_server.load_options(args.server_config)
+    options = load_options(
+        args.garden_config, "garden-server", realm=server["cairn"]["realm"]
+    )
+    port = urlsplit(server["cairn"]["url"]).port
+    if port == options["port"]:
+        raise InstallError("Garden and Cairn need different listening ports")
+    create = {
+        "mode": "garden-server",
+        "port": port,
+        "semantic": False,
+        "source": str(source),
+        "source_fingerprint": source_fingerprint(source),
+        "server": {**server, "installed": {}},
+        "garden": {"origin": "server", "options": options},
+    }
+    with open_context(state_root, name, create=create) as ctx:
+        ctx.verbose = args.verbose
+        args.transcript_path = ctx.directory / "commands.log"
+        _assert_immutable(
+            ctx.state,
+            {
+                key: value
+                for key, value in create.items()
+                if key not in {"server", "garden"}
+            },
+        )
+        if (
+            any(ctx.state["server"].get(key) != value for key, value in server.items())
+            or ctx.state["garden"]["options"] != options
+        ):
+            raise InstallError(
+                "Recorded server or Garden options differ; use the original configuration"
+            )
+        _render_result(
+            garden_server.run(ctx), operation="install", verbose=args.verbose
+        )
+
+
+def _run(args: argparse.Namespace, default_source: Path | None) -> int | None:
     state_root = _absolute_safe_path(args.state_root, purpose="State root")
     operation = args.operation
     if args.keep_running and operation not in {"install", "resume"}:
@@ -900,16 +1245,85 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
             "--kube-garden-receipt is only valid with install or resume",
             "invalid_arguments",
         )
-    if args.yes and operation != "blitz":
+    if args.yes and operation not in {
+        "blitz",
+        "garden-add",
+        "garden-remove",
+        "garden-upgrade",
+        "garden-backup",
+    }:
         raise InstallError(
-            "--yes is only valid with blitz",
+            "--yes is only valid with blitz, garden-add and garden-remove, garden-upgrade and garden-backup",
             "invalid_arguments",
         )
+    if args.delete_data and operation != "garden-remove":
+        raise InstallError(
+            "--delete-data is only valid with garden-remove",
+            "invalid_arguments",
+        )
+    if args.rollback and operation != "garden-upgrade":
+        raise InstallError(
+            "--rollback is only valid with garden-upgrade", "invalid_arguments"
+        )
+    if (args.restore_data or args.keep_data) and not (
+        operation == "garden-upgrade" and args.rollback
+    ):
+        raise InstallError(
+            "--restore-data and --keep-data require garden-upgrade --rollback",
+            "invalid_arguments",
+        )
+    if args.restore_data and args.keep_data:
+        raise InstallError(
+            "--restore-data and --keep-data are mutually exclusive", "invalid_arguments"
+        )
+    if args.output is not None and operation != "garden-backup":
+        raise InstallError(
+            "--output is only valid with garden-backup", "invalid_arguments"
+        )
+    if args.server_config is not None and not (
+        operation == "install" and args.mode == "garden-server" or operation == "resume"
+    ):
+        raise InstallError(
+            "--server-config requires --mode garden-server (install or resume)",
+            "invalid_arguments",
+        )
+    if operation == "install" and args.mode == "garden-server":
+        _run_server_install(args, state_root, default_source)
+        return None
     if operation == "ls":
         from .listing import list_instances
 
         _render_listing(list_instances(state_root), verbose=args.verbose)
-        return
+        return None
+    if operation == "garden-add":
+        _run_garden_add(args, state_root)
+        return None
+    if operation == "garden-remove":
+        _run_garden_remove(args, state_root)
+        return None
+    if operation in {"garden-upgrade", "garden-backup"}:
+        from . import garden_backup, garden_upgrade
+
+        if operation == "garden-upgrade":
+            args.name = _required(
+                args.name,
+                "--name",
+                "Installation name: ",
+                non_interactive=args.non_interactive,
+            )
+            if (state_root / args.name / "state.json").is_file():
+                with open_read_context(state_root, args.name) as recorded:
+                    if recorded.mode == "garden-server":
+                        raise InstallError(
+                            "garden-server garden-upgrade arrives in a later release",
+                            "invalid_arguments",
+                        )
+        module = garden_upgrade if operation == "garden-upgrade" else garden_backup
+        result = module.run(args, state_root)
+        if isinstance(result, int):
+            return result
+        _render_result(result, operation=operation, verbose=args.verbose)
+        return None
     if operation == "blitz":
         name = _required(
             args.name,
@@ -917,6 +1331,11 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
             "Installation name: ",
             non_interactive=args.non_interactive,
         )
+        with open_read_context(state_root, name) as recorded:
+            if recorded.mode == "garden-server":
+                raise InstallError(
+                    "blitz is unavailable for garden-server in S11", "invalid_arguments"
+                )
         _confirm_blitz(name, non_interactive=args.non_interactive, yes=args.yes)
         with open_context(state_root, name) as ctx:
             from . import workflow
@@ -931,7 +1350,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                     error.code,
                 ) from error
             _render_result(result, operation=operation, verbose=args.verbose)
-        return
+        return None
     if operation == "status":
         name = _required(
             args.name,
@@ -954,10 +1373,9 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 source=None,
                 state_root=state_root,
             )
-            _render_result(
-                workflow.status_install(ctx), operation=operation, verbose=args.verbose
-            )
-        return
+            result = workflow.status_install(ctx)
+            _render_result(result, operation=operation, verbose=args.verbose)
+        return None
     if operation == "rollback":
         name = _required(
             args.name,
@@ -980,12 +1398,17 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 source=None,
                 state_root=state_root,
             )
+            if ctx.mode == "garden-server":
+                raise InstallError(
+                    "rollback is unavailable for garden-server in S11",
+                    "invalid_arguments",
+                )
             _render_result(
                 workflow.rollback_install(ctx),
                 operation=operation,
                 verbose=args.verbose,
             )
-        return
+        return None
 
     if operation == "resume":
         name = _required(
@@ -1003,12 +1426,24 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 )
             ctx.verbose = args.verbose
             args.transcript_path = ctx.directory / "commands.log"
+            if ctx.mode == "garden-server":
+                _render_result(
+                    _server_resume(ctx, args), operation=operation, verbose=args.verbose
+                )
+                return None
+            if args.server_config is not None:
+                raise InstallError(
+                    "--server-config requires garden-server mode", "invalid_arguments"
+                )
+            if pending := workflow._garden_pending(ctx):
+                raise InstallError(pending)
+            recorded_garden = ctx.state.get("garden")
+            if isinstance(recorded_garden, dict) and "remove" in recorded_garden:
+                raise InstallError(
+                    f"Garden removal is in progress; run garden-remove --name {name} again"
+                )
             source = validate_source(args.source or ctx.source)
-            fingerprint = source_fingerprint(source)
-            _assert_immutable(
-                ctx.state,
-                {"source": str(source), "source_fingerprint": fingerprint},
-            )
+            _assert_cairn_source(ctx, source)
             _assert_resume_core_options(ctx.state, args)
             if args.kube_garden_receipt is not None:
                 if ctx.mode != "kubernetes":
@@ -1027,14 +1462,17 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
             _assert_resume_kubernetes_options(ctx.state, args)
             _assert_resume_falkordb_runtime(ctx.state, args)
             if args.garden_config is not None:
-                from .garden import load_options, require_unexpired
+                from .garden import load_options, require_unexpired, with_add_defaults
 
                 saved = ctx.state.get("garden", {}).get("options")
                 # Expired retained authority needs recovery; reporting the
                 # unchanged file's stale expires_at would misdirect the operator.
                 if isinstance(saved, dict) and "expires_at" in saved:
                     require_unexpired(saved)
-                if saved != load_options(args.garden_config, ctx.mode):
+                requested = load_options(args.garden_config, ctx.mode)
+                if ctx.state.get("garden", {}).get("origin") == "added":
+                    requested = with_add_defaults(requested)
+                if saved != requested:
                     raise InstallError(
                         "Recorded Garden options differ; resume with the original configuration"
                     )
@@ -1061,7 +1499,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
                 operation=operation,
                 verbose=args.verbose,
             )
-        return
+        return None
 
     name, mode, port, semantic, source, fingerprint, kubernetes_options, runtime = (
         _new_configuration(args, default_source)
@@ -1130,6 +1568,7 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> None:
             operation=operation,
             verbose=args.verbose,
         )
+    return None
 
 
 def main(
@@ -1142,9 +1581,9 @@ def main(
         args = _parser().parse_args(argv)
         operation = args.operation
         with _termination_handlers():
-            _run(args, default_source)
-        failed = False
-        return 0
+            code = _run(args, default_source)
+        failed = code not in {None, 0}
+        return code if code is not None else 0
     except InstallError as error:
         failed = True
         sys.stdout.flush()
@@ -1157,11 +1596,12 @@ def main(
     except KeyboardInterrupt:
         failed = True
         sys.stdout.flush()
-        recovery = (
-            "recovery information retained. Retry blitz with the same name."
-            if operation == "blitz"
-            else "state retained. Use resume."
-        )
+        recovery = {
+            "blitz": "recovery information retained. Retry blitz with the same name.",
+            "garden-remove": "state retained. Run garden-remove again.",
+            "garden-upgrade": "state retained. Run garden-upgrade again.",
+            "garden-backup": "state retained. Run garden-backup again.",
+        }.get(operation or "", "state retained. Use resume.")
         print(
             f"{paint('error', 'error', fd=2)} [interrupted]: interrupted; {recovery}",
             file=sys.stderr,

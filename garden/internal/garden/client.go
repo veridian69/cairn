@@ -29,6 +29,9 @@ type ClientConfig struct {
 type Client struct {
 	session   *mcp.ClientSession
 	transport *http.Transport
+	// tools holds the tool names the gateway advertised at connect time. Newer tools are
+	// used only when listed, so an older gateway keeps receiving exactly the calls it knows.
+	tools map[string]bool
 }
 
 // Dial authenticates the MCP handshake. It never retries an ambiguous operation.
@@ -63,8 +66,21 @@ func Dial(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		base.CloseIdleConnections()
 		return nil, clientError(err)
 	}
-	return &Client{session: session, transport: base}, nil
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		_ = session.Close()
+		base.CloseIdleConnections()
+		return nil, clientError(err)
+	}
+	tools := make(map[string]bool, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		tools[tool.Name] = true
+	}
+	return &Client{session: session, transport: base, tools: tools}, nil
 }
+
+// Supports reports whether the connected gateway advertises the named tool.
+func (c *Client) Supports(tool string) bool { return c.tools[tool] }
 
 type authenticatedTransport struct {
 	base  http.RoundTripper
@@ -152,9 +168,35 @@ func (c *Client) Status(ctx context.Context) (out StatusResult, err error) {
 	return
 }
 
-// Send publishes once; callers must not automatically retry uncertain outcomes.
-func (c *Client) Send(ctx context.Context, a SendArgs) (out Message, err error) {
-	err = c.call(ctx, "send_message", a, &out)
+// Send publishes once; callers must not automatically retry uncertain outcomes. Against a
+// gateway without delivery reporting, the per-recipient outcomes are absent.
+func (c *Client) Send(ctx context.Context, a SendArgs) (SendResult, error) {
+	if !c.Supports("heartbeat") {
+		var message Message
+		err := c.call(ctx, "send_message", a, &message)
+		return SendResult{Message: message}, err
+	}
+	a.ReportDelivery = true
+	var out SendResult
+	err := c.call(ctx, "send_message", a, &out)
+	return out, err
+}
+
+// Heartbeat renews the session lease and declares deliverability; it leases no message.
+func (c *Client) Heartbeat(ctx context.Context, a HeartbeatArgs) (out HeartbeatResult, err error) {
+	if !c.Supports("heartbeat") {
+		return out, failure("unavailable", "Garden gateway predates heartbeat")
+	}
+	err = c.call(ctx, "heartbeat", a, &out)
+	return
+}
+
+// Who lists participants with their online and deliverable state.
+func (c *Client) Who(ctx context.Context) (out WhoResult, err error) {
+	if !c.Supports("who") {
+		return out, failure("unavailable", "Garden gateway predates who")
+	}
+	err = c.call(ctx, "who", struct{}{}, &out)
 	return
 }
 

@@ -11,6 +11,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 COPY integrations/codex/cairn-memory/SKILL.md ./integrations/codex/cairn-memory/SKILL.md
 COPY integrations/claude/cairn-memory/SKILL.md ./integrations/claude/cairn-memory/SKILL.md
+COPY scripts/backup/backup_common.py scripts/backup/garden_common.py ./scripts/backup/
 RUN uv sync --frozen --no-dev --no-editable
 
 FROM ${PYTHON_IMAGE} AS runtime
@@ -37,7 +38,7 @@ RUN apt-get update \
         perl-base \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
-ARG VERSION=v0.7.20
+ARG VERSION=v0.8.2
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/veridian69/cairn" \
       org.opencontainers.image.documentation="https://github.com/veridian69/cairn" \

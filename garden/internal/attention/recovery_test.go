@@ -63,7 +63,7 @@ func TestRunnerCancellationPreservesAmbiguousDelivery(t *testing.T) {
 func TestStdioWorkerFailureClosesBlockedInput(t *testing.T) {
 	in, writer := io.Pipe()
 	defer writer.Close()
-	server := NewStdio(io.Discard, fakeTools{}, true)
+	server := NewStdio(io.Discard, fakeTools{}, true, ProfileInstructions)
 	done := make(chan error, 1)
 	go func() {
 		done <- server.Run(context.Background(), in, func(context.Context) error { return ErrRejected })
@@ -111,7 +111,7 @@ func TestStdioShutdownPreservesWorkerUncertainty(t *testing.T) {
 			defer writer.Close()
 			started := make(chan struct{})
 			done := make(chan error, 1)
-			server := NewStdio(io.Discard, fakeTools{}, true)
+			server := NewStdio(io.Discard, fakeTools{}, true, ProfileInstructions)
 			go func() {
 				done <- server.Run(ctx, in, func(ctx context.Context) error { close(started); <-ctx.Done(); return ErrUncertain })
 			}()

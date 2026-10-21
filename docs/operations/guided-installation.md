@@ -359,6 +359,13 @@ When managed Garden is selected, validates the Garden configuration and writes
 the owner-only TLS, server and participant files needed by the selected mode.
 Installations without managed Garden skip this stage.
 
+### garden_reconfigure — Attach Garden to the running Cairn installation
+
+Used only when a Garden is added to an installation that is already verified.
+Attaches the Garden runtime to the existing Cairn installation before Cairn is
+started again. Docker recreates the Cairn container, so Cairn is briefly
+unavailable; the installer announces this and asks for confirmation first.
+
 ### prepare — Prepare runtime and configuration
 
 Creates the owned runtime or image, protected configuration and optional
@@ -418,6 +425,12 @@ Checks the authenticated Garden endpoint and verifies every configured
 participant binding and adapter bundle. A Cairn verification does not imply
 Garden verification.
 
+### garden_restart — Restart Garden and verify the same bindings
+
+Used only when a Garden is added. Restarts Garden alone, then repeats the
+endpoint and participant-binding checks. Cairn keeps its generation and its
+saved data.
+
 ### restart — Restart and verify the same saved data
 
 Restarts the owned service and performs read-only checks against the same
@@ -446,6 +459,139 @@ evidence and persistent storage so `resume` can restore the same instance.
 For an explicit rollback of a managed Garden installation, stops the proved-owned
 Garden resources and closes its endpoint while retaining Garden data,
 credentials and configuration for resume.
+
+### garden_revoke — Revoke Garden participant credentials and grants
+
+Used by `garden-remove`. Revokes each participant's Garden credential, then its
+grant, using the saved revocation keys. A rerun after an interruption reuses
+those keys and does not create new revocations.
+
+### garden_detach — Detach Garden runtime and preserve requested data
+
+Used by `garden-remove`. Removes the Garden runtime from the installation and
+keeps Garden's data unless `--delete-data` was requested. Cairn is then verified
+against its retained data before the Garden record is archived in
+`garden_history`.
+
+### garden_stage — Build and check the new Garden release
+
+Used by `garden-upgrade`. Builds the Garden binary or image from `--source`
+beside the current one and checks that it reports the expected version. The
+running Garden is not touched.
+
+### garden_copy — Stop Garden and take a cold copy of its data
+
+Used by `garden-upgrade`. Stops Garden and writes its data to a tar file under
+`instance/garden-upgrades/`, recording the file's size and SHA-256.
+
+### garden_swap — Switch Garden to the selected release, keeping the other
+
+Used by `garden-upgrade`. Points Garden at the new release and keeps the
+previous one for `--rollback`; a rollback swaps back the same way.
+
+### garden_restore_data — Restore Garden data from the cold copy
+
+Used by `garden-upgrade --rollback --restore-data`. Moves the current data
+aside, keeping it, and restores the cold copy taken before the upgrade.
+
+### garden_snapshot — Stop Garden and take a validated snapshot
+
+Used by `garden-backup`. Stops Garden, takes a snapshot with the installed
+binary and starts Garden again.
+
+### garden_archive — Write and verify the Garden backup archive
+
+Used by `garden-backup`. Writes the snapshot and deployment files to one
+archive with a SHA-256 sidecar and verifies it before removing the staged
+snapshot.
+
+### server_account — Create Garden service account
+
+Used by `--mode garden-server`. Creates the `garden` system account and group
+through the recorded sudo allowlist.
+
+### server_install — Install Garden server files
+
+Used by `--mode garden-server`. Installs the staged binary, configuration,
+TLS material and systemd units through the recorded sudo allowlist.
+
+### server_hook — Install Garden backup hook
+
+Used by `--mode garden-server` when the server configuration names a backup
+hook. Installs `/usr/local/bin/garden-backup` and its systemd drop-in for the named
+unit. Preflight refuses while a manual `/usr/local/sbin/garden-backup` from an earlier
+hand-built setup exists, so retire that script, its unit and its drop-in first.
+
+### garden_enable — Enable Garden services
+
+Used by `--mode garden-server`. Enables the Garden daemon and gateway units so
+they start at boot.
+
+## Install Garden against an existing Cairn server
+
+On Linux, `install --mode garden-server --name X --garden-config G
+--server-config S --source /absolute/source` installs Garden system services
+against an existing numeric loopback Cairn URL. Run the installer as an ordinary
+user with non-interactive sudo for its recorded allowlist. This mode refuses
+`--port`, `--semantic`, provider, FalkorDB and Kubernetes flags. The Cairn URL's
+explicit port supplies the recorded port; Garden's scope realm must match the
+server binding.
+
+The strict server JSON contains `cairn` (`url`, `instance_id`, `realm`,
+`admin_token_file`) and `account`; `requires` and `backup_hook` are optional.
+`admin_token_file` must be an absolute path to a file owned by the installer
+user with mode 0400 or 0600. The installer reads it without copying it. It pins
+the authenticated external Cairn contract digests at enrolment, rather than
+requiring that Cairn runs the same release as the Garden source.
+
+The stages run in this order: `preflight`, `garden_files`, `verify`,
+`garden_prepare`, `server_account`, `server_install`, `server_hook`,
+`garden_start`, `garden_verify`, `garden_restart`, `garden_enable`. Files are
+staged under `instance/server-stage` with the source's `install-server` script;
+the binary and notify daemon unit come from that same source. The installer
+refuses existing unrecorded accounts, files, manifests and private directories.
+It writes `garden-server.sudoers` beside `state.json` for operator review;
+it never installs that policy. Granting it is root-equivalent: it enumerates
+and audits the exact commands the installer runs and proves the allowlist
+complete; it is not a containment boundary, because the installer user controls
+staged files installed as root, including systemd units.
+
+`resume --name X` checks the retained configuration and installed digests before
+continuing. `status --name X` reports recorded values only, with
+`digest_check: not_checked`; it does not inspect installed files. A manual
+upgrade that changes a recorded file makes resume refuse. `garden-remove --name X`
+revokes participant credentials and grants, stops and disables Garden, then
+removes only unchanged installed files. It retains `/var/lib/garden` and its
+daemon configuration;
+`--delete-data` is refused. Accounts, directories and exported backups remain.
+
+A server `backup_hook` contains `unit`, `on_failure`, `export_dir`,
+`export_owner` and `label`. The hook orders Garden's backup before the named
+Cairn backup unit. It restores the previous service activity after a snapshot,
+including cancellation recovery, and makes the requires drop-in optional.
+The export directory must be owned by `export_owner` and have mode 0700;
+its parents may also belong to that owner. A symlinked export
+directory or a directory replaced during backup is refused. The hook uses
+`python3 -I` to publish through a checked
+directory descriptor, replacing output symlinks without following them.
+Tar streams directly into a temporary file in the export directory while the
+publisher computes its checksum. It publishes only after tar succeeds and the
+stream has a complete tar end marker; the runtime directory holds only the
+service restart ledger. Once the archive is published the hook removes the
+staged snapshot from `/var/lib/garden/.garden/backups`, as the installer's own
+`garden-backup` does: the archive is the retained copy, and a failed run leaves
+the snapshot in place.
+`garden-backup` uses `sudo -n systemctl start garden-backup.service` and requires
+this hook. `garden-upgrade` is refused for garden-server in v0.8.0; upgrade a
+server Garden by hand until a later release adds it.
+While `/etc/garden/upgrade-in-progress` exists the hook exits 1 without stopping
+Garden, so its failure alert fires instead. A hook that started earlier is not
+stopped by the flag, so a hand upgrade keeps this order: create the flag as
+root; run `systemctl is-active garden-backup.service` and continue only when it
+prints `inactive` or `failed` (otherwise wait for the backup to finish); then
+stop Garden. Remove the flag once the upgraded Garden is verified. Only hooks
+written by `cairn-install` v0.8.0 or later check the flag: a hand-built hook
+ignores it, so with one, schedule hand upgrades clear of its backup timer.
 
 ## Inspect and resume
 

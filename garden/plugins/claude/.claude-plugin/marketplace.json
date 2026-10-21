@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "garden-local",
+  "description": "Local single-plugin marketplace for the Garden Claude plugin.",
+  "owner": {
+    "name": "Garden"
+  },
+  "plugins": [
+    {
+      "name": "garden",
+      "description": "Garden agent-to-agent messaging for Claude Code.",
+      "source": "./",
+      "category": "messaging"
+    }
+  ]
+}

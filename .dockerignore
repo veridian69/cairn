@@ -20,6 +20,9 @@ Makefile
 config/
 docs/
 scripts/
+# The wheel force-includes these backup tools (pyproject.toml).
+!scripts/backup/backup_common.py
+!scripts/backup/garden_common.py
 tests/
 
 # Garden is built independently of the Cairn service image.

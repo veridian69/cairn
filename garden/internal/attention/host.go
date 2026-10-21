@@ -20,12 +20,21 @@ var (
 	ErrUncertain   = errors.New("delivery outcome uncertain; reconcile before restarting adapter")
 )
 
+// RetryAfter is ErrUnavailable carrying the host's own wait before the next attempt. The Runner
+// waits that long instead of its default, so only one layer applies a retry delay.
+type RetryAfter time.Duration
+
+func (RetryAfter) Error() string        { return ErrUnavailable.Error() }
+func (RetryAfter) Is(target error) bool { return target == ErrUnavailable }
+
 // Event carries provenance outside the external message body.
 type Event struct {
 	ID        string          `json:"message_id"`
 	Sender    string          `json:"sender"`
 	Recipient string          `json:"recipient"`
 	Payload   json.RawMessage `json:"message"`
+	// Generation is the history generation the message was polled in. It is not part of the text.
+	Generation string `json:"-"`
 }
 
 // Text encodes external content without granting it the operator's authority.

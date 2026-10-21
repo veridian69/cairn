@@ -1,4 +1,4 @@
-.PHONY: build install clean clean-cache test tidy check integration license-check tooling-check
+.PHONY: build install clean clean-cache test tidy check integration license-check tooling-check plugin-check
 
 CACHE_DIR := $(CURDIR)/.cache
 GOCACHE := $(CACHE_DIR)/go-build
@@ -6,6 +6,7 @@ GOMODCACHE := $(CACHE_DIR)/go-mod
 GOFLAGS := -modcacherw
 GO := env GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOFLAGS=$(GOFLAGS) go
 PYTHON ?= python3
+NODE ?= node
 PREFIX ?= $(HOME)/.local
 # The default is the release version shared with Cairn's source distribution,
 # so `make -C garden build` and `garden --version` agree with the package. A blind
@@ -40,7 +41,7 @@ test: $(CACHE_DIR)
 tidy: $(CACHE_DIR)
 	$(GO) mod tidy
 
-check: $(CACHE_DIR) tooling-check license-check
+check: $(CACHE_DIR) tooling-check license-check plugin-check
 	$(GO) vet ./...
 	$(GO) test ./... -cover -timeout 60s
 	$(GO) test -race ./... -timeout 120s
@@ -49,6 +50,11 @@ tooling-check:
 	$(PYTHON) -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"'
 	$(PYTHON) -m unittest discover -s integration -p 'test_*.py' -q
 	$(PYTHON) -m py_compile scripts/install-user scripts/install-server scripts/garden-config scripts/garden-session
+
+# The OpenCode plugin is TypeScript with no build step; Node 22.18+ strips types natively.
+plugin-check:
+	$(NODE) -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 18) || (major === 23 && minor < 6)) { console.error("Node 22.18+ required for the OpenCode plugin tests"); process.exit(1) }'
+	$(NODE) --test plugins/opencode/garden.test.ts
 
 license-check: $(CACHE_DIR)
 	$(PYTHON) ./scripts/check-licenses

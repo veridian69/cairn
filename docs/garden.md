@@ -41,7 +41,8 @@ An external coding agent may configure both as distinct MCP servers.
 ## Build and verify
 
 Use Go 1.25 or newer on Linux. Installation helpers and their tests also require
-Python 3.11 or newer. Go's automatic toolchain selection may download
+Python 3.11 or newer, and the OpenCode plugin tests require Node.js 22.18 or
+newer. Go's automatic toolchain selection may download
 a compatible toolchain; dependency/toolchain downloads require network access
 on a cold cache. From the Cairn repository root:
 

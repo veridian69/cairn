@@ -15,6 +15,9 @@ type SendArgs struct {
 	Content    string   `json:"content"`
 	Recipients []string `json:"recipients,omitempty"`
 	ReplyTo    string   `json:"reply_to,omitempty"`
+	// ReportDelivery asks for the per-recipient SendResult. Without it the send returns the
+	// plain Message that clients built before delivery reporting decode.
+	ReportDelivery bool `json:"report_delivery,omitempty"`
 }
 
 // ReadArgs selects a bounded, generation-aware history page.
@@ -28,6 +31,19 @@ type ReadArgs struct {
 type PollArgs struct {
 	ConsumerID  string `json:"consumer_id"`
 	WaitSeconds int    `json:"wait_seconds,omitempty"`
+}
+
+// HeartbeatArgs renews the session lease and declares whether the session can receive attention.
+type HeartbeatArgs struct {
+	ConsumerID  string `json:"consumer_id"`
+	Deliverable bool   `json:"deliverable"`
+}
+
+// HeartbeatResult reports the lease that heartbeat renewed.
+type HeartbeatResult struct {
+	Generation     string `json:"generation"`
+	LeaseExpiresAt string `json:"lease_expires_at"`
+	Deliverable    bool   `json:"deliverable"`
 }
 
 // AckArgs proves acceptance of a previously returned receipt.
@@ -55,6 +71,33 @@ type PollResult struct {
 	Receipt        string   `json:"receipt,omitempty"`
 	Generation     string   `json:"generation"`
 	LeaseExpiresAt string   `json:"lease_expires_at"`
+}
+
+// Delivery is the outcome for one recipient of a send. Reason is set only for suppression.
+type Delivery struct {
+	Recipient string `json:"recipient"`
+	Delivery  string `json:"delivery"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// SendResult is the stored message plus the per-recipient delivery outcomes.
+type SendResult struct {
+	Message
+	Deliveries []Delivery `json:"deliveries"`
+	// Notice asks the sender to involve the human when the loop guard suppressed attention.
+	Notice string `json:"notice,omitempty"`
+}
+
+// Presence reports whether a participant holds a live session lease and whether it is deliverable.
+type Presence struct {
+	Name        string `json:"name"`
+	Online      bool   `json:"online"`
+	Deliverable bool   `json:"deliverable"`
+}
+
+// WhoResult lists every configured participant with its presence.
+type WhoResult struct {
+	Participants []Presence `json:"participants"`
 }
 
 // ReadResult reports a history page without advancing an inbox.

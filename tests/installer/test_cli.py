@@ -28,6 +28,361 @@ def source_tree(tmp_path: Path) -> Path:
     return source
 
 
+@pytest.mark.parametrize("operation", ["garden-upgrade", "garden-backup"])
+def test_new_garden_operations_dispatch_and_render(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+) -> None:
+    from cairn_install import garden_backup, garden_upgrade
+
+    calls = []
+
+    def run(args: object, state_root: Path) -> dict[str, str]:
+        calls.append((args, state_root))
+        return {"status": "verified"}
+
+    module = garden_upgrade if operation == "garden-upgrade" else garden_backup
+    monkeypatch.setattr(module, "run", run)
+    assert (
+        cli.main(
+            [
+                operation,
+                "--name",
+                "demo",
+                "--yes",
+                "--state-root",
+                str(tmp_path / "state"),
+            ]
+        )
+        == 0
+    )
+    assert len(calls) == 1
+    assert calls[0][1] == tmp_path / "state"
+    heading = (
+        "Garden upgrade complete"
+        if operation == "garden-upgrade"
+        else "Garden backup complete"
+    )
+    assert heading in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("operation", ["garden-upgrade", "garden-backup"])
+@pytest.mark.parametrize("code", [0, 2])
+def test_new_garden_operations_preserve_integer_exit_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+    code: int,
+) -> None:
+    from cairn_install import garden_backup, garden_upgrade
+
+    module = garden_upgrade if operation == "garden-upgrade" else garden_backup
+    monkeypatch.setattr(module, "run", lambda *args: code)
+    assert (
+        cli.main([operation, "--name", "demo", "--state-root", str(tmp_path / "state")])
+        == code
+    )
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["status", "--rollback"], "--rollback is only valid with garden-upgrade"),
+        (
+            ["garden-backup", "--restore-data"],
+            "--restore-data and --keep-data require garden-upgrade --rollback",
+        ),
+        (
+            ["garden-upgrade", "--keep-data"],
+            "--restore-data and --keep-data require garden-upgrade --rollback",
+        ),
+        (
+            ["garden-upgrade", "--rollback", "--restore-data", "--keep-data"],
+            "--restore-data and --keep-data are mutually exclusive",
+        ),
+        (
+            ["garden-upgrade", "--output", "/tmp/archive"],
+            "--output is only valid with garden-backup",
+        ),
+        (
+            ["garden-backup", "--delete-data"],
+            "--delete-data is only valid with garden-remove",
+        ),
+        (
+            ["install", "--server-config", "/tmp/server.json"],
+            "--server-config requires --mode garden-server",
+        ),
+    ],
+)
+def test_new_garden_flag_guards(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    arguments: list[str],
+    message: str,
+) -> None:
+    assert cli.main([*arguments, "--state-root", str(tmp_path / "state")]) == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "state").exists()
+
+
+def test_new_garden_parser_flags_and_server_mode_boundary() -> None:
+    args = cli._parser().parse_args(["garden-upgrade", "--rollback", "--restore-data"])
+    assert args.rollback and args.restore_data and not args.keep_data
+    assert cli._parser().parse_args(
+        ["garden-backup", "--output", "/tmp/archive"]
+    ).output == Path("/tmp/archive")
+    assert cli._parser().parse_args(["--mode", "garden-server"]).mode == "garden-server"
+
+
+@pytest.mark.parametrize("operation", ["garden-upgrade", "garden-backup"])
+def test_new_garden_interrupts_name_the_recovery_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+) -> None:
+    from cairn_install import garden_backup, garden_upgrade
+
+    def interrupt(*args: object) -> None:
+        raise KeyboardInterrupt
+
+    module = garden_upgrade if operation == "garden-upgrade" else garden_backup
+    monkeypatch.setattr(module, "run", interrupt)
+    assert (
+        cli.main([operation, "--name", "demo", "--state-root", str(tmp_path / "state")])
+        == 130
+    )
+    assert f"Run {operation} again" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("operation", ["garden-upgrade", "garden-backup"])
+def test_new_garden_stubs_refuse_kubernetes_without_writing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+) -> None:
+    state_root = tmp_path / "state"
+    with open_context(
+        state_root,
+        "demo",
+        create={
+            "mode": "kubernetes",
+            "source": str(tmp_path),
+            "port": 8000,
+            "semantic": False,
+        },
+    ) as ctx:
+        saved = (ctx.directory / "state.json").read_bytes()
+    assert cli.main([operation, "--name", "demo", "--state-root", str(state_root)]) == 2
+    assert (
+        f"Kubernetes {operation} arrives in a later release" in capsys.readouterr().err
+    )
+    assert (state_root / "demo" / "state.json").read_bytes() == saved
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        ("garden-upgrade", "Garden is not managed by this installation"),
+        ("garden-backup", "No managed Garden installation to back up"),
+    ],
+)
+def test_new_garden_operations_dispatch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+    message: str,
+) -> None:
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "mode": "native",
+            "source": str(tmp_path),
+            "port": 8000,
+            "semantic": False,
+        },
+    ):
+        pass
+    saved = (tmp_path / "state" / "demo" / "state.json").read_bytes()
+    assert (
+        cli.main([operation, "--name", "demo", "--state-root", str(tmp_path / "state")])
+        == 2
+    )
+    assert message in capsys.readouterr().err
+    assert (tmp_path / "state" / "demo" / "state.json").read_bytes() == saved
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+def test_resume_scopes_only_garden_source_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    scoped: bool,
+) -> None:
+    source = source_tree(tmp_path)
+    (source / "garden" / "cmd").mkdir(parents=True)
+    garden_file = source / "garden" / "cmd" / "main.go"
+    garden_file.write_text("old Garden")
+    state_root = tmp_path / "state"
+    full = cli.source_fingerprint(source)
+    with open_context(
+        state_root,
+        "demo",
+        create={
+            "mode": "docker",
+            "source": str(source),
+            "source_fingerprint": full,
+            "port": 8000,
+            "semantic": False,
+        },
+    ) as ctx:
+        if scoped:
+            ctx.state["source_fingerprint_scope"] = "excluding_garden"
+            ctx.state["cairn_fingerprint"] = cli.source_fingerprint(
+                source, exclude_garden=True
+            )
+            ctx.save()
+        assert cli.cairn_fingerprint(ctx.state) == (
+            ctx.state["cairn_fingerprint"] if scoped else full
+        )
+    calls = []
+    install_workflow(
+        monkeypatch,
+        run_install=lambda ctx: calls.append(ctx.state["source_fingerprint"]),
+    )
+    garden_file.write_text("new Garden")
+    arguments = ["resume", "--name", "demo", "--state-root", str(state_root)]
+    assert cli.main(arguments) == (0 if scoped else 2)
+    assert calls == ([full] if scoped else [])
+    (source / "src" / "cairn" / "__init__.py").write_text("changed Cairn")
+    assert cli.main(arguments) == 2
+    assert "fingerprint" in capsys.readouterr().err
+    with open_read_context(state_root, "demo") as ctx:
+        assert ctx.state["source_fingerprint"] == full
+
+
+@pytest.mark.parametrize("relative", ["garden/main.go", "garden/internal/main.go"])
+def test_scoped_fingerprint_skips_garden_files_and_trees(
+    tmp_path: Path, relative: str
+) -> None:
+    source = source_tree(tmp_path)
+    target = source / relative
+    target.parent.mkdir(parents=True)
+    target.write_text("first")
+    full = cli.source_fingerprint(source)
+    scoped = cli.source_fingerprint(source, exclude_garden=True)
+    target.write_text("second")
+    assert cli.source_fingerprint(source) != full
+    assert cli.source_fingerprint(source, exclude_garden=True) == scoped
+
+
+@pytest.mark.parametrize("digest", [None, "", "invalid", True])
+def test_scoped_fingerprint_requires_a_retained_digest(digest: object) -> None:
+    with pytest.raises(InstallError, match="cairn_fingerprint is missing or invalid"):
+        cli.cairn_fingerprint(
+            {
+                "source_fingerprint_scope": "excluding_garden",
+                "cairn_fingerprint": digest,
+                "source_fingerprint": "a" * 64,
+            }
+        )
+
+
+def test_scoped_source_check_keeps_source_path_immutable(tmp_path: Path) -> None:
+    source = source_tree(tmp_path)
+    other = source_tree(tmp_path / "other")
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "source": str(source),
+            "mode": "docker",
+            "port": 8000,
+            "semantic": False,
+            "source_fingerprint": cli.source_fingerprint(source),
+            "source_fingerprint_scope": "excluding_garden",
+            "cairn_fingerprint": cli.source_fingerprint(source, exclude_garden=True),
+        },
+    ) as ctx:
+        cli._assert_cairn_source(ctx, source)
+        with pytest.raises(InstallError, match=r"options differ \(source\)"):
+            cli._assert_cairn_source(ctx, other)
+
+
+def test_garden_add_reuses_scoped_cairn_source_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = source_tree(tmp_path)
+    (source / "garden").mkdir()
+    target = source / "garden" / "main.go"
+    target.write_text("old Garden")
+    with open_context(
+        tmp_path / "state",
+        "demo",
+        create={
+            "source": str(source),
+            "mode": "docker",
+            "port": 8000,
+            "semantic": False,
+            "source_fingerprint": cli.source_fingerprint(source),
+            "source_fingerprint_scope": "excluding_garden",
+            "cairn_fingerprint": cli.source_fingerprint(source, exclude_garden=True),
+        },
+    ) as ctx:
+        ctx.state["status"] = "verified"
+        monkeypatch.setattr(cli, "_validate_garden_platform", lambda *a, **kw: None)
+        args = cli._parser().parse_args(["garden-add"])
+        target.write_text("new Garden")
+        cli._assert_garden_add_allowed(ctx, args)
+        (source / "src" / "cairn" / "__init__.py").write_text("changed Cairn")
+        with pytest.raises(InstallError, match="cairn_fingerprint"):
+            cli._assert_garden_add_allowed(ctx, args)
+
+
+@pytest.mark.parametrize("pending", ["upgrade", "backup"])
+@pytest.mark.parametrize(
+    "operation", ["resume", "garden-add", "garden-remove", "rollback"]
+)
+def test_pending_garden_operations_refuse_cli_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    pending: str,
+    operation: str,
+) -> None:
+    from cairn_install import workflow
+
+    state_root = tmp_path / "state"
+    with open_context(
+        state_root,
+        "demo",
+        create={
+            "mode": "docker",
+            "source": str(tmp_path / "missing"),
+            "port": 8000,
+            "semantic": False,
+            "garden": {pending: {"phase": "recorded"}},
+        },
+    ) as ctx:
+        saved = (ctx.directory / "state.json").read_bytes()
+    monkeypatch.setattr(
+        workflow, "backend", lambda *a, **kw: pytest.fail("backend must not be opened")
+    )
+    arguments = [operation, "--name", "demo", "--state-root", str(state_root), "--yes"]
+    if operation in {"resume", "rollback"}:
+        arguments.remove("--yes")
+    if operation == "garden-add":
+        arguments.extend(["--garden-config", str(tmp_path / "missing.json")])
+    assert cli.main(arguments) == 2
+    assert f"run garden-{pending} --name demo again" in capsys.readouterr().err
+    assert (state_root / "demo" / "state.json").read_bytes() == saved
+
+
 def test_configuration_is_flushed_before_later_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

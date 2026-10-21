@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
+import shutil
 import socket
 import ssl
 import subprocess
@@ -27,7 +29,7 @@ from cairn.catalogue.migration import migrate_catalogue
 from cairn.runtime.composition import build_application
 from cairn.runtime.config import CairnConfig, HttpConfig, PathConfig
 from cairn_install import garden
-from cairn_install.core import Context, InstallError, open_context
+from cairn_install.core import Context, InstallError, open_context, read_owned
 from cairn_install.verification import request
 
 from .tls_support import self_signed
@@ -67,6 +69,8 @@ class Authority:
         self.bad_scope = False
         self.expire_read = False
         self.lost_credential = False
+        self.revoked_targets: set[str] = set()
+        self.lose_response: str | None = None
         self.admin = "cairn1." + str(uuid4()) + "." + "a" * 43
 
     def result(
@@ -144,6 +148,13 @@ class Authority:
             }
         elif path == "/v1/create-grant":
             result = {"grant_id": str(uuid4()), "created_at": now}
+        elif path in ("/v1/revoke-credential", "/v1/revoke-grant"):
+            field = "credential_id" if path == "/v1/revoke-credential" else "grant_id"
+            if body[field] in self.revoked_targets:
+                # Cairn refuses a fresh key for an already revoked target.
+                return 400, {"failure": {"code": "invalid_request"}}
+            self.revoked_targets.add(body[field])
+            result = {field: body[field], "revoked_at": now}
         else:
             raise AssertionError(path)
         response = {
@@ -164,6 +175,10 @@ class Authority:
         }
         self.results[key] = response
         if path == "/v1/issue-credential" and self.lost_credential:
+            return 503, {}
+        if path == self.lose_response:
+            # Cairn committed, but the response was lost once.
+            self.lose_response = None
             return 503, {}
         return 200, response
 
@@ -525,6 +540,7 @@ def test_native_rollback_resume_preserves_enrolled_host_config_across_state_relo
 
             with monkeypatch.context() as legacy:
                 legacy.setattr(garden, "write_json_config", legacy_json)
+                legacy.setattr(garden, "_publish_profile_json", legacy_json)
                 backend.garden_prepare()
                 garden.profiles(ctx)
             backend.garden_start()
@@ -882,7 +898,181 @@ def test_listener_preflight_rejects_an_occupied_garden_port(
             garden.require_listener_available(port, wildcard=wildcard)
 
 
-def test_bundle_readme_points_at_install_user_and_garden_config(
+@pytest.mark.parametrize("with_ca", [False, True])
+def test_bundle_readme_leads_with_plugin_and_keeps_legacy_examples(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    with_ca: bool,
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        if not with_ca:
+            ctx.state["garden"]["tls"].pop("ca_file")
+        garden.profiles(ctx)
+        readmes = {
+            Path(directory).name: (Path(directory) / "README.md").read_text()
+            for directory in ctx.state["garden"]["profiles"].values()
+        }
+
+    assert set(readmes) == {"val", "spike", "helper"}
+    for name, adapter in ctx.state["garden"]["options"]["participants"].items():
+        readme = readmes[name]
+        assert "garden home add-identity" in readme
+        assert "Install the plugin" in readme
+        assert "Legacy MCP profile" in readme
+        assert readme.index("Install the plugin") < readme.index("Legacy MCP profiles")
+        assert "`garden/scripts/install-user`" in readme
+        # Only a fresh home is initialised; an existing one's CA is never overwritten.
+        assert "Initialise only a home directory that does not exist yet" in readme
+        assert "If `~/.garden/garden.json` does not exist" not in readme
+        assert "If `~/.garden` already exists, leave it unchanged" in readme
+        assert f"`garden-config --host {adapter} --profile" in readme
+        assert ("codex plugin marketplace add" in readme) == (adapter == "codex")
+        assert ("garden.ts" in readme) == (adapter == "opencode")
+        bundle = Path(ctx.state["garden"]["profiles"][name])
+        home = json.loads((bundle / "garden.json").read_text())
+        assert home["defaults"] == {adapter: name}
+        if with_ca:
+            assert home["garden_tls_ca_file"] == "tls/ca.crt"
+            assert (bundle / "tls/ca.crt").read_text()
+        else:
+            assert "garden_tls_ca_file" not in home
+            assert not (bundle / "tls/ca.crt").exists()
+
+
+def _legacy_profiles(ctx: Context) -> None:
+    """Baseline renderer from 35fd338a, kept for the old-install resume test."""
+    state = garden._state(ctx)
+    options = state["options"]
+    exports = {}
+    for name, adapter in options["participants"].items():
+        directory = ctx.root / "garden" / "profiles" / name
+        credential = Path(state["agents"][name]["token_file"])
+        ctx.check_file(credential)
+        ctx.write_file(
+            directory / "agent.token", ctx.read_secret(credential) + "\n", secret=True
+        )
+        profile: dict[str, Any] = {
+            "garden_endpoint": options["endpoint"],
+            "credential_file": "agent.token",
+            "instance_id": ctx.instance_id,
+            "scope": options["scope"],
+            "classification": options["classification"],
+            "participant": name,
+            "adapter": adapter,
+        }
+        if state["tls"].get("ca_file"):
+            ca = Path(state["tls"]["ca_file"])
+            ctx.check_file(ca)
+            ctx.write_file(directory / "ca.crt", read_owned(ca).decode("ascii"))
+            profile["garden_tls_ca_file"] = "ca.crt"
+        if adapter == "codex":
+            profile.update(
+                session_id="REPLACE_WITH_EXISTING_TASK_ID",
+                codex_socket="/REPLACE/WITH/EXISTING/CODEX/CONTROL.sock",
+            )
+        elif adapter == "opencode":
+            profile.update(
+                session_id="REPLACE_WITH_EXISTING_SESSION_ID",
+                host_endpoint="http://127.0.0.1:4096",
+                host_username="opencode",
+                host_api_version="REPLACE_WITH_1_OR_2",
+                host_credential_file="REPLACE_WITH_HOST_PASSWORD_FILE",
+            )
+        filename = adapter + ".profile.example.json"
+        garden.write_json_config(ctx, directory / filename, profile)
+        command = "/REPLACE/WITH/INSTALLED/garden"
+        arguments = ["connect", "--profile", "/REPLACE/WITH/BUNDLE/profile.json"]
+        if adapter == "codex":
+            ctx.write_file(
+                directory / "codex.mcp.example.toml",
+                "[mcp_servers.garden]\ncommand = "
+                + json.dumps(command)
+                + "\nargs = "
+                + json.dumps(arguments)
+                + "\n",
+            )
+        else:
+            mcp: dict[str, Any]
+            if adapter == "claude":
+                mcp = {
+                    "mcpServers": {"garden": {"command": command, "args": arguments}}
+                }
+            else:
+                mcp = {
+                    "mcp": {
+                        "garden": {
+                            "type": "local",
+                            "command": [command, *arguments],
+                            "enabled": True,
+                        }
+                    }
+                }
+            garden.write_json_config(
+                ctx, directory / (adapter + ".mcp.example.json"), mcp
+            )
+        if adapter == "claude":
+            setup = (
+                "Copy claude.profile.example.json to profile.json; it needs no edits. "
+                "In claude.mcp.example.json, replace the REPLACE paths with the installed "
+                "garden binary and this bundle's profile.json. "
+            )
+        elif adapter == "codex":
+            setup = (
+                "Copy codex.profile.example.json to profile.json and replace its REPLACE "
+                "task and control-socket values. In codex.mcp.example.toml, replace the "
+                "REPLACE paths with the installed garden binary and this bundle's profile.json. "
+            )
+        else:
+            setup = (
+                "Copy opencode.profile.example.json to profile.json and replace its REPLACE "
+                'host-session values. Set host_api_version to "2" for an OpenCode 2.x server '
+                'or "1" for 1.x; Garden cannot tell them apart. In opencode.mcp.example.json, '
+                "replace the REPLACE paths "
+                "with the installed garden binary and this bundle's profile.json. Explicitly configure "
+                "the local server endpoint and protected password file. "
+            )
+        ctx.write_file(
+            directory / "README.md",
+            f"# Garden participant {name}\n\n"
+            "Copy only this participant's directory to its agent machine, using a secure channel.\n"
+            "Keep agent.token mode 0600 and this directory mode 0700. Do not distribute installer "
+            "administrator credentials, issuance captures or other participants' directories.\n\n"
+            "Install the garden binary and helper scripts on this machine with "
+            "`garden/scripts/install-user` from the Cairn source checkout. "
+            + setup
+            + "Then merge the completed profile into the host's MCP configuration with "
+            f"`garden-config --host {adapter} --profile /absolute/path/profile.json "
+            "--binary /absolute/path/garden --config /absolute/path/to/host-mcp-config`; "
+            "the example files above show the resulting shape if you prefer to edit by hand. "
+            "No host session is created.\n\n"
+            "Run `garden doctor --profile /absolute/path/profile.json` to verify the Garden "
+            "binding, then "
+            "`garden connect --profile /absolute/path/profile.json` for the MCP stdio bridge. "
+            "Configure the agent's MCP command to this garden connect invocation; no bearer belongs in argv.\n\n"
+            "For Claude use garden connect as its MCP server. For Codex/OpenCode run "
+            "`garden attend --profile /absolute/path/profile.json` alongside the MCP bridge. "
+            "Only one attention consumer may own this participant. The profile pins the deployment "
+            "identity and scope; tokens remain subject to Cairn revocation and expiry.\n\n"
+            "For Claude's unlisted development channel, use the MCP server name garden and "
+            "`claude --dangerously-load-development-channels server:garden` only after reviewing "
+            "the adapter and completing host channel consent. Organisation policy still applies. "
+            "Claude must call acknowledge_delivery on receipt of each channel message.\n\n"
+            "Codex requires an existing app-server control socket, which Garden reaches "
+            "directly over WebSocket (verified with Codex 0.163.0). An arbitrary desktop "
+            "or CLI session without that endpoint cannot be attached.\n",
+        )
+        exports[name] = str(directory)
+    state["profiles"] = exports
+    ctx.save()
+
+
+def test_old_bundle_resume_replaces_readme_and_publishes_plugin_home(
     tmp_path: Path,
     configuration: tuple[Path, dict[str, Any]],
 ) -> None:
@@ -893,20 +1083,188 @@ def test_bundle_readme_points_at_install_user_and_garden_config(
     ):
         garden.prepare(ctx)
         garden.enrol(ctx, fake.admin)
+        _legacy_profiles(ctx)
+        directory = ctx.root / "garden/profiles/val"
+        legacy_readme = (directory / "README.md").read_text()
+        token = (directory / "agent.token").read_bytes()
+        assert not (directory / "garden.json").exists()
+        assert not (directory / "tls/ca.crt").exists()
+
+    with open_context(tmp_path / "state", "example") as resumed:
+        garden.profiles(resumed)
+        garden.profiles(resumed)
+        readme = (directory / "README.md").read_text()
+        assert readme != legacy_readme
+        assert "Install the plugin" in readme
+        assert "garden home add-identity val" in readme
+        home = json.loads((directory / "garden.json").read_text())
+        assert home["defaults"] == {"codex": "val"}
+        assert home["garden_tls_ca_file"] == "tls/ca.crt"
+        assert (directory / "tls/ca.crt").read_bytes() == (
+            directory / "ca.crt"
+        ).read_bytes()
+        assert (directory / "agent.token").read_bytes() == token
+
+
+@pytest.mark.parametrize("change", ["contents", "permissions", "unowned", "symlink"])
+def test_bundle_replacement_refuses_changed_or_unowned_files(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    change: str,
+) -> None:
+    with installation(tmp_path, garden.load_options(configuration[0], "native")) as ctx:
+        path = ctx.root / "garden/profiles/val/README.md"
+        ctx.write_file(path, "old bundle instructions\n")
+        if change == "contents":
+            path.write_text("local edits\n")
+        elif change == "permissions":
+            path.chmod(0o644)
+        elif change == "unowned":
+            ctx.state["owned_files"].pop(str(path))
+            ctx.state["file_intents"].pop(str(path))
+        else:
+            target = path.with_name("elsewhere")
+            path.rename(target)
+            path.symlink_to(target)
+        with pytest.raises(InstallError):
+            garden._publish_profile_file(ctx, path, "plugin instructions\n")
+
+
+@pytest.mark.parametrize("published", [False, True])
+def test_bundle_json_resumes_interrupted_replacement(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    published: bool,
+) -> None:
+    with installation(tmp_path, garden.load_options(configuration[0], "native")) as ctx:
+        path = ctx.root / "garden/profiles/val/garden.json"
+        old = '{"defaults": {"codex": "val"}}\n'
+        value = {"defaults": {"codex": "val2"}}
+        new = json.dumps(value, indent=2, sort_keys=True) + "\n"
+        ctx.write_file(path, old)
+        ctx.state["file_replacements"] = {
+            str(path): {
+                "old": hashlib.sha256(old.encode()).hexdigest(),
+                "new": hashlib.sha256(new.encode()).hexdigest(),
+            }
+        }
+        if published:
+            path.write_text(new)
+        ctx.save()
+    with open_context(tmp_path / "state", "example") as resumed:
+        garden._publish_profile_json(resumed, path, value)
+        assert path.read_text() == new
+        assert not resumed.pending_replacements()
+        resumed.check_file(path)
+
+
+@pytest.fixture(scope="module")
+def built_garden(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    go = shutil.which("go")
+    if go is None:
+        pytest.skip("Go is unavailable; cannot check Garden home compatibility")
+    directory = tmp_path_factory.mktemp("garden-build")
+    source = Path(__file__).resolve().parents[2] / "garden"
+    # The caches garden/Makefile prepares, so a populated cache needs no network.
+    env = dict(os.environ)
+    env.setdefault("GOCACHE", str(source / ".cache" / "go-build"))
+    env.setdefault("GOMODCACHE", str(source / ".cache" / "go-mod"))
+    env["GOFLAGS"] = "-modcacherw"
+    binary = directory / "garden"
+    result = subprocess.run(
+        [go, "build", "-trimpath", "-o", str(binary), "."],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return binary
+
+
+@pytest.mark.parametrize("with_ca", [False, True])
+def test_generated_home_is_accepted_by_real_garden(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    built_garden: Path,
+    with_ca: bool,
+) -> None:
+    # Garden checks every ancestor through /. Some user namespaces expose the
+    # root as an unmapped UID, so no absolute GARDEN_HOME can pass StrictModes.
+    if Path("/").stat().st_uid not in (0, os.getuid()):
+        pytest.skip(
+            "Garden home acceptance unavailable: sandbox root has an unmapped owner"
+        )
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        if not with_ca:
+            ctx.state["garden"]["tls"].pop("ca_file")
         garden.profiles(ctx)
-        readmes = {
-            Path(directory).name: (Path(directory) / "README.md").read_text()
-            for directory in ctx.state["garden"]["profiles"].values()
+        bundle = Path(ctx.state["garden"]["profiles"]["val"])
+        home = tmp_path / "client-home"
+        home.mkdir(mode=0o700)
+        shutil.copyfile(bundle / "garden.json", home / "garden.json")
+        (home / "garden.json").chmod(0o600)
+        if with_ca:
+            shutil.copytree(bundle / "tls", home / "tls")
+        else:
+            assert "garden_tls_ca_file" not in json.loads(
+                (home / "garden.json").read_text()
+            )
+            assert not (bundle / "tls/ca.crt").exists()
+        result = subprocess.run(
+            [
+                str(built_garden),
+                "home",
+                "add-identity",
+                "val",
+                "--token-file",
+                str(bundle / "agent.token"),
+                "--default",
+                "codex",
+            ],
+            env={**os.environ, "GARDEN_HOME": str(home)},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (home / "identities/val.token").read_text() == (
+            bundle / "agent.token"
+        ).read_text()
+        assert (home / "identities/val.token").stat().st_mode & 0o777 == 0o600
+        assert json.loads((home / "garden.json").read_text())["defaults"] == {
+            "codex": "val"
         }
 
-    assert set(readmes) == {"val", "spike", "helper"}
-    for name, adapter in ctx.state["garden"]["options"]["participants"].items():
-        readme = readmes[name]
-        assert "`garden/scripts/install-user`" in readme
-        assert f"`garden-config --host {adapter} --profile" in readme
-        assert "--binary /absolute/path/garden --config" in readme
-        assert "Install garden. " not in readme
-        assert ("host_api_version" in readme) == (adapter == "opencode")
+        # The real parser must refuse a legacy profile masquerading as a home.
+        (home / "garden.json").write_text(
+            (bundle / "codex.profile.example.json").read_text()
+        )
+        refused = subprocess.run(
+            [
+                str(built_garden),
+                "home",
+                "add-identity",
+                "val",
+                "--token-file",
+                str(bundle / "agent.token"),
+            ],
+            env={**os.environ, "GARDEN_HOME": str(home)},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert refused.returncode != 0
 
 
 @pytest.mark.parametrize("outage", ["http_503", "tool_unavailable"])
@@ -1055,3 +1413,494 @@ def test_test_certificates_are_backdated_ten_minutes(tmp_path: Path) -> None:
     assert end - start == 2 * 86400
     assert "DNS:garden.example.test" in text and "CA:TRUE" in text
     assert key.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("0.0.0.0", "0.0.0.0"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("::", "::"),
+        ("0:0:0:0:0:0:0:1", "::1"),
+        ("2001:DB8::1", "2001:db8::1"),
+        ("::ffff:192.0.2.7", "192.0.2.7"),
+    ],
+)
+def test_listen_address_accepts_and_canonicalises_literals(
+    configuration: tuple[Path, dict[str, Any]], given: str, expected: str
+) -> None:
+    path, raw = configuration
+    path.write_text(json.dumps(raw | {"listen_address": given}))
+    options = garden.load_options(path, "native")
+    assert options["listen_address"] == expected
+    assert garden.listen_address(options) == expected
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "localhost",
+        "garden.example.test",
+        "fe80::1%eth0",
+        "192.0.2.256",
+        "[::1]",
+        "0x7f.0.0.1",
+        "",
+        127,
+        None,
+        True,
+        ["::1"],
+    ],
+)
+def test_listen_address_rejects_non_literals(
+    configuration: tuple[Path, dict[str, Any]], given: Any
+) -> None:
+    path, raw = configuration
+    path.write_text(json.dumps(raw | {"listen_address": given}))
+    with pytest.raises(InstallError, match="listen_address"):
+        garden.load_options(path, "native")
+
+
+def test_listen_formats_ipv4_and_bracketed_ipv6() -> None:
+    assert garden.listen({}, 8443) == "0.0.0.0:8443"
+    assert garden.listen({"listen_address": "127.0.0.1"}, 8443) == "127.0.0.1:8443"
+    assert garden.listen({"listen_address": "::1"}, 8443) == "[::1]:8443"
+    assert garden.listen({"listen_address": "::"}, 9000) == "[::]:9000"
+
+
+def test_connect_address_follows_a_specific_listen_address() -> None:
+    assert garden.connect_address({}) == "127.0.0.1"
+    assert garden.connect_address({"listen_address": "0.0.0.0"}) == "127.0.0.1"
+    assert garden.connect_address({"listen_address": "::"}) == "::1"
+    assert garden.connect_address({"listen_address": "192.0.2.10"}) == "192.0.2.10"
+    assert garden.connect_address({"listen_address": "fd00::7"}) == "fd00::7"
+
+
+def test_verify_dials_the_configured_listen_address(
+    tmp_path: Path,
+    configuration: tuple[Path, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Docker publishes Garden only on listen_address; loopback is refused there."""
+    path, _ = configuration
+    options = garden.load_options(path, "native")
+    options["listen_address"] = "192.0.2.10"
+    dialled: list[tuple[str, int]] = []
+
+    class Dialled(Exception):
+        pass
+
+    def connection(
+        _host: str, _port: int, connect_host: str, connect_port: int, *_: Any
+    ) -> Any:
+        dialled.append((connect_host, connect_port))
+        raise Dialled
+
+    with installation(tmp_path, options) as ctx, authority(ctx) as fake:
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        monkeypatch.setattr(garden, "_LocalTLS", connection)
+        with pytest.raises(Dialled):
+            garden.verify(ctx)
+    assert dialled == [("192.0.2.10", options["port"])]
+
+
+def test_legacy_option_files_store_no_new_keys(
+    configuration: tuple[Path, dict[str, Any]],
+) -> None:
+    path, raw = configuration
+    options = garden.load_options(path, "native")
+    # Keys the installer already defaulted or derived; nothing new may appear.
+    assert set(options) == set(raw) | {
+        "port",
+        "classification",
+        "kubernetes_service_type",
+        "allowed_cidrs",
+        "tls_hashes",
+    }
+    assert "listen_address" not in options
+    assert "stream" not in options
+
+
+@pytest.mark.parametrize(
+    "age", ["168h", "0", "1h30m", "45s", "1h", "30m", "0h", "2h0m5s"]
+)
+def test_stream_accepts_go_duration_units_h_m_s(
+    configuration: tuple[Path, dict[str, Any]], age: str
+) -> None:
+    path, raw = configuration
+    path.write_text(json.dumps(raw | {"stream": {"max_age": age, "max_bytes": 0}}))
+    options = garden.load_options(path, "native")
+    assert options["stream"] == {"max_age": age, "max_bytes": 0}
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [
+        {"max_age": "-1h", "max_bytes": 0},
+        {"max_age": "10d", "max_bytes": 0},
+        {"max_age": "1.5h", "max_bytes": 0},
+        {"max_age": "", "max_bytes": 0},
+        {"max_age": "00", "max_bytes": 0},
+        {"max_age": "168", "max_bytes": 0},
+        {"max_age": "1h1h", "max_bytes": 0},
+        {"max_age": "99999999999999h", "max_bytes": 0},
+        {"max_age": 168, "max_bytes": 0},
+        {"max_age": "1h", "max_bytes": True},
+        {"max_age": "1h", "max_bytes": -1},
+        {"max_age": "1h", "max_bytes": "1"},
+        {"max_age": "1h", "max_bytes": 2**63},
+        {"max_age": "1h", "max_bytes": 0, "extra": 1},
+        {"max_age": "1h"},
+        "1h",
+    ],
+)
+def test_stream_rejects_invalid_retention(
+    configuration: tuple[Path, dict[str, Any]], stream: Any
+) -> None:
+    path, raw = configuration
+    path.write_text(json.dumps(raw | {"stream": stream}))
+    with pytest.raises(InstallError, match="stream"):
+        garden.load_options(path, "native")
+
+
+def test_retention_prefers_stream_and_falls_back_to_legacy() -> None:
+    legacy = {"max_age": "0", "max_bytes": 0}
+    assert garden.retention({}, legacy) == legacy
+    assert garden.retention({}, None) is None
+    options = {"stream": {"max_age": "1h", "max_bytes": 5}}
+    assert garden.retention(options, legacy) == {"max_age": "1h", "max_bytes": 5}
+    assert garden.retention(options, None) == {"max_age": "1h", "max_bytes": 5}
+    returned = garden.retention(options, None)
+    assert returned is not None
+    returned["max_bytes"] = 9
+    assert options["stream"]["max_bytes"] == 5
+
+
+def test_with_add_defaults_fixes_retention_without_mutating_input() -> None:
+    options: dict[str, Any] = {"port": 8443}
+    added = garden.with_add_defaults(options)
+    assert added["stream"] == {"max_age": "168h", "max_bytes": 1073741824}
+    assert "stream" not in options
+    added["stream"]["max_age"] = "1h"
+    assert garden.ADD_RETENTION["max_age"] == "168h"
+    explicit = {"stream": {"max_age": "1h", "max_bytes": 1}}
+    assert garden.with_add_defaults(explicit)["stream"] == explicit["stream"]
+
+
+def test_listener_preflight_binds_an_explicit_address() -> None:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        with pytest.raises(InstallError, match="Garden listener port"):
+            garden.require_listener_available(port, wildcard=False, address="127.0.0.1")
+
+
+def test_listener_preflight_checks_ipv6_addresses() -> None:
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("::1", 0))
+        except OSError:
+            pytest.skip("IPv6 loopback is unavailable")
+        port = probe.getsockname()[1]
+        with pytest.raises(InstallError, match="Garden listener port"):
+            garden.require_listener_available(port, wildcard=False, address="::1")
+
+
+def test_revoke_removes_credentials_then_grants_with_saved_keys(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        garden.revoke(ctx, fake.admin)
+        paths = [p for p, _, _ in fake.calls if p.startswith("/v1/revoke-")]
+        assert paths == ["/v1/revoke-credential", "/v1/revoke-grant"] * 3
+        keys = [k for p, _, k in fake.calls if p.startswith("/v1/revoke-")]
+        assert len(set(keys)) == 6
+        revocations = ctx.state["garden"]["revocations"]
+        assert set(revocations) == {"helper", "spike", "val"}
+        for name, record in revocations.items():
+            agent = ctx.state["garden"]["agents"][name]
+            credential = record["operations"]["revoke-credential"]
+            grant = record["operations"]["revoke-grant"]
+            assert credential["body"]["credential_id"] == agent["credential_id"]
+            assert grant["body"]["grant_id"] == agent["grant_id"]
+            assert (
+                credential["receipt"]["result"]["credential_id"]
+                == agent["credential_id"]
+            )
+            assert grant["receipt"]["result"]["grant_id"] == agent["grant_id"]
+        assert "plaintext" not in json.dumps(ctx.state)
+        before = len(fake.calls)
+        garden.revoke(ctx, fake.admin)
+        assert [
+            p for p, _, _ in fake.calls[before:] if p.startswith("/v1/revoke-")
+        ] == []
+
+
+def test_revoke_replay_reuses_lost_key_and_never_resends_receipts(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        fake.lose_response = "/v1/revoke-grant"
+        with pytest.raises(InstallError):
+            garden.revoke(ctx, fake.admin)
+        lost = ctx.state["garden"]["revocations"]["helper"]["operations"]
+        assert "receipt" not in lost["revoke-grant"]
+        lost_key = lost["revoke-grant"]["key"]
+        garden.revoke(ctx, fake.admin)
+        calls = [(p, b, k) for p, b, k in fake.calls if p.startswith("/v1/revoke-")]
+        assert [p for p, _, _ in calls] == [
+            "/v1/revoke-credential",
+            "/v1/revoke-grant",
+            "/v1/revoke-grant",
+            "/v1/revoke-credential",
+            "/v1/revoke-grant",
+            "/v1/revoke-credential",
+            "/v1/revoke-grant",
+        ]
+        assert [k for _, b, k in calls if "grant_id" in b].count(lost_key) == 2
+        assert (
+            ctx.state["garden"]["revocations"]["helper"]["operations"]["revoke-grant"][
+                "receipt"
+            ]["outcome"]
+            == "replayed"
+        )
+
+
+def test_revoke_surfaces_refusal_without_inventing_success(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        fake.revoked_targets.add(
+            ctx.state["garden"]["agents"]["helper"]["credential_id"]
+        )
+        with pytest.raises(
+            InstallError,
+            match="returned HTTP 400.*already revoked outside the installer",
+        ):
+            garden.revoke(ctx, fake.admin)
+        record = ctx.state["garden"]["revocations"]["helper"]["operations"]
+        assert record["revoke-credential"]["key"]
+        assert "receipt" not in record["revoke-credential"]
+        assert all(p != "/v1/revoke-grant" for p, _, _ in fake.calls)
+
+
+def test_revoke_crash_before_request_reuses_saved_key(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        real = request
+
+        def interrupted(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            if args[1] == "/v1/revoke-credential":
+                raise KeyboardInterrupt
+            return real(*args, **kwargs)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(garden, "request", interrupted)
+            with pytest.raises(KeyboardInterrupt):
+                garden.revoke(ctx, fake.admin)
+        saved = ctx.state["garden"]["revocations"]["helper"]["operations"]
+        key = saved["revoke-credential"]["key"]
+        assert "receipt" not in saved["revoke-credential"]
+        assert not [p for p, _, _ in fake.calls if p.startswith("/v1/revoke-")]
+        garden.revoke(ctx, fake.admin)
+        first = next(c for c in fake.calls if c[0] == "/v1/revoke-credential")
+        assert first[2] == key
+
+
+def test_revoke_rejects_mismatched_revocation_result(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        real = request
+
+        def mismatched(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            response = real(*args, **kwargs)
+            if args[1] == "/v1/revoke-grant":
+                response["result"]["grant_id"] = str(uuid4())
+            return response
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(garden, "request", mismatched)
+            with pytest.raises(InstallError, match="differs from removal"):
+                garden.revoke(ctx, fake.admin)
+
+
+def test_re_add_reuses_dormant_principals_and_issues_new_authority(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    from cairn_install import workflow
+
+    path, _ = configuration
+    options = garden.load_options(path, "native")
+    with (
+        installation(tmp_path, options) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        garden.revoke(ctx, fake.admin)
+        first = ctx.state.pop("garden")
+        ctx.state["garden_history"] = [first]
+        for name in first["agents"]:
+            directory = ctx.root / "credentials" / "garden" / name
+            for leaf in ("issue.json", "agent.token"):
+                (directory / leaf).unlink()
+                ctx.state["owned_files"].pop(str(directory / leaf), None)
+                ctx.state.get("file_intents", {}).pop(str(directory / leaf), None)
+        ctx.state["garden"] = {
+            "options": options,
+            "agents": workflow._retained_principals(ctx, options),
+        }
+        before = len(fake.calls)
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        paths = [p for p, _, _ in fake.calls[before:] if p.startswith("/v1/")]
+        assert "/v1/create-principal" not in paths
+        assert paths.count("/v1/issue-credential") == len(first["agents"])
+        assert paths.count("/v1/create-grant") == len(first["agents"])
+        for name, agent in ctx.state["garden"]["agents"].items():
+            old = first["agents"][name]
+            assert agent["principal_id"] == old["principal_id"]
+            assert agent["credential_id"] != old["credential_id"]
+            assert agent["grant_id"] != old["grant_id"]
+
+
+def test_re_add_replays_a_principal_whose_response_was_lost(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    from cairn_install import workflow
+
+    path, _ = configuration
+    options = garden.load_options(path, "native")
+    with (
+        installation(tmp_path, options) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        fake.lose_response = "/v1/create-principal"
+        with pytest.raises(InstallError):
+            garden.enrol(ctx, fake.admin)
+        first = ctx.state.pop("garden")
+        (name,) = first["agents"]
+        lost = first["agents"][name]["operations"]["create-principal"]
+        assert "receipt" not in lost
+        committed = fake.results[lost["key"]]["result"]["principal_id"]
+        ctx.state["garden_history"] = [first]
+        ctx.state["garden"] = {
+            "options": options,
+            "agents": workflow._retained_principals(ctx, options),
+        }
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        keys = [k for p, _, k in fake.calls if p == "/v1/create-principal"]
+        assert keys.count(lost["key"]) == 2
+        agent = ctx.state["garden"]["agents"][name]
+        assert agent["principal_id"] == committed
+        assert agent["operations"]["create-principal"]["receipt"]["outcome"] == (
+            "replayed"
+        )
+
+
+def _garden_tree(source: Path) -> Path:
+    (source / "garden" / "cmd").mkdir(parents=True)
+    (source / "garden" / "cmd" / "main.go").write_text("package cmd\n")
+    (source / "garden" / "go.mod").write_text("module example\n")
+    (source / "src" / "cairn").mkdir(parents=True)
+    (source / "src" / "cairn" / "module.py").write_text("VALUE = 1\n")
+    (source / "pyproject.toml").write_text('[project]\nversion = "1"\n')
+    return source
+
+
+def test_garden_fingerprint_is_stable_and_tracks_garden_sources(tmp_path: Path) -> None:
+    source = _garden_tree(tmp_path / "source")
+    first = garden.garden_fingerprint(source)
+    assert garden.garden_fingerprint(source) == first
+    (source / "src" / "cairn" / "module.py").write_text("VALUE = 2\n")
+    (source / "pyproject.toml").write_text('[project]\nversion = "2"\n')
+    assert garden.garden_fingerprint(source) == first
+    (source / "garden" / ".cache" / "go-build").mkdir(parents=True)
+    (source / "garden" / ".cache" / "go-build" / "entry").write_text("cache")
+    (source / "garden" / "garden").write_bytes(b"built binary")
+    (source / "garden" / "cmd" / "__pycache__").mkdir()
+    (source / "garden" / "cmd" / "__pycache__" / "x.pyc").write_bytes(b"x")
+    assert garden.garden_fingerprint(source) == first
+    (source / "garden" / "cmd" / "main.go").write_text("package cmd\n// changed\n")
+    changed = garden.garden_fingerprint(source)
+    assert changed != first
+    (source / "garden" / "cmd" / "extra.go").write_text("package cmd\n")
+    assert garden.garden_fingerprint(source) not in {first, changed}
+
+
+def test_garden_fingerprint_hashes_relative_paths(tmp_path: Path) -> None:
+    source = _garden_tree(tmp_path / "source")
+    first = garden.garden_fingerprint(source)
+    (source / "garden" / "go.mod").rename(source / "garden" / "go.sum")
+    assert garden.garden_fingerprint(source) != first
+
+
+def test_garden_fingerprint_refuses_symlinks(tmp_path: Path) -> None:
+    source = _garden_tree(tmp_path / "source")
+    (source / "garden" / "link").symlink_to(source / "pyproject.toml")
+    with pytest.raises(InstallError, match="symlink"):
+        garden.garden_fingerprint(source)
+
+
+def test_garden_fingerprint_uses_cli_length_prefixed_framing(tmp_path: Path) -> None:
+    source = _garden_tree(tmp_path / "source")
+    expected = hashlib.sha256()
+    for relative in ("cmd/main.go", "go.mod"):
+        encoded = relative.encode()
+        expected.update(len(encoded).to_bytes(4, "big"))
+        expected.update(encoded)
+        expected.update((source / "garden" / relative).read_bytes())
+    assert garden.garden_fingerprint(source) == expected.hexdigest()
+
+
+def test_revoke_reports_changed_saved_request_neutrally(
+    tmp_path: Path, configuration: tuple[Path, dict[str, Any]]
+) -> None:
+    path, _ = configuration
+    with (
+        installation(tmp_path, garden.load_options(path, "native")) as ctx,
+        authority(ctx) as fake,
+    ):
+        garden.prepare(ctx)
+        garden.enrol(ctx, fake.admin)
+        garden.revoke(ctx, fake.admin)
+        ctx.state["garden"]["revocations"]["helper"]["operations"]["revoke-credential"][
+            "body"
+        ]["reason_code"] = "other"
+        with pytest.raises(InstallError, match="administration request changed"):
+            garden.revoke(ctx, fake.admin)

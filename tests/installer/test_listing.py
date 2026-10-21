@@ -104,6 +104,32 @@ def test_lists_managed_garden_as_an_installed_feature(tmp_path: Path) -> None:
     assert list_instances(root)[0]["features"] == "Attic only; Garden"
 
 
+def test_lists_garden_server_with_external_identity(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    value = _state(root, "demo", mode="garden-server", garden=True)
+    external_id = "44444444-4444-4444-8444-444444444444"
+    value["server"] = {"cairn": {"instance_id": external_id}}
+    (root / "demo/state.json").write_text(json.dumps(value))
+
+    row = list_instances(root)[0]
+    assert row["mode"] == "garden-server"
+    assert row["features"] == "Garden server"
+    assert row["instance_id"] == external_id
+
+
+@pytest.mark.parametrize(
+    "binding", [None, {}, {"cairn": None}, {"cairn": {"instance_id": "bad"}}]
+)
+def test_garden_server_listing_refuses_invalid_binding(
+    tmp_path: Path, binding: object
+) -> None:
+    root = _root(tmp_path)
+    value = _state(root, "demo", mode="garden-server", garden=True)
+    value["server"] = binding
+    (root / "demo/state.json").write_text(json.dumps(value))
+    assert list_instances(root)[0]["status"] == "unavailable"
+
+
 def test_malformed_managed_garden_state_is_unavailable(tmp_path: Path) -> None:
     root = _root(tmp_path)
     state = _state(root, "demo")

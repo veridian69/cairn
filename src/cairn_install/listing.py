@@ -16,7 +16,7 @@ from uuid import UUID
 from .core import MAX_OUTPUT, NAME, InstallError
 from .output import features_label
 
-_MODES = frozenset({"disposable", "native", "docker", "kubernetes"})
+_MODES = frozenset({"disposable", "native", "docker", "kubernetes", "garden-server"})
 _IMAGE_DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-fA-F]{64}\Z")
 _KUBERNETES_NAMESPACE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\Z")
 _STATUSES = frozenset(
@@ -196,8 +196,16 @@ def _row(value: dict[str, Any], name: str) -> dict[str, object]:
         or ("garden" in value and not _valid_garden(value.get("garden")))
     ):
         raise _Unavailable
-    instance_id = _uuid(value.get("instance_id"))
-    features = features_label(semantic, "garden" in value)
+    if mode == "garden-server":
+        server = value.get("server")
+        cairn = server.get("cairn") if isinstance(server, dict) else None
+        if not isinstance(cairn, dict):
+            raise _Unavailable
+        instance_id = _uuid(cairn.get("instance_id"))
+        features = "Garden server"
+    else:
+        instance_id = _uuid(value.get("instance_id"))
+        features = features_label(semantic, "garden" in value)
     return {
         "name": name,
         "mode": mode,

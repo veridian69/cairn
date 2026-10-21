@@ -124,6 +124,7 @@ def render_compose(
     falkordb_local: bool = False,
     garden_image: str | None = None,
     garden_port: int = 8443,
+    garden_listen: str = "0.0.0.0",
 ) -> str:
     credentials_mount = f"""\
       - type: bind
@@ -254,7 +255,9 @@ def render_compose(
     garden_volumes = ""
     garden_publish = ""
     if garden_image:
-        garden_publish = f"\n      - {_quoted(f'0.0.0.0:{garden_port}:9443')}"
+        # Compose port syntax needs IPv6 host addresses in brackets.
+        host = f"[{garden_listen}]" if ":" in garden_listen else garden_listen
+        garden_publish = f"\n      - {_quoted(f'{host}:{garden_port}:9443')}"
         # Reuse only the atomic publisher; TLS PEM deliberately permits newlines.
         code = (
             _SECRET_INIT.split("def install(")[0]
