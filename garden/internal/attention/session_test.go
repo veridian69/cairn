@@ -3,6 +3,7 @@ package attention
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,6 +82,22 @@ func TestMissingHomeConfigIsDisconnectedWithoutPaths(t *testing.T) {
 	}
 }
 
+func TestUnsafeHomeParentIsDisconnectedWithoutPaths(t *testing.T) {
+	wide := filepath.Join(t.TempDir(), "wide")
+	writeHome(t, filepath.Join(wide, "home"), validHomeConfig)
+	if err := os.Chmod(wide, 0775); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GARDEN_HOME", filepath.Join(wide, "home"))
+	session := openDisconnected(t, "")
+	if !strings.Contains(session.Instructions, "a parent of the Garden home is group- or other-writable") {
+		t.Fatalf("unsafe parent not explained: %q", session.Instructions)
+	}
+	if strings.Contains(session.Instructions, wide) {
+		t.Fatalf("reason exposes an absolute path: %q", session.Instructions)
+	}
+}
+
 func TestDefaultIdentityClaimedElsewhereIsNotTakenOver(t *testing.T) {
 	dir := useHome(t, validHomeConfig)
 	held, err := (Home{Dir: dir}).ClaimIdentity("spike")
@@ -113,6 +130,33 @@ func TestMissingIdentityTokenNamesOnlyHomeRelativePath(t *testing.T) {
 	session := openDisconnected(t, "")
 	if !strings.Contains(session.Instructions, filepath.Join("identities", "spike.token")) {
 		t.Fatalf("token reason not home-relative: %q", session.Instructions)
+	}
+	if strings.Contains(session.Instructions, dir) {
+		t.Fatalf("reason exposes the Garden home: %q", session.Instructions)
+	}
+}
+
+// The CA decides whom the token is sent to, so a CA others could replace is refused before
+// dialling (issue #200), with a reason that names no path.
+func TestReplaceableTLSCAIsDisconnectedWithoutPaths(t *testing.T) {
+	dir := useHome(t, validHomeConfig)
+	for _, sub := range []string{"identities", "tls"} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "identities", "spike.token"), []byte(identityFixtureToken), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tls", "internal-ca.pem"), []byte("not used"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "tls"), 0777); err != nil {
+		t.Fatal(err)
+	}
+	session := openDisconnected(t, "")
+	if !strings.Contains(session.Instructions, "a parent of the TLS CA file is group- or other-writable") {
+		t.Fatalf("replaceable CA not explained: %q", session.Instructions)
 	}
 	if strings.Contains(session.Instructions, dir) {
 		t.Fatalf("reason exposes the Garden home: %q", session.Instructions)

@@ -39,7 +39,9 @@ from cairn.catalogue.verification import (
 )
 from cairn.operations.backup import BackupError, BackupResult, create_backup
 from cairn.operations.restore import RestoreError, RestoreResult, restore_bundle
+from cairn.projection.delivery import deliver_projection_outbox
 from cairn.projection.rebuild import rebuild_index
+from cairn.projection.repair import coverage_auditor, repair_index
 from cairn.runtime.composition import (
     AdapterCredentialError,
     _default_index,
@@ -104,6 +106,10 @@ def _parser() -> argparse.ArgumentParser:
     rebuild_parser = commands.add_parser("rebuild-index", allow_abbrev=False)
     rebuild_parser.add_argument("--config", type=Path)
 
+    repair_parser = commands.add_parser("repair-index", allow_abbrev=False)
+    repair_parser.add_argument("--config", type=Path)
+    repair_parser.add_argument("--dry-run", action="store_true")
+
     backup_parser = commands.add_parser("backup", allow_abbrev=False)
     backup_parser.add_argument("--config", type=Path)
     backup_parser.add_argument("--output", type=Path, required=True)
@@ -146,6 +152,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_catalogue_command(command, config)
     if command == "rebuild-index":
         return _run_rebuild_index(config)
+    if command == "repair-index":
+        return _run_repair_index(config, dry_run=cast(bool, arguments.dry_run))
     if command == "backup":
         return _run_backup(config, cast(Path, arguments.output))
     if command == "restore":
@@ -300,6 +308,98 @@ def _run_rebuild_index(config: CairnConfig) -> int:
                 "failed": report.failed,
                 "unreadable": report.unreadable,
                 "superseded_rows": report.superseded_rows,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0 if complete else 4
+
+
+def _run_repair_index(config: CairnConfig, *, dry_run: bool) -> int:
+    """#204 (I-99): re-project only the facts the index owes, uncapped,
+    under the instance lease like ``rebuild-index``.
+
+    Enqueues a row per torn or absent fact, then drains the whole outbox
+    as a serving instance would on start, until it empties or a pass
+    delivers nothing. ``--dry-run`` audits and reports without writing.
+    Exits non-zero while anything is still owed, including refused
+    episodes no fact explains, which only ``rebuild-index`` clears.
+    """
+    if not config.graphiti.enabled:
+        return _emit_error("retrieval_index_disabled", 4)
+
+    lease = DataDirectoryLease(config.paths.data, config.instance_id)
+    try:
+        lease.acquire()
+    except LeaseError as error:
+        return _emit_error(error.code, 3 if error.code == "data_unavailable" else 4)
+    logger = configure_logging(sys.stderr)
+    owned_index = None
+    writer_gate = threading.Lock()
+    delivered = 0
+    remaining = 0
+    try:
+        index, owned_index = _default_index(
+            config, writer_gate=writer_gate, safe_logger=logger
+        )
+        if index is None:
+            return _emit_error("retrieval_index_disabled", 4)
+        auditor = coverage_auditor(index)
+        if auditor is None:
+            return _emit_error("repair_unsupported", 4)
+        transactions = CatalogueTransactions(
+            config.paths.data,
+            writer_gate=writer_gate,
+            clock=lambda: datetime.now(UTC),
+            uuid_factory=uuid4,
+        )
+        report = repair_index(
+            transactions,
+            auditor,
+            uuid_factory=uuid4,
+            cap=None,
+            dry_run=dry_run,
+            logger=logger,
+        )
+        while not dry_run:
+            drained = deliver_projection_outbox(
+                transactions,
+                index,
+                clock=lambda: datetime.now(UTC),
+                limit=max(100, config.delivery.chunk_size),
+                chunk_size=config.delivery.chunk_size,
+                logger=logger,
+            )
+            delivered += drained.delivered
+            remaining = drained.remaining
+            if remaining == 0 or drained.delivered == 0:
+                break
+    except AdapterCredentialError as error:
+        return _emit_credential_error(error)
+    except (CatalogueStorageError, CatalogueTransactionError):
+        return _emit_error("catalogue_unavailable", 3)
+    except Exception:
+        return _emit_error("internal_error", 3)
+    finally:
+        # The same ownership, and the same uncovered constructor path, as
+        # ``_run_rebuild_index``.
+        if owned_index is not None:
+            owned_index.close()
+        lease.release()
+
+    owed = report.targets if dry_run else remaining
+    complete = owed == 0 and report.unrepairable == 0
+    print(
+        json.dumps(
+            {
+                "status": "ok" if complete else "partial",
+                "instance_id": str(config.instance_id),
+                "dry_run": dry_run,
+                "targets": report.targets,
+                "enqueued": report.enqueued,
+                "unrepairable": report.unrepairable,
+                "delivered": delivered,
+                "remaining": remaining,
             },
             sort_keys=True,
         )

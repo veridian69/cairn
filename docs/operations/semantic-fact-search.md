@@ -43,7 +43,8 @@ prove vector coverage.
 Before a nonblank search, requested partitions are checked for missing,
 incompatible or malformed coverage. A defect raises
 `fact_vector_rebuild_required`; the authority path returns degraded recall
-without partial semantic candidates. Read-side fingerprints are format checks,
+without partial semantic candidates, and logs `semantic_rebuild_needed`,
+pointing operators to targeted repair or rebuild below. Read-side fingerprints are format checks,
 not independent authenticity proofs. Delivery and explicit rebuild bind derived
 records to immutable fact bodies.
 
@@ -57,6 +58,34 @@ cairn rebuild-index --config /etc/cairn/config.yaml
 The command enqueues authoritative facts before clearing derived graphs.
 Interrupted work remains in the durable outbox for retry. Rebuild can require
 new provider embeddings. It does not change fact custody or trust.
+
+### Targeted repair
+
+A host hard reset can lose index writes after the catalogue has already
+retired their outbox rows. Such a fact is then torn, which fails the coverage
+check above, or missing, which the check cannot see. Cairn repairs both without
+a full rebuild:
+
+- At startup the delivery loop audits every partition and enqueues a
+  re-projection for each torn or missing fact, provided there are at most
+  `delivery.repair_cap` of them (default 50; 0 turns startup repair off).
+  Semantic search reports degraded until that audit finishes and every fact it
+  found has projected; with nothing to repair this takes seconds.
+- Above the cap nothing is enqueued, `projection_repair_over_cap` is logged
+  with the number of facts owed, and search stays degraded until an operator
+  runs the uncapped repair with Cairn stopped, then restarts it:
+
+```sh
+cairn repair-index --config /etc/cairn/config.yaml --dry-run   # report only
+cairn repair-index --config /etc/cairn/config.yaml
+```
+
+  The command drains the outbox before exiting and exits 4 with
+  `status: partial` while work is still owed; a dry run that finds work also
+  exits 4. `projection_repair_unrepairable` means a defective indexed episode
+  matches no catalogue fact, so no row can name it; use `rebuild-index`.
+
+Re-projection can call providers, normally served from the projection caches.
 
 ## Provider-free engine check
 

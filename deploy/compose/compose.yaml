@@ -110,9 +110,10 @@ services:
     # I-20's termination contract, verbatim: 60 seconds to finish
     # in-flight work and close the catalogue before SIGKILL.
     stop_grace_period: 60s
-    # A crashed instance returns without an operator; one stopped on
-    # purpose stays stopped.
-    restart: unless-stopped
+    # Always: a crashed instance, a rebooted or hard-reset host and a
+    # restarted Docker daemon all bring it back without an operator. A
+    # deliberate `stop` lasts until the daemon restarts; `down` keeps it off.
+    restart: always
 
 volumes:
   # Not given an explicit `name:`, and that is the point: Compose

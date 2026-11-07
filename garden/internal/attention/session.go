@@ -90,7 +90,7 @@ func OpenHarness(ctx context.Context, harness, explicit string) *HarnessSession 
 	}
 	home, err := LoadHome(dir)
 	if err != nil {
-		return s.disconnect("", err.Error())
+		return s.disconnect("", safeReason(err))
 	}
 	choice, err := ChooseIdentity(explicit, home.Config.Defaults, harness)
 	if err != nil {
@@ -125,7 +125,10 @@ func (s *HarnessSession) connect(ctx context.Context) *HarnessSession {
 	}
 	token := home.TokenFile(name)
 	if _, err := ReadCredential(token); err != nil {
-		return s.disconnect(name, filepath.Join("identities", name+".token")+" is missing, empty or not private (0600)")
+		return s.disconnect(name, filepath.Join("identities", name+".token")+" is missing, empty, not private (0600) or under a directory others can write")
+	}
+	if err := checkTrustedCA(home.Config.GardenTLSCAFile); err != nil {
+		return s.disconnect(name, safeReason(err))
 	}
 	remote, err := Connect(ctx, Profile{GardenEndpoint: home.Config.GardenEndpoint, GardenTLSCAFile: home.Config.GardenTLSCAFile, GardenTLSServerName: home.Config.GardenTLSServerName, CredentialFile: token, InstanceID: home.Config.InstanceID, Scope: home.Config.Scope, Classification: home.Config.Classification, Participant: name, Adapter: harness})
 	if err != nil {

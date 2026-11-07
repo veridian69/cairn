@@ -314,7 +314,9 @@ def test_backup_hook_interrupted_removal_leaves_only_a_hidden_marker(
     result = subprocess.run(
         ["bash", "-c", script], capture_output=True, text=True, timeout=10
     )
-    assert result.returncode != 0
+    assert result.returncode == 137
+    assert "removing snapshot snapshot-id failed (exit 137)" in result.stderr
+    assert "lease" not in result.stderr
     assert (out / "latest").read_text() == NAME + "\n"
     backups = tmp_path / "backups"
     assert {path.name for path in backups.iterdir()} == {
@@ -346,8 +348,10 @@ def test_backup_hook_waits_for_snapshot_maintenance_before_removal(
         holder.terminate()
         holder.wait()
     # The archive is published; the snapshot is untouched rather than removed
-    # under a reader, and the failure alerts.
-    assert result.returncode != 0
+    # under a reader, and the failure alerts with its own exit and reason.
+    assert result.returncode == 75, result.stderr
+    assert "runtime lease stayed busy" in result.stderr
+    assert "snapshot snapshot-id was kept" in result.stderr
     assert (out / "latest").read_text() == NAME + "\n"
     assert (tmp_path / "backups/snapshot-id/payload").exists()
     assert not (tmp_path / "backups/.deleting-snapshot-id").exists()

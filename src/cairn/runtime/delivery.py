@@ -36,6 +36,8 @@ I-83 already tells a *reader* when that lag would affect its answer.
 
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
+from uuid import UUID, uuid4
 
 import anyio
 
@@ -45,6 +47,7 @@ from cairn.evidence.delivery import deliver_evidence_outbox
 from cairn.operations.metrics import Metrics
 from cairn.projection.adapter import IndexAdapter
 from cairn.projection.delivery import deliver_projection_outbox
+from cairn.projection.repair import coverage_auditor, repair_index, rows_remain
 from cairn.runtime.logging import LogEvent, SafeLogger
 
 
@@ -56,6 +59,8 @@ async def run_delivery_loop(
     interval_seconds: float,
     clock: Callable[[], datetime],
     chunk_size: int = 1,
+    repair_cap: int = 0,
+    uuid_factory: Callable[[], UUID] = uuid4,
     metrics: Metrics | None = None,
     logger: SafeLogger | None = None,
 ) -> None:
@@ -78,8 +83,42 @@ async def run_delivery_loop(
     queue — or a stalled one, because remaining rows with *nothing*
     delivered is an adapter outage, and continuing immediately would
     hammer a dead adapter in a hot loop.
+
+    #204 (I-99): an index that can audit its own coverage gets one
+    targeted repair of at most ``repair_cap`` facts before the first
+    drain, so a graph torn by a host hard reset heals without an operator.
+    It runs here, not beside the loop, because this task is the graph's
+    only writer. The caller has already marked the index unverified, so
+    semantic search fails closed until the audit completes and no fact it
+    found torn or absent has an outbox row left, whichever row repairs it:
+    graded memory recall does not read the outbox, so a queued repair is
+    not yet coverage. Over the cap the index stays unverified until an
+    operator repairs and restarts. An audit that raises is logged and
+    retried before each later pass, so an index unreachable at boot does
+    not stay unverified once it returns.
     """
+    auditor = coverage_auditor(index) if index is not None else None
+    audited = auditor is None or repair_cap <= 0
+    affected: frozenset[str] | None = None
     while True:
+        if not audited and auditor is not None:
+            report = await _guarded(
+                lambda: repair_index(
+                    transactions,
+                    auditor,
+                    uuid_factory=uuid_factory,
+                    cap=repair_cap,
+                    logger=logger,
+                ),
+                LogEvent.PROJECTION_REPAIR_FAILED,
+                logger,
+            )
+            if report is not None:
+                audited = True
+                if report.over_cap:
+                    auditor.set_coverage_verified(False)
+                else:
+                    affected = report.affected
         delivered, remaining = await _drain_once(
             transactions,
             attic=attic,
@@ -89,6 +128,15 @@ async def run_delivery_loop(
             metrics=metrics,
             logger=logger,
         )
+        if affected is not None and auditor is not None:
+            owing = await _guarded(
+                partial(rows_remain, transactions, affected),
+                LogEvent.PROJECTION_REPAIR_FAILED,
+                logger,
+            )
+            if owing is False:
+                affected = None
+                auditor.set_coverage_verified(True)
         if delivered > 0 and remaining > 0:
             continue
         await anyio.sleep(interval_seconds)

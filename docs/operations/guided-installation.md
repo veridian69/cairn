@@ -580,7 +580,9 @@ stream has a complete tar end marker; the runtime directory holds only the
 service restart ledger. Once the archive is published the hook removes the
 staged snapshot from `/var/lib/garden/.garden/backups`, as the installer's own
 `garden-backup` does: the archive is the retained copy, and a failed run leaves
-the snapshot in place.
+the snapshot in place. Removal waits up to 300 seconds for Garden's runtime
+lease; if snapshot maintenance holds it throughout, the hook exits 75 and the
+journal says the lease stayed busy, apart from a failed removal.
 `garden-backup` uses `sudo -n systemctl start garden-backup.service` and requires
 this hook. `garden-upgrade` is refused for garden-server in v0.8.0; upgrade a
 server Garden by hand until a later release adds it.

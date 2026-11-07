@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "drystane-cairn"
 # A release has the same identity in source and history-free exports.
-version = "0.8.2"
+version = "0.8.3"
 description = "A scoped, evidence-aware memory authority"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -120,6 +120,9 @@ packages = ["cairn"]
 [tool.ruff]
 target-version = "py312"
 line-length = 88
+# Private export staging: its own ruff.toml excludes every file, and skipping it
+# keeps ruff from writing a cache into the declared overlay tree.
+extend-exclude = ["public-release/overlay/scripts/backup"]
 
 [tool.ruff.format]
 exclude = ["docs/**"]

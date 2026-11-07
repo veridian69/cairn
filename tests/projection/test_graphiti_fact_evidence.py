@@ -1,6 +1,9 @@
 """Optional advice uses the existing adapter instance, never a second stack."""
 
 import asyncio
+import json
+import threading
+from io import StringIO
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -9,7 +12,7 @@ import pytest
 from graphiti_core.driver.driver import GraphDriver
 
 from cairn.projection.fact_vectors import FactVectorError
-from cairn.projection.graphiti import GraphitiIndex
+from cairn.projection.graphiti import GraphitiIndex, GraphitiIndexError
 from cairn.projection.semantic_evidence import (
     SEARCH_POLICY,
     SemanticEvidence,
@@ -17,6 +20,7 @@ from cairn.projection.semantic_evidence import (
     local_representation_sha256,
     query_sha256,
 )
+from cairn.runtime.logging import configure_logging
 
 
 @pytest.mark.parametrize(
@@ -253,3 +257,122 @@ def test_metadata_non1024_keeps_only_v1(controlled: Any) -> None:
         "representation": None,
         "search": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("dimension", "unit_gated"), [(1024, True), (2, False)], ids=["graded", "plain"]
+)
+def test_coverage_audit_merges_the_unit_gate_only_where_graded_recall_applies(
+    dimension: int, unit_gated: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Graded recall refuses a partition the unit gate refuses, so the audit
+    must name those episodes too. Plain search never applies that gate."""
+    from cairn.projection.adapter import CoverageAudit
+    from cairn.projection.partition import derive_group_id
+
+    calls: list[str] = []
+
+    class Driver:
+        def clone(self, database: str) -> Any:
+            calls.append(database)
+            return self
+
+    class VectorGate:
+        async def audit(self, driver: object, group: str) -> CoverageAudit:
+            calls.append("vector")
+            return CoverageAudit(frozenset({"a"}), frozenset(), 0)
+
+    class UnitGate:
+        async def audit(self, driver: object, group: str) -> CoverageAudit:
+            calls.append("unit")
+            return CoverageAudit(frozenset({"b"}), frozenset({"b"}), 1)
+
+    index = object.__new__(GraphitiIndex)
+    embedder = SimpleNamespace(
+        config=SimpleNamespace(
+            embedding_model="text-embedding-3-small", embedding_dim=dimension
+        )
+    )
+    monkeypatch.setattr(
+        index, "_graphiti", SimpleNamespace(embedder=embedder), raising=False
+    )
+    monkeypatch.setattr(index, "_driver", Driver(), raising=False)
+    monkeypatch.setattr(
+        index, "_call", lambda coroutine, **kwargs: asyncio.run(coroutine)
+    )
+    monkeypatch.setattr(index, "_fact_vector_index", lambda: VectorGate())
+    monkeypatch.setattr(index, "_fact_unit_index", lambda: UnitGate())
+
+    audit = index.coverage_audit("acme\n[]")
+
+    group = derive_group_id("acme\n[]")
+    if unit_gated:
+        assert audit == CoverageAudit(frozenset({"a", "b"}), frozenset({"b"}), 1)
+        assert calls == [group, "vector", "unit"]
+    else:
+        assert audit == CoverageAudit(frozenset({"a"}), frozenset(), 0)
+        assert calls == [group, "vector"]
+
+
+def test_unverified_index_refuses_nonblank_advice_before_any_work(
+    controlled: Any,
+) -> None:
+    """#204 (P1): until the startup audit verifies the graph, an absent fact
+    passes both gates, so nonblank advice fails closed before embedding or
+    graph work begins."""
+    index, events, _ = controlled
+    index.set_coverage_verified(False)
+    with pytest.raises(SemanticEvidenceError):
+        index.search_with_evidence("plain query", 1, ("acme\n[]",))
+    assert events == []
+
+
+def test_unverified_legacy_search_refuses_nonblank_queries(controlled: Any) -> None:
+    index, events, _ = controlled
+    index.set_coverage_verified(False)
+    with pytest.raises(FactVectorError, match="fact_vector_rebuild_required"):
+        index.search("plain query", 1, ("acme\n[]",))
+    assert events == []
+
+
+def test_unverified_blank_query_is_still_benign(controlled: Any) -> None:
+    index, events, _ = controlled
+    index.set_coverage_verified(False)
+    result = index.search_with_evidence(" \n\t", 1, ("acme\n[]",))
+    assert result.partitions == result.candidate_ids == ()
+    assert events == []
+
+
+def test_verification_reopens_nonblank_advice(controlled: Any) -> None:
+    index, events, _ = controlled
+    index.set_coverage_verified(False)
+    index.set_coverage_verified(True)
+    result = index.search_with_evidence("plain query", 1, ("acme\n[]",))
+    assert result.candidate_ids != ()
+    assert "embed" in events
+
+
+def test_unverified_nonblank_search_emits_only_the_closed_rebuild_signal() -> None:
+    """The real call path: the refusal reaches the caller as the typed index
+    error, and the operator sees the closed rebuild event, as for any other
+    coverage refusal."""
+    stream = StringIO()
+    index = object.__new__(GraphitiIndex)
+    index._safe_logger = configure_logging(stream)
+    index._close_requested = threading.Event()
+    index._containment_breached = threading.Event()
+    index._search_bound = asyncio.Semaphore(2)
+    index.set_coverage_verified(False)
+    loop = asyncio.new_event_loop()
+    index._loop = loop
+    thread = threading.Thread(target=loop.run_forever)
+    thread.start()
+    try:
+        with pytest.raises(GraphitiIndexError, match="fact_vector_rebuild_required"):
+            index._call(index._search("plain query", 1, ("acme\n[]",)))
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join()
+        loop.close()
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert [record["event"] for record in records] == ["semantic_rebuild_needed"]
