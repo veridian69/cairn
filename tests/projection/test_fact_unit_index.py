@@ -528,3 +528,47 @@ def test_search_rejects_unapproved_mapping_transport(container: Any) -> None:
                 cast(GraphDriver, Driver()), GROUP, unit()
             )
         )
+
+
+def test_unit_audit_sends_the_gate_rows_and_folds_them() -> None:
+    from cairn.projection import fact_unit_index as module
+    from cairn.projection.adapter import CoverageAudit
+    from cairn.projection.fact_unit_index import FactUnitIndex
+
+    identity = "1" * 8
+    other = "2" * 8
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    class Driver:
+        async def execute_query(self, query: str, **kwargs: Any) -> Any:
+            seen.append((query, kwargs))
+            return (
+                [{"uuid": identity, "valid": True}, {"uuid": other, "valid": False}],
+                None,
+                None,
+            )
+
+    audit = asyncio.run(
+        FactUnitIndex(representation()).audit(cast(GraphDriver, Driver()), GROUP)
+    )
+
+    assert seen == [
+        (
+            module._COVERAGE_ROWS,
+            {"group_id": GROUP, "representation": local_representation_sha256()},
+        )
+    ]
+    assert audit == CoverageAudit(frozenset({identity, other}), frozenset({other}), 0)
+
+
+def test_unit_coverage_rows_are_the_gathered_gate_one_row_per_episode() -> None:
+    from cairn.projection import fact_unit_index as module
+
+    assert module._COVERAGE_ROWS == (
+        module._GATHER
+        + "WITH e, coalesce("
+        + module._VALID
+        + ", false) AS valid\n"
+        + "RETURN e.uuid AS uuid, valid\n"
+    )
+    assert "coverage_valid" not in module._COVERAGE_ROWS

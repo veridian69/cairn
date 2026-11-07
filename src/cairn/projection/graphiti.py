@@ -69,6 +69,7 @@ from pydantic import BaseModel
 
 from cairn.projection import graphiti_bulk as graphiti_bulk_module
 from cairn.projection.adapter import (
+    CoverageAudit,
     FactProjected,
     ProjectedFactState,
     ProjectionFailed,
@@ -1064,6 +1065,14 @@ class GraphitiIndex:
     def clear(self, partition_keys: tuple[str, ...] | None) -> None:
         self._call(self._clear(partition_keys))
 
+    def coverage_audit(self, partition_key: str) -> CoverageAudit:
+        """#204: which episodes the read-side gates would refuse, by the
+        same predicates search applies, so a repaired fact passes them."""
+        return self._call(self._coverage_audit(partition_key))
+
+    def set_coverage_verified(self, verified: bool) -> None:
+        self._coverage_verified = verified
+
     # --- Coroutine bodies ------------------------------------------------
 
     async def _project(
@@ -1214,6 +1223,16 @@ class GraphitiIndex:
         await self._ensure_fact_vectors(driver, group_id, states)
         return tuple(cast(FactProjected | ProjectionFailed, r) for r in results)
 
+    async def _coverage_audit(self, partition: str) -> CoverageAudit:
+        group_id = derive_group_id(partition)
+        driver = self._driver.clone(database=group_id)
+        await _ready(driver)
+        audit = await self._fact_vector_index().audit(driver, group_id)
+        if self.memory_evidence_source() is not None:
+            # Graded recall applies the unit gate too; plain search does not.
+            audit = audit.merge(await self._fact_unit_index().audit(driver, group_id))
+        return audit
+
     def _fact_vector_index(self) -> FactVectorIndex:
         return FactVectorIndex(
             FactRepresentation(cast(OpenAIEmbedder, self._graphiti.embedder))
@@ -1252,6 +1271,11 @@ class GraphitiIndex:
         partition_keys: tuple[str, ...],
         grades: list[PartitionGrades] | None,
     ) -> tuple[UUID, ...]:
+        if not getattr(self, "_coverage_verified", True):
+            # I-99: an absent fact passes both gates, so until the startup
+            # audit has run, or while it found more than the cap, nothing
+            # here proves the partitions complete. Same refusal, same event.
+            raise FactVectorError("fact_vector_rebuild_required")
         with ExitStack() as driver_leases:
             return await self._search_with_leased_drivers(
                 query, limit, partition_keys, grades, driver_leases

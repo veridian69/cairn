@@ -9,6 +9,7 @@ import pytest
 from mcp.types import LATEST_PROTOCOL_VERSION
 from memory_support import REALM, Instance, serve
 
+from cairn import __version__
 from cairn.runtime.config import McpConfig
 from cairn.transports.memory.contracts import MANIFEST_NAME, packaged_bytes
 from cairn.transports.memory.instructions import (
@@ -106,3 +107,10 @@ async def test_initialize_sends_no_instructions_without_a_realm(
     result = await _initialize(Instance(tmp_path))
 
     assert "instructions" not in result
+
+
+@pytest.mark.anyio
+async def test_initialize_reports_the_product_version(tmp_path: Path) -> None:
+    result = await _initialize(Instance(tmp_path))
+
+    assert result["serverInfo"] == {"name": "cairn-memory", "version": __version__}

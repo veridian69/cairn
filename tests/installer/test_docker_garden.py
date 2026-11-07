@@ -309,11 +309,13 @@ def test_actual_compose_accepts_garden_and_excludes_it_by_default(
     assert document["services"]["garden-secret-init"]["network_mode"] == "none"
 
 
-# Digests of the renders produced by main 63030582 for these exact inputs.
-# Regenerate only from main; a mismatch means an existing install would change.
+# Digests of the renders produced by main 63030582 for these exact inputs,
+# re-pinned once for the deliberate switch to `restart: always` (#204's
+# restart change). Regenerate only from main; a mismatch means an existing
+# install would change.
 MAIN_LEGACY_DIGESTS = {
-    "plain compose": "7024ed87f012c2b79554801155cfa318d3ab1db10edd78063ad1352b6f670894",
-    "garden compose": "29efcad94dc1c3ca129a6f4c5a8598dce2419a853316f2bdffa98c3035581a9e",
+    "plain compose": "174514654159cc8feab1e30146d40163e112f699540266cce6c2106c164bb8a7",
+    "garden compose": "1bc576cc47308703d7cbd3bee06e084474fc9ad0a660bf2d0407078bab9266dc",
     "garden host.json": "f959748c05dbb8959b22de29bd771416a991eab7d051a350fbcd0481cc8a4c33",
 }
 

@@ -64,6 +64,10 @@ class LogEvent(StrEnum):
     PROJECTION_EMBEDDING_CACHE_BATCH = "projection_embedding_cache_batch"
     EDGE_BATCH_ITEM_MISSING = "edge_batch_item_missing"
     SEMANTIC_REBUILD_NEEDED = "semantic_rebuild_needed"
+    PROJECTION_REPAIR_ENQUEUED = "projection_repair_enqueued"
+    PROJECTION_REPAIR_OVER_CAP = "projection_repair_over_cap"
+    PROJECTION_REPAIR_UNREPAIRABLE = "projection_repair_unrepairable"
+    PROJECTION_REPAIR_FAILED = "projection_repair_failed"
 
 
 class Operation(StrEnum):

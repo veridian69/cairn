@@ -318,6 +318,25 @@ def test_delivery_chunk_size_accepts_the_bound() -> None:
     assert DeliveryConfig(chunk_size=500).chunk_size == 500
 
 
+def test_delivery_repair_cap_defaults_to_fifty() -> None:
+    assert DeliveryConfig().repair_cap == 50
+
+
+def test_delivery_repair_cap_rejects_negative_values() -> None:
+    with pytest.raises(ValidationError):
+        DeliveryConfig(repair_cap=-1)
+
+
+def test_delivery_repair_cap_rejects_values_above_the_bound() -> None:
+    with pytest.raises(ValidationError):
+        DeliveryConfig(repair_cap=10001)
+
+
+def test_delivery_repair_cap_accepts_both_bounds() -> None:
+    assert DeliveryConfig(repair_cap=0).repair_cap == 0
+    assert DeliveryConfig(repair_cap=10000).repair_cap == 10000
+
+
 def test_config_with_delivery_block_parses_chunk_size(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     write_config(config_path, f"{CONFIG}delivery:\n  chunk_size: 7\n")

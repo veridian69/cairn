@@ -100,6 +100,104 @@ func TestLoadHomeRefusesSymlinkedConfig(t *testing.T) {
 	}
 }
 
+// LoadHome feeds the endpoint that receives the bearer token, so it applies the writing
+// path's ownership rules before reading garden.json (issue #199).
+func TestLoadHomeRefusesHomeOthersCouldReplace(t *testing.T) {
+	t.Run("group-writable parent", func(t *testing.T) {
+		wide := filepath.Join(t.TempDir(), "wide")
+		writeHome(t, filepath.Join(wide, "home"), validHomeConfig)
+		if err := os.Chmod(wide, 0775); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHome(filepath.Join(wide, "home")); err == nil || !strings.Contains(err.Error(), "group- or other-writable") {
+			t.Fatalf("home under a group-writable parent accepted: %v", err)
+		}
+	})
+	t.Run("group-writable home", func(t *testing.T) {
+		dir := t.TempDir()
+		writeHome(t, dir, validHomeConfig)
+		if err := os.Chmod(dir, 0770); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHome(dir); err == nil || !strings.Contains(err.Error(), "must not be writable") {
+			t.Fatalf("group-writable home accepted: %v", err)
+		}
+	})
+	t.Run("group-writable garden.json", func(t *testing.T) {
+		dir := t.TempDir()
+		writeHome(t, dir, validHomeConfig)
+		if err := os.Chmod(filepath.Join(dir, "garden.json"), 0660); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHome(dir); err == nil {
+			t.Fatal("group-writable garden.json accepted")
+		}
+	})
+	t.Run("home owned by another user", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("root owns /")
+		}
+		if _, err := LoadHome("/"); err == nil || !strings.Contains(err.Error(), "owned by this user") {
+			t.Fatalf("home owned by root accepted: %v", err)
+		}
+	})
+	t.Run("symlinked home", func(t *testing.T) {
+		base := t.TempDir()
+		writeHome(t, filepath.Join(base, "real"), validHomeConfig)
+		if err := os.Symlink(filepath.Join(base, "real"), filepath.Join(base, "linked")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHome(filepath.Join(base, "linked")); err == nil {
+			t.Fatal("symlinked home accepted")
+		}
+	})
+}
+
+func TestLoadHomeRefusesHomeSwappedBeforeRead(t *testing.T) {
+	base := privateHome(t)
+	home := filepath.Join(base, "home")
+	other := filepath.Join(base, "other")
+	writeHome(t, home, validHomeConfig)
+	writeHome(t, other, strings.Replace(validHomeConfig, "https://garden.example/mcp", "https://evil.example/mcp", 1))
+	afterHomeValidated = func(dst string) {
+		if err := os.Rename(dst, dst+".orig"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(other, dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { afterHomeValidated = func(string) {} })
+	if loaded, err := LoadHome(home); err == nil || !strings.Contains(err.Error(), "changed while it was being opened") {
+		t.Fatalf("swapped home accepted: %v %q", err, loaded.Config.GardenEndpoint)
+	}
+}
+
+func TestLoadHomeAcceptsDefaultAndLegacyReadableHome(t *testing.T) {
+	user := t.TempDir()
+	t.Setenv("HOME", user)
+	t.Setenv("GARDEN_HOME", "")
+	dir, err := ResolveHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHome(t, dir, validHomeConfig)
+	for _, mode := range []os.FileMode{0700, 0755} {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHome(dir); err != nil {
+			t.Fatalf("default home at %o refused: %v", mode, err)
+		}
+	}
+	if err := os.Chmod(filepath.Join(dir, "garden.json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadHome(dir); err != nil {
+		t.Fatalf("readable garden.json refused: %v", err)
+	}
+}
+
 func TestChooseIdentityPrefersExplicitThenHarnessDefault(t *testing.T) {
 	defaults := map[string]string{"claude": "spike"}
 	got, err := ChooseIdentity("spike2", defaults, "claude")

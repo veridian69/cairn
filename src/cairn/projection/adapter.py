@@ -70,6 +70,43 @@ class ProjectionFailed:
     code: str
 
 
+@dataclass(frozen=True, slots=True)
+class CoverageAudit:
+    """#204: what one partition's coverage gates see, per episode.
+
+    ``present`` is every episode identity found, valid or not;
+    ``defective`` the subset some gate refuses. ``unidentified`` counts
+    episodes whose identity is not a string, which nothing can repair by
+    fact. Like ``search`` results these are candidates: the repair checks
+    every identity against the catalogue before acting on it."""
+
+    present: frozenset[str]
+    defective: frozenset[str]
+    unidentified: int
+
+    def merge(self, other: "CoverageAudit") -> "CoverageAudit":
+        return CoverageAudit(
+            self.present | other.present,
+            self.defective | other.defective,
+            max(self.unidentified, other.unidentified),
+        )
+
+
+class CoverageAuditor(Protocol):
+    """Optional fifth capability, outside the closed four-operation
+    protocol: an index that can name the facts its coverage gates refuse.
+    The deliverer's startup repair and ``repair-index`` use it when the
+    adapter has it and skip repair when it does not.
+
+    ``set_coverage_verified(False)`` makes semantic search fail closed, as
+    a refused coverage gate does, until a startup audit has shown nothing
+    is owed beyond what outbox rows already declare (I-99, Sol P1s)."""
+
+    def coverage_audit(self, partition_key: str) -> CoverageAudit: ...
+
+    def set_coverage_verified(self, verified: bool) -> None: ...
+
+
 class IndexAdapter(Protocol):
     """Closed four-operation protocol. The index never authorises
     anything — every result is a candidate for the caller to reconcile

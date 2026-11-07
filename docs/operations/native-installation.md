@@ -543,7 +543,7 @@ docker run -d \
   --pull never \
   --name "$index_name" \
   --hostname falkordb \
-  --restart unless-stopped \
+  --restart always \
   --stop-timeout 30 \
   --user 10001:0 \
   --read-only \
@@ -669,7 +669,7 @@ catalogue, credential and semantic index survive a Cairn restart. It does not
 prove general recall quality, every fact, backup recovery or production
 readiness.
 
-The index container uses `restart: unless-stopped`, but its reboot behaviour
+The index container uses `restart: always`, but its reboot behaviour
 also depends on Docker starting at boot. Check `systemctl is-enabled docker`;
 an administrator must enable the daemon if it is disabled. Normal native Cairn
 stop/start/restart commands do not stop or delete the index. Inspect it with:

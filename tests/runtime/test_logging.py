@@ -326,6 +326,44 @@ def test_safe_logger_accepts_the_projection_cache_events() -> None:
     assert payloads[3]["cache_misses"] == 0
 
 
+def test_safe_logger_accepts_the_repair_events() -> None:
+    # #204 (I-99): the startup and CLI repair report counts and a class name,
+    # never a fact identity, scope or body.
+    stream = StringIO()
+    logger = configure_logging(stream)
+
+    logger.emit(
+        LogEvent.PROJECTION_REPAIR_OVER_CAP,
+        transport=None,
+        level=logging.WARNING,
+        remaining=7,
+    )
+    logger.emit(LogEvent.PROJECTION_REPAIR_ENQUEUED, transport=None, remaining=3)
+    logger.emit(
+        LogEvent.PROJECTION_REPAIR_UNREPAIRABLE,
+        transport=None,
+        level=logging.WARNING,
+        failed=2,
+    )
+    logger.emit(
+        LogEvent.PROJECTION_REPAIR_FAILED,
+        transport=None,
+        exception_type="RuntimeError",
+    )
+
+    payloads = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert [payload["event"] for payload in payloads] == [
+        "projection_repair_over_cap",
+        "projection_repair_enqueued",
+        "projection_repair_unrepairable",
+        "projection_repair_failed",
+    ]
+    assert payloads[0]["remaining"] == 7
+    assert payloads[1]["remaining"] == 3
+    assert payloads[2]["failed"] == 2
+    assert payloads[3]["exception_type"] == "RuntimeError"
+
+
 def test_safe_logger_emits_the_closed_edge_batch_item_missing_event() -> None:
     stream = StringIO()
     logger = configure_logging(stream)

@@ -183,9 +183,9 @@ def test_the_cairn_service_keeps_the_production_posture() -> None:
     assert cairn["cap_drop"] == ["ALL"]
     assert cairn["security_opt"] == ["no-new-privileges:true"]
     # I-20's termination contract, and the base's `restart` posture: a
-    # crashed instance returns, a stopped one stays stopped.
+    # crashed instance or a hard-reset host brings it back.
     assert cairn["stop_grace_period"] == "60s"
-    assert cairn["restart"] == "unless-stopped"
+    assert cairn["restart"] == "always"
     # Bounded, so a runaway cannot consume the host's memory.
     assert cairn["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=256m"]
     # No `user`: the image declares 65532:0 and owns its data directory,
@@ -334,3 +334,57 @@ def test_the_example_configuration_is_the_base_s_configuration() -> None:
         "data": CAIRN_DATA_PATH,
         "credentials": CREDENTIALS_PATH,
     }
+
+
+# One-shot init containers: a one-shot that comes back is a loop.
+ONE_SHOTS = {"falkordb-init", "secret-init", "garden-secret-init"}
+
+
+def _assert_restart_posture(services: dict[str, Any], where: str) -> None:
+    for name, service in services.items():
+        expected = "no" if name in ONE_SHOTS else "always"
+        assert service.get("restart") == expected, (where, name, service.get("restart"))
+
+
+def test_long_running_services_always_restart() -> None:
+    # A provider's hard reset must bring every service back without an
+    # operator, including one stopped before the reset.
+    _assert_restart_posture(
+        _project("compose.yaml", "compose.graphiti.yaml", "compose.edge.yaml")[
+            "services"
+        ],
+        "deploy/compose",
+    )
+
+
+def test_installer_rendered_services_always_restart(tmp_path: Path) -> None:
+    from cairn_install.docker_assets import render_compose
+
+    for name in ("provider.key", "falkordb.password"):
+        (tmp_path / name).write_text("x")
+    rendered = render_compose(
+        image="cairn.local/cairn@sha256:" + "0" * 64,
+        port=8080,
+        root=tmp_path,
+        instance_id="11111111-1111-4111-8111-111111111111",
+        run_id="22222222-2222-4222-8222-222222222222",
+        semantic=True,
+        provider_key_file=tmp_path / "provider.key",
+        falkordb_password_file=tmp_path / "falkordb.password",
+        garden_image="cairn.local/garden@sha256:" + "1" * 64,
+    )
+    services = yaml.safe_load(rendered)["services"]
+    assert {"cairn", "falkordb", "garden"} <= set(services)
+    _assert_restart_posture(services, "installer compose")
+
+
+def test_no_shipped_source_keeps_unless_stopped() -> None:
+    # Covers the native installer's `docker run --restart` for the index too.
+    sources = [
+        *COMPOSE_DIR.glob("*.yaml"),
+        *(REPOSITORY / "src" / "cairn_install").glob("*.py"),
+    ]
+    offenders = [
+        p.name for p in sources if "unless-stopped" in p.read_text(encoding="utf-8")
+    ]
+    assert offenders == []

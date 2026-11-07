@@ -18,7 +18,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: listener
-      image: cairn:v0.8.2
+      image: cairn:v0.8.5
       command:
         - python
         - -c
