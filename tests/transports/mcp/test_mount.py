@@ -23,6 +23,7 @@ from httpx import ASGITransport, AsyncClient
 from httpx import Response as HTTPXResponse
 from starlette.routing import Mount, Route
 
+from cairn import __version__
 from cairn.authority.credentials import mint_token
 from cairn.catalogue.migration import migrate_catalogue
 from cairn.catalogue.sqlite import _open_write_connection, canonical_timestamp
@@ -165,6 +166,7 @@ async def test_initialize_negotiates_the_pinned_protocol_revision(
     body = response.json()
     assert body["result"]["protocolVersion"] == PROTOCOL_REVISION
     assert body["result"]["serverInfo"]["name"] == SERVER_NAME
+    assert body["result"]["serverInfo"]["version"] == __version__
 
 
 @pytest.mark.anyio

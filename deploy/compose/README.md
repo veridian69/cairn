@@ -37,7 +37,7 @@ recovery procedure.
 
 ## Image and contract boundary
 
-`CAIRN_IMAGE=cairn:v0.8.2` in `../images.lock` is a local build tag, not a
+`CAIRN_IMAGE=cairn:v0.8.5` in `../images.lock` is a local build tag, not a
 published image. Use the reviewed local build produced below or a separately
 reviewed registry digest and record its exact identity.
 
@@ -149,8 +149,8 @@ repository root, verify the contracts, build the image named by
 ```sh
 (cd contracts && sha256sum -c cairn-openapi-v1.json.sha256)
 (cd contracts && sha256sum -c cairn-mcp-tools-v1.json.sha256)
-make image IMAGE=cairn:v0.8.2
-docker image inspect --format '{{.Id}}' cairn:v0.8.2
+make image IMAGE=cairn:v0.8.5
+docker image inspect --format '{{.Id}}' cairn:v0.8.5
 ```
 
 Both checksum commands must report `OK`; the build must finish successfully;
@@ -174,7 +174,7 @@ removes an object only when both still match.
 set -eu
 set -o pipefail
 
-preflight_image='cairn:v0.8.2'
+preflight_image='cairn:v0.8.5'
 preflight_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 preflight_label_key='io.cairn.compose-preflight'
 preflight_network="cairn-preflight-$preflight_id"
@@ -880,8 +880,8 @@ Build the edge image with the tag `deploy/images.lock` pins (`make image-edge`
 runs from the repository root and requires `VERSION`):
 
 ```sh
-(cd ../.. && make image-edge VERSION=0.8.2 EDGE_IMAGE=cairn-edge:v0.8.2)
-docker image inspect --format '{{.Id}}' cairn-edge:v0.8.2
+(cd ../.. && make image-edge VERSION=0.8.5 EDGE_IMAGE=cairn-edge:v0.8.5)
+docker image inspect --format '{{.Id}}' cairn-edge:v0.8.5
 ```
 
 Validate before starting:
@@ -949,12 +949,14 @@ After `stop`, `ps --all` must show the service containers as exited. After
 `start` or `restart`, `ps` must show Cairn healthy and the loopback readiness
 request from first boot must again return `{"status":"ready"}`.
 
-The services use `restart: unless-stopped`. After the first successful `up`,
-they return after a host reboot when the Docker daemon is enabled and the
-operator did not deliberately stop them. A deliberate `stop` suppresses that
-automatic return; run `start` or `up -d` to enable the instance again. `down`
-removes the containers and project network, so nothing starts automatically
-after reboot, but it retains named volumes and host files. Recreate the base
+The long-running services use `restart: always`. After the first successful
+`up`, they return after a crash, a host reboot or hard reset, and a Docker
+daemon restart, provided the daemon is enabled at boot. A deliberate `stop`
+holds only until the daemon next starts; run `start` or `up -d` to bring the
+instance back sooner. To keep an instance off across reboots, use `down`: it
+removes the containers and project network, so nothing starts automatically,
+but it retains named volumes and host files. The one-shot init containers keep
+`restart: "no"`. Recreate the base
 instance with:
 
 ```sh

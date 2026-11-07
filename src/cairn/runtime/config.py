@@ -158,6 +158,11 @@ class DeliveryConfig(BaseModel):
     # limit)`` regardless of this bound; ``rebuild_index`` has no such
     # ceiling and honours ``chunk_size`` in full.
     chunk_size: int = Field(default=1, ge=1, le=500)
+    # #204 (I-99): the most facts the startup repair re-projects without an
+    # operator. Above it the pass enqueues nothing and logs
+    # ``projection_repair_over_cap``; ``repair-index`` is uncapped. 0 turns
+    # startup repair off.
+    repair_cap: int = Field(default=50, ge=0, le=10000)
 
 
 class McpConfig(BaseModel):

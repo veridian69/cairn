@@ -67,6 +67,21 @@ func checkAncestors(dst string) error {
 	return checkTrustedParents(dst, "the Garden home")
 }
 
+// unsafeParentError names the parent that failed checkTrustedParents. Commands print Error(),
+// with the path; a harness session reports only reason, so its instructions carry no path.
+type unsafeParentError struct{ reason, path string }
+
+func (e *unsafeParentError) Error() string { return e.reason + ": " + e.path }
+
+// safeReason is err's message without a local path, for a disconnected session.
+func safeReason(err error) string {
+	var parent *unsafeParentError
+	if errors.As(err, &parent) {
+		return parent.reason
+	}
+	return err.Error()
+}
+
 // checkTrustedParents applies checkAncestors' rule to every parent of path; what names the path
 // in errors.
 func checkTrustedParents(path, what string) error {
@@ -77,14 +92,14 @@ func checkTrustedParents(path, what string) error {
 			return fmt.Errorf("cannot inspect a parent of %s", what)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("a parent of %s is not a plain directory: %s", what, current)
+			return &unsafeParentError{"a parent of " + what + " is not a plain directory", current}
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok || (stat.Uid != 0 && stat.Uid != uid) {
-			return fmt.Errorf("a parent of %s is owned by another user: %s", what, current)
+			return &unsafeParentError{"a parent of " + what + " is owned by another user", current}
 		}
 		if info.Mode().Perm()&0022 != 0 && info.Mode()&os.ModeSticky == 0 {
-			return fmt.Errorf("a parent of %s is group- or other-writable: %s", what, current)
+			return &unsafeParentError{"a parent of " + what + " is group- or other-writable", current}
 		}
 		if current == filepath.Dir(current) {
 			return nil
@@ -174,7 +189,8 @@ func rootExistingPrivateDir(root *os.Root, name string) error {
 }
 
 // rootReadFile reads rel through root with one O_NOFOLLOW descriptor, checked by fstat.
-// A missing file returns exists=false. private requires mode with no group or other bits.
+// A missing file returns exists=false. private requires mode with no group or other bits;
+// otherwise the file must not be writable by group or others.
 func rootReadFile(root *os.Root, rel string, limit int64, private bool) ([]byte, bool, error) {
 	if root == nil {
 		return nil, false, nil
@@ -195,7 +211,7 @@ func rootReadFile(root *os.Root, rel string, limit int64, private bool) ([]byte,
 	}
 	defer file.Close()
 	opened, err := file.Stat()
-	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) || !ownedByUser(opened) || (private && opened.Mode().Perm()&0077 != 0) {
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) || !ownedByUser(opened) || (private && opened.Mode().Perm()&0077 != 0) || opened.Mode().Perm()&0022 != 0 {
 		return nil, false, fmt.Errorf("existing file is unsafe: %s", rel)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
@@ -299,7 +315,7 @@ func privateSourceBytes(path string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-// ownedSourceBytes reads one import source through a single O_NOFOLLOW descriptor and checks
+// ownedSourceBytes reads one protected input through a single O_NOFOLLOW descriptor and checks
 // that descriptor: a regular file owned by this user, with no group or other bits when
 // private, otherwise with no group or other write bit. Its parents must pass checkAncestors'
 // rule first, so no other user can swap a path component between that check and the open;
@@ -341,6 +357,35 @@ func ownedSourceBytes(path string, limit int64, what string, private bool) ([]by
 		return nil, fmt.Errorf("the %s is too large", what)
 	}
 	return data, nil
+}
+
+// checkTrustedCA requires the TLS CA file, which decides whom the bearer token is sent to, to be
+// a regular file owned by root or this user and not writable by group or others, under parents
+// that pass checkAncestors' rule. Then no other user can substitute it before the client reads it.
+// The path must be absolute and already clean: the client reads it as spelled, and the kernel
+// resolves "link/.." through link, while the parent check walks the lexically cleaned path.
+func checkTrustedCA(path string) error {
+	if path == "" {
+		return nil
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return errors.New("the TLS CA file path must be absolute, without . or .. components")
+	}
+	if err := checkTrustedParents(path, "the TLS CA file"); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("the TLS CA file must be a regular file, not a symlink")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || (stat.Uid != 0 && stat.Uid != uint32(os.Getuid())) {
+		return errors.New("the TLS CA file must be owned by root or this user")
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return errors.New("the TLS CA file must not be writable by group or others")
+	}
+	return nil
 }
 
 // checkCredentialBytes applies ReadCredential's rules to bytes already read.

@@ -3,7 +3,7 @@
 import asyncio
 import math
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -151,3 +151,50 @@ def test_invalid_text_fails_before_embedding(text: str) -> None:
     with pytest.raises(FactVectorError):
         asyncio.run(representation(embedder).embed_text(text))
     assert embedder.calls == []
+
+
+def test_vector_audit_sends_the_gate_rows_for_one_partition_and_folds_them() -> None:
+    from cairn.projection import fact_vectors as module
+    from cairn.projection.adapter import CoverageAudit
+
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    class Driver:
+        async def execute_query(self, query: str, **kwargs: Any) -> Any:
+            seen.append((query, kwargs))
+            return (
+                [{"uuid": "a" * 8, "valid": True}, {"uuid": "b" * 8, "valid": False}],
+                None,
+                None,
+            )
+
+    index = module.FactVectorIndex(representation(Embedder()))
+    audit = asyncio.run(index.audit(cast(Any, Driver()), "g" * 64))
+
+    assert seen == [
+        (
+            module._COVERAGE_ROWS,
+            {
+                "group_id": "g" * 64,
+                "representation": index.representation.metadata()["sha256"],
+                "dimension": 2,
+            },
+        )
+    ]
+    assert audit == CoverageAudit(
+        frozenset({"a" * 8, "b" * 8}), frozenset({"b" * 8}), 0
+    )
+
+
+def test_vector_coverage_rows_share_the_gate_predicate_and_nothing_of_the_search() -> (
+    None
+):
+    from cairn.projection import fact_vectors as module
+
+    gate = module._COVERAGE_SEARCH.partition("WITH e.uuid AS uuid")[0]
+    assert module._COVERAGE_ROWS.startswith(gate)
+    assert module._COVERAGE_ONLY.startswith(gate)
+    assert "coalesce(" in gate
+    assert module._COVERAGE_ROWS.endswith("RETURN e.uuid AS uuid, valid\n")
+    for forbidden in ("$query_vector", "$cutoff", "$limit", "$scoring", "score"):
+        assert forbidden not in module._COVERAGE_ROWS

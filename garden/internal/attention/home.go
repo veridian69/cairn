@@ -53,10 +53,22 @@ func ResolveHomeDir() (string, error) {
 }
 
 // LoadHome reads and validates dir/garden.json. Relative paths resolve against dir.
+// The home and its parents must pass the same checks as the writing path, and the file is
+// read through the pinned root, so no other local account can substitute the endpoint that
+// later receives an identity's bearer token.
 func LoadHome(dir string) (Home, error) {
 	var c HomeConfig
-	data, err := readRegular(filepath.Join(dir, "garden.json"), 32*1024, false)
+	dir, err := filepath.Abs(dir)
 	if err != nil {
+		return Home{}, errors.New("invalid Garden home")
+	}
+	root, err := existingHome(dir)
+	if err != nil {
+		return Home{}, err
+	}
+	defer closeRoot(root)
+	data, exists, err := rootReadFile(root, "garden.json", 32*1024, false)
+	if err != nil || !exists {
 		return Home{}, errors.New("cannot read garden.json")
 	}
 	if err := exactHomeNames(data); err != nil {

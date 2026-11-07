@@ -78,8 +78,12 @@ def build_memory_tool(entry: OperationEntry) -> Tool:
 TOOLS = tuple(build_memory_tool(entry) for entry in OPERATIONS)
 
 
-def build_server(dispatch: MemoryDispatch, instructions: str | None = None) -> Server:
-    server: Server = Server("cairn-memory", instructions=instructions)
+def build_server(
+    dispatch: MemoryDispatch, instructions: str | None = None, *, version: str
+) -> Server:
+    # Without a version the SDK reports its own package version as
+    # serverInfo.version, which reads as Cairn's.
+    server: Server = Server("cairn-memory", version=version, instructions=instructions)
 
     @server.list_tools()  # type: ignore[no-untyped-call, untyped-decorator]
     async def list_tools() -> list[Tool]:

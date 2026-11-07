@@ -81,6 +81,9 @@ func Connect(ctx context.Context, p Profile) (*Remote, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkTrustedCA(p.GardenTLSCAFile); err != nil {
+		return nil, err
+	}
 	client, err := garden.Dial(ctx, garden.ClientConfig{Endpoint: p.GardenEndpoint, Token: token, TLSCAFile: p.GardenTLSCAFile, TLSServerName: p.GardenTLSServerName})
 	if err != nil {
 		return nil, remoteError(err)

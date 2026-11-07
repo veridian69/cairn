@@ -27,4 +27,4 @@ services:
     depends_on:
       cairn:
         condition: service_healthy
-    restart: unless-stopped
+    restart: always

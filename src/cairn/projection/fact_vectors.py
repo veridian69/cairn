@@ -15,7 +15,7 @@ from typing import Any
 from graphiti_core.driver.driver import GraphDriver
 from graphiti_core.embedder.openai import OpenAIEmbedder
 
-from cairn.projection.adapter import ProjectedFactState
+from cairn.projection.adapter import CoverageAudit, ProjectedFactState
 
 CHUNK_BYTES = 2048
 BATCH_BYTES = 16384
@@ -235,6 +235,12 @@ WITH collect(valid) AS validity
 RETURN all(value IN validity WHERE value) AS coverage_valid, [] AS candidates
 """
 )
+# #204: the same per-episode verdict, one row each, so repair can name the
+# facts the gate refuses. Derived from the gate text so the two cannot drift.
+_COVERAGE_ROWS = (
+    _COVERAGE_SEARCH.partition("WITH e.uuid AS uuid")[0]
+    + "RETURN e.uuid AS uuid, valid\n"
+)
 
 
 class FactVectorIndex:
@@ -320,11 +326,42 @@ class FactVectorIndex:
     async def preflight(self, driver: GraphDriver, group_id: str) -> None:
         await self._read(driver, group_id, None, 0)
 
+    async def audit(self, driver: GraphDriver, group_id: str) -> CoverageAudit:
+        """Every episode identity this gate sees, with its verdict."""
+        await _ready(driver)
+        rows, _, _ = await driver.execute_query(
+            _COVERAGE_ROWS,
+            group_id=group_id,
+            representation=self.representation.metadata()["sha256"],
+            dimension=self.representation.dimension,
+        )
+        return audit_rows(rows)
+
     async def search(
         self, driver: GraphDriver, group_id: str, vector: list[float], limit: int
     ) -> list[str]:
         _unit(vector, self.representation.dimension)
         return await self._read(driver, group_id, vector, limit)
+
+
+def audit_rows(rows: object) -> CoverageAudit:
+    """Fold ``(uuid, valid)`` rows; any invalid row marks its identity."""
+    if type(rows) is not list:
+        raise FactVectorError("fact_vector_rebuild_required")
+    present: set[str] = set()
+    defective: set[str] = set()
+    unidentified = 0
+    for row in rows:
+        if type(row) is not dict or set(row) != {"uuid", "valid"}:
+            raise FactVectorError("fact_vector_rebuild_required")
+        identity = row["uuid"]
+        if type(identity) is not str:
+            unidentified += 1
+            continue
+        present.add(identity)
+        if row["valid"] is not True:
+            defective.add(identity)
+    return CoverageAudit(frozenset(present), frozenset(defective), unidentified)
 
 
 async def _ready(driver: GraphDriver) -> None:

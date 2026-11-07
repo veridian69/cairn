@@ -53,12 +53,13 @@ from cairn.evidence.adapter import (
     PayloadStored,
 )
 from cairn.projection.adapter import (
+    CoverageAudit,
     FactProjected,
     IndexAdapter,
     ProjectedFactState,
     ProjectionFailed,
 )
-from cairn.projection.delivery import DeliveryReport
+from cairn.projection.delivery import DeliveryReport, deliver_projection_outbox
 from cairn.projection.memory import (
     MemoryIndex,
     MemoryIndexRefused,
@@ -73,7 +74,7 @@ from cairn.runtime.config import (
     PathConfig,
 )
 from cairn.runtime.delivery import run_delivery_loop
-from cairn.runtime.logging import configure_logging
+from cairn.runtime.logging import SafeLogger, configure_logging
 from cairn.screening import SecretScreen
 
 INSTANCE_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -93,6 +94,7 @@ def _config(
     graphiti_enabled: bool = False,
     interval_seconds: int = 1,
     chunk_size: int = 1,
+    repair_cap: int = 50,
 ) -> CairnConfig:
     return CairnConfig(
         schema_version="cairn.config/v1",
@@ -103,7 +105,9 @@ def _config(
         attic=AtticConfig(enabled=attic_enabled),
         graphiti=GraphitiConfig(enabled=graphiti_enabled),
         delivery=DeliveryConfig(
-            interval_seconds=interval_seconds, chunk_size=chunk_size
+            interval_seconds=interval_seconds,
+            chunk_size=chunk_size,
+            repair_cap=repair_cap,
         ),
     )
 
@@ -821,3 +825,386 @@ def test_the_outbox_fetch_ceiling_follows_chunk_size(
         anyio.run(exercise)
 
         assert seen and seen[0] == expected_limit
+
+
+# --- startup repair (#204) ----------------------------------------------------
+
+
+class _AuditingIndex(_CountingIndex):
+    """#204: a counting index that also audits coverage and takes the
+    verification gate. By default it holds nothing, so every fact with no
+    outbox row is owed. Each audit sets ``audited``; each projection records
+    how many audits had already run. ``audit_failures`` makes that many
+    leading audits raise, and ``audit_raises`` makes every audit raise.
+    ``verified`` records each ``set_coverage_verified`` call as
+    ``(verified, audits_so_far)``; ``verified_true`` is set on a True call."""
+
+    def __init__(self, *, audit_raises: bool = False, audit_failures: int = 0) -> None:
+        super().__init__()
+        self.audit_raises = audit_raises
+        self.audit_failures = audit_failures
+        self.audits = 0
+        self.audited = threading.Event()
+        self.audits_at_projection: list[int] = []
+        self.verified: list[tuple[bool, int]] = []
+        self.verified_true = threading.Event()
+
+    def project(self, state: ProjectedFactState) -> FactProjected | ProjectionFailed:
+        self.audits_at_projection.append(self.audits)
+        return super().project(state)
+
+    def coverage_audit(self, partition_key: str) -> CoverageAudit:
+        self.audits += 1
+        self.audited.set()
+        if self.audit_raises or self.audits <= self.audit_failures:
+            raise RuntimeError("audit is unwell")
+        return CoverageAudit(frozenset(), frozenset(), 0)
+
+    def set_coverage_verified(self, verified: bool) -> None:
+        self.verified.append((verified, self.audits))
+        if verified:
+            self.verified_true.set()
+
+
+def _transactions(data_path: Path) -> CatalogueTransactions:
+    return CatalogueTransactions(
+        data_path,
+        writer_gate=threading.Lock(),
+        clock=lambda: NOW,
+        uuid_factory=uuid4,
+    )
+
+
+def _drain_all(data_path: Path) -> None:
+    """Delivers every pending row, so the facts left behind have no row, as
+    after a lost write whose outbox row was already deleted."""
+    deliver_projection_outbox(
+        _transactions(data_path), _CountingIndex(), clock=lambda: NOW, limit=1000
+    )
+    assert _depth(data_path, "projection_outbox") == 0
+
+
+def _run_loop_with_repair(
+    data_path: Path,
+    index: _CountingIndex,
+    *,
+    repair_cap: int,
+    until: tuple[threading.Event, ...],
+    logger: SafeLogger | None = None,
+) -> None:
+    transactions = _transactions(data_path)
+
+    async def exercise() -> None:
+        async with anyio.create_task_group() as scope:
+            scope.start_soon(
+                lambda: run_delivery_loop(
+                    transactions,
+                    attic=None,
+                    index=index,
+                    interval_seconds=0.01,
+                    clock=lambda: NOW,
+                    repair_cap=repair_cap,
+                    logger=logger,
+                )
+            )
+            for event in until:
+                await _await_event(event)
+            await anyio.sleep(0.1)
+            scope.cancel_scope.cancel()
+
+    anyio.run(exercise)
+
+
+def test_startup_repair_runs_once_before_the_first_drain(tmp_path: Path) -> None:
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    _drain_all(tmp_path)
+    index = _AuditingIndex()
+
+    _run_loop_with_repair(tmp_path, index, repair_cap=50, until=(index.drained,))
+
+    assert index.audits == 1
+    assert index.audits_at_projection == [1]
+    assert index.calls == 1
+    assert index.verified == [(True, 1)]
+    assert _depth(tmp_path, "projection_outbox") == 0
+
+
+def test_the_index_stays_unverified_until_the_repair_rows_drain(
+    tmp_path: Path,
+) -> None:
+    """Codex review of PR #207: graded memory recall does not read the
+    outbox, so an enqueued repair is not yet coverage. Verification waits
+    until the owed fact has actually projected and its row is gone."""
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    _drain_all(tmp_path)
+
+    class _RefusesTwice(_AuditingIndex):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+            self.succeeded = 0
+            self.succeeded_at_verify: list[int] = []
+
+        def project(
+            self, state: ProjectedFactState
+        ) -> FactProjected | ProjectionFailed:
+            self.attempts += 1
+            if self.attempts <= 2:
+                return ProjectionFailed(code="index_refused")
+            self.succeeded += 1
+            return super().project(state)
+
+        def set_coverage_verified(self, verified: bool) -> None:
+            self.succeeded_at_verify.append(self.succeeded)
+            super().set_coverage_verified(verified)
+
+    index = _RefusesTwice()
+
+    _run_loop_with_repair(tmp_path, index, repair_cap=50, until=(index.verified_true,))
+
+    assert index.attempts == 3
+    assert index.verified == [(True, 1)]
+    assert index.succeeded_at_verify == [1]
+    assert _depth(tmp_path, "projection_outbox") == 0
+
+
+def test_a_fact_left_to_its_own_failing_row_keeps_the_index_unverified(
+    tmp_path: Path,
+) -> None:
+    """Sol re-review of PR #207: the audit leaves a torn fact that already
+    has a custody row to that row. Until that row delivers, the fact is
+    still missing, so verification must wait on it as on a repair row."""
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    assert _depth(tmp_path, "projection_outbox") == 1
+
+    class _RefusesTwice(_AuditingIndex):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+            self.succeeded_at_verify: list[int] = []
+
+        def project(
+            self, state: ProjectedFactState
+        ) -> FactProjected | ProjectionFailed:
+            self.attempts += 1
+            if self.attempts <= 2:
+                return ProjectionFailed(code="index_refused")
+            return super().project(state)
+
+        def set_coverage_verified(self, verified: bool) -> None:
+            self.succeeded_at_verify.append(max(0, self.attempts - 2))
+            super().set_coverage_verified(verified)
+
+    index = _RefusesTwice()
+
+    _run_loop_with_repair(tmp_path, index, repair_cap=50, until=(index.verified_true,))
+
+    assert index.attempts == 3
+    assert index.verified == [(True, 1)]
+    assert index.succeeded_at_verify == [1]
+    assert _depth(tmp_path, "projection_outbox") == 0
+
+
+def test_a_repair_over_the_loop_cap_enqueues_nothing_and_logs_it(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    _ingest(tmp_path, with_payload=False)
+    assert _depth(tmp_path, "projection_outbox") == 2
+    _drain_all(tmp_path)
+    index = _AuditingIndex()
+    stream = StringIO()
+
+    _run_loop_with_repair(
+        tmp_path,
+        index,
+        repair_cap=1,
+        until=(index.audited,),
+        logger=configure_logging(stream),
+    )
+
+    # Over the cap the index stays unverified, and the later passes in the
+    # wait window do not audit again: the one audit is the whole repair.
+    assert index.audits == 1
+    assert index.verified == [(False, 1)]
+    assert index.calls == 0
+    assert _depth(tmp_path, "projection_outbox") == 0
+    assert '"event": "projection_repair_over_cap"' in stream.getvalue()
+
+
+def test_a_zero_cap_switches_startup_repair_off(tmp_path: Path) -> None:
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    _drain_all(tmp_path)
+    index = _AuditingIndex()
+    transactions = _transactions(tmp_path)
+
+    async def exercise() -> None:
+        with anyio.move_on_after(0.1):
+            await run_delivery_loop(
+                transactions,
+                attic=None,
+                index=index,
+                interval_seconds=0.01,
+                clock=lambda: NOW,
+                repair_cap=0,
+            )
+
+    anyio.run(exercise)
+
+    assert index.audits == 0
+    assert index.verified == []
+    assert index.calls == 0
+
+
+def test_a_failing_repair_is_logged_and_the_loop_still_drains(tmp_path: Path) -> None:
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    index = _AuditingIndex(audit_raises=True)
+    stream = StringIO()
+
+    _run_loop_with_repair(
+        tmp_path,
+        index,
+        repair_cap=50,
+        until=(index.drained,),
+        logger=configure_logging(stream),
+    )
+
+    # Every pass retries the audit, and none verifies the index.
+    assert index.audits >= 1
+    assert index.verified == []
+    assert index.calls == 1
+    assert _depth(tmp_path, "projection_outbox") == 0
+    logged = stream.getvalue()
+    assert '"event": "projection_repair_failed"' in logged
+    assert '"exception_type": "RuntimeError"' in logged
+    assert "audit is unwell" not in logged
+
+
+def test_a_raising_audit_is_retried_on_the_next_pass_and_then_verifies(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    index = _AuditingIndex(audit_failures=1)
+    stream = StringIO()
+
+    _run_loop_with_repair(
+        tmp_path,
+        index,
+        repair_cap=50,
+        until=(index.verified_true,),
+        logger=configure_logging(stream),
+    )
+
+    assert index.audits == 2
+    assert index.verified == [(True, 2)]
+    assert stream.getvalue().count('"event": "projection_repair_failed"') == 1
+
+
+def test_an_index_without_an_audit_is_unaffected_by_startup_repair(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, graphiti_enabled=True)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    index = _CountingIndex()
+    stream = StringIO()
+
+    _run_loop_with_repair(
+        tmp_path,
+        index,
+        repair_cap=50,
+        until=(index.drained,),
+        logger=configure_logging(stream),
+    )
+
+    assert index.calls == 1
+    assert _depth(tmp_path, "projection_outbox") == 0
+    assert "projection_repair" not in stream.getvalue()
+
+
+def test_the_composed_application_repairs_within_the_configured_cap(
+    tmp_path: Path,
+) -> None:
+    """composition.py forwards ``delivery.repair_cap`` from configuration, so
+    two targets under a cap of two are both re-projected by the lifespan."""
+    config = _config(tmp_path, graphiti_enabled=True, repair_cap=2)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    _ingest(tmp_path, with_payload=False)
+    _drain_all(tmp_path)
+    index = _AuditingIndex()
+    application = composition.build_application(config, index_adapter=index)
+
+    async def exercise() -> None:
+        async with LifespanManager(application):
+            await _await_event(index.drained, 10.0)
+            await anyio.to_thread.run_sync(_wait_for_drain, tmp_path)
+            # Verification follows the drain check, after the outbox empties.
+            await _await_event(index.verified_true, 10.0)
+
+    asyncio.run(exercise())
+
+    assert index.audits == 1
+    assert index.verified == [(False, 0), (True, 1)]
+    assert index.calls == 2
+
+
+def test_the_composed_application_leaves_the_index_verified_when_repair_is_off(
+    tmp_path: Path,
+) -> None:
+    """A zero cap means no startup audit, so composition never marks the
+    index unverified: search keeps its default, with nothing to wait for."""
+    config = _config(tmp_path, graphiti_enabled=True, repair_cap=0)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    _ingest(tmp_path, with_payload=False)
+    _drain_all(tmp_path)
+    index = _AuditingIndex()
+    application = composition.build_application(config, index_adapter=index)
+
+    async def exercise() -> None:
+        async with LifespanManager(application):
+            await anyio.sleep(0.1)
+
+    asyncio.run(exercise())
+
+    assert index.audits == 0
+    assert index.verified == []
+
+
+def test_the_composed_application_refuses_a_repair_above_the_configured_cap(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, graphiti_enabled=True, repair_cap=1)
+    _seed_instance(config)
+    _ingest(tmp_path, with_payload=False)
+    _ingest(tmp_path, with_payload=False)
+    _drain_all(tmp_path)
+    index = _AuditingIndex()
+    application = composition.build_application(config, index_adapter=index)
+
+    async def exercise() -> None:
+        async with LifespanManager(application):
+            await _await_event(index.audited, 10.0)
+            await anyio.sleep(0.1)
+
+    asyncio.run(exercise())
+
+    assert index.audits == 1
+    assert index.verified == [(False, 0), (False, 1)]
+    assert index.calls == 0
+    assert _depth(tmp_path, "projection_outbox") == 0

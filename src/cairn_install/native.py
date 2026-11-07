@@ -1478,7 +1478,7 @@ class _NativeIndex:
                 "--label",
                 f"{_INDEX_LABEL}={self.ctx.instance_id}",
                 "--restart",
-                "unless-stopped",
+                "always",
                 "--stop-timeout",
                 "30",
                 "--user",

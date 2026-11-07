@@ -1175,3 +1175,30 @@ def test_lost_publication_response_is_reused_without_second_embedding(
             await driver.close()
 
     asyncio.run(asyncio.wait_for(run(), timeout=30))
+
+
+def test_audit_names_the_episode_the_unit_gate_refuses(owned_db: int) -> None:
+    """#204: a bare episode with no chunk marker is torn. The audit reports it
+    present and defective and preflight refuses; once ensure publishes its
+    units, the same audit reports it present and healthy."""
+    from cairn.projection.adapter import CoverageAudit
+
+    async def run() -> None:
+        driver = driver_for(owned_db)
+        index = FactUnitIndex(rep(ControlledEmbedder()))
+        try:
+            await reset(driver, state())
+            assert await index.audit(driver, GROUP) == CoverageAudit(
+                frozenset({IDENTITY}), frozenset({IDENTITY}), 0
+            )
+            with pytest.raises(FactVectorError):
+                await index.preflight(driver, GROUP)
+            await index.ensure(driver, GROUP, [state()])
+            assert await index.audit(driver, GROUP) == CoverageAudit(
+                frozenset({IDENTITY}), frozenset(), 0
+            )
+            await index.preflight(driver, GROUP)
+        finally:
+            await driver.close()
+
+    asyncio.run(asyncio.wait_for(run(), timeout=30))
