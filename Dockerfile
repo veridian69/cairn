@@ -21,8 +21,10 @@ RUN python -m pip uninstall --yes pip \
     && rm -rf /usr/local/lib/python*/ensurepip
 RUN apt-get update \
     && apt-get install --no-install-recommends --only-upgrade -y \
+        apt \
         bsdutils \
         gzip \
+        libapt-pkg7.0 \
         libblkid1 \
         liblastlog2-2 \
         libmount1 \
@@ -38,7 +40,7 @@ RUN apt-get update \
         perl-base \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
-ARG VERSION=v0.8.2
+ARG VERSION=v0.8.4
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/veridian69/cairn" \
       org.opencontainers.image.documentation="https://github.com/veridian69/cairn" \

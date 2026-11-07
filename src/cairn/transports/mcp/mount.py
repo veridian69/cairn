@@ -87,7 +87,7 @@ def build_mcp_server(
     reporting two contract digests for one process is the divergence I-90
     forbids, and I-89 makes that two digests apiece rather than one.
     """
-    server: Server = Server(SERVER_NAME)
+    server: Server = Server(SERVER_NAME, version=product_version)
     register_tools(server)
     register_calls(
         server,

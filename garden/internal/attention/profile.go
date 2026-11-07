@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -164,50 +163,11 @@ func ReadCredential(path string) (string, error) {
 	return value, nil
 }
 
+// readRegular reads one protected input (an adapter profile or a credential) with the import
+// sources' rule: trusted parents, one O_NOFOLLOW descriptor, a regular file owned by this user,
+// private when asked, otherwise not writable by group or others.
 func readRegular(path string, limit int64, private bool) ([]byte, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
-	}
-	for current := abs; ; current = filepath.Dir(current) {
-		info, err := os.Lstat(current)
-		if err != nil {
-			return nil, err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, errors.New("symlink path refused")
-		}
-		if current == filepath.Dir(current) {
-			break
-		}
-	}
-	before, err := os.Lstat(abs)
-	if err != nil {
-		return nil, err
-	}
-	if !before.Mode().IsRegular() {
-		return nil, errors.New("regular file required")
-	}
-	f, err := os.Open(abs)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	after, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !os.SameFile(before, after) || !after.Mode().IsRegular() || (private && after.Mode().Perm()&0077 != 0) {
-		return nil, errors.New("unsafe file permissions or changed file")
-	}
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, errors.New("file too large")
-	}
-	return data, nil
+	return ownedSourceBytes(path, limit, "file", private)
 }
 
 func strictJSON(data []byte, out any) error {

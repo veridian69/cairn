@@ -235,7 +235,7 @@ def render_compose(
       timeout: 5s
       retries: 3
     stop_grace_period: 30s
-    restart: unless-stopped
+    restart: always
     labels:
 {_labels(instance_id, run_id, "      ")}
 """
@@ -298,7 +298,7 @@ os.chmod("/target/data", 0o700)
         target: /var/run/secrets/garden
         read_only: true
     stop_grace_period: 30s
-    restart: unless-stopped
+    restart: always
     labels:
 {_labels(instance_id, run_id, "      ")}
   garden-secret-init:
@@ -382,7 +382,7 @@ services:
       timeout: 5s
       retries: 3
     stop_grace_period: 60s
-    restart: unless-stopped
+    restart: always
     labels:
 {_labels(instance_id, run_id, "      ")}
 {semantic_services}

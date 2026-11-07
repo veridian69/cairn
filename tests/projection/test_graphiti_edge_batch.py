@@ -254,12 +254,20 @@ async def test_a_combined_call_stays_unbudgeted_when_no_item_asked() -> None:
     assert provider.calls[0]["max_tokens"] is None
 
 
+_SINGLE_ANSWER = {"duplicate_facts": [2], "contradicted_facts": [5]}
+
+
 @pytest.mark.anyio
-async def test_an_unanswered_item_defaults_conservatively_with_one_safe_event(
+async def test_an_unanswered_item_is_asked_again_on_its_own_with_one_safe_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider = _FakeProvider(
-        [_resolutions({"item": 0, "duplicate_facts": [9], "contradicted_facts": [4]})]
+        [
+            _resolutions(
+                {"item": 0, "duplicate_facts": [9], "contradicted_facts": [4]}
+            ),
+            _SINGLE_ANSWER,
+        ]
     )
     stream = StringIO()
     batcher = seam.EdgeBatcher(
@@ -272,13 +280,22 @@ async def test_an_unanswered_item_defaults_conservatively_with_one_safe_event(
     with caplog.at_level(logging.WARNING, logger=_SEAM_LOGGER):
         answered, orphan = await asyncio.gather(
             batcher.submit(_context("answered"), None),
-            batcher.submit(_context("orphaned"), None),
+            batcher.submit(_context("orphaned"), 300),
         )
-    # item 0's payload is distinguishable from the conservative default,
-    # so this would fail if the item mapping broke and both items ended
-    # up with the same (conservative) result.
+    # Three distinct payloads: a broken item mapping, or a default left in
+    # place of the second call, would make two of them collide.
     assert answered == {"duplicate_facts": [9], "contradicted_facts": [4]}
-    assert orphan == {"duplicate_facts": [], "contradicted_facts": []}
+    assert orphan == _SINGLE_ANSWER
+    # Only the orphan is asked again, the way graphiti would have asked
+    # it: un-batched, small model, its own budget, its own context.
+    assert len(provider.calls) == 2
+    single = provider.calls[1]
+    assert single["prompt_name"] == "dedupe_edges.resolve_edge"
+    assert single["model_size"] is ModelSize.small
+    assert single["response_model"] is EdgeDuplicate
+    assert single["max_tokens"] == 300
+    assert "orphaned" in str(single["messages"])
+    assert "answered" not in str(single["messages"])
     payloads = [json.loads(line) for line in stream.getvalue().splitlines()]
     assert len(payloads) == 1
     assert payloads[0] == {
@@ -300,7 +317,10 @@ async def test_an_unanswered_item_is_silent_without_a_safe_logger(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider = _FakeProvider(
-        [_resolutions({"item": 0, "duplicate_facts": [], "contradicted_facts": []})]
+        [
+            _resolutions({"item": 0, "duplicate_facts": [], "contradicted_facts": []}),
+            _SINGLE_ANSWER,
+        ]
     )
     batcher = seam.EdgeBatcher(
         provider, batch_size=2, linger_seconds=60.0, max_facts=1000
@@ -310,10 +330,198 @@ async def test_an_unanswered_item_is_silent_without_a_safe_logger(
             batcher.submit(_context("answered"), None),
             batcher.submit(_context("orphaned"), None),
         )
-    assert results[1] == {"duplicate_facts": [], "contradicted_facts": []}
+    assert results[1] == _SINGLE_ANSWER
     assert not any(
         "edge_batch_item_missing" in record.getMessage() for record in caplog.records
     )
+
+
+@pytest.mark.parametrize(
+    "numbers",
+    [
+        pytest.param([1, 2], id="one-based"),
+        pytest.param([0, 0], id="answered-twice"),
+        pytest.param([-1, 1], id="negative"),
+        # 1-based with the last item dropped: in range and unrepeated, but
+        # item 1's answer may belong to item 0.
+        pytest.param([1], id="one-based-partial"),
+    ],
+)
+@pytest.mark.anyio
+async def test_wrongly_numbered_answers_are_all_asked_again(
+    numbers: list[int],
+) -> None:
+    # A 1-based answer would otherwise hand item 1's dedup to item 0 with
+    # nothing flagged; no answer from such a response can be trusted.
+    provider = _FakeProvider(
+        [
+            _resolutions(
+                *[
+                    {"item": n, "duplicate_facts": [7], "contradicted_facts": [7]}
+                    for n in numbers
+                ]
+            ),
+            {"duplicate_facts": [0], "contradicted_facts": []},
+            {"duplicate_facts": [], "contradicted_facts": [1]},
+        ]
+    )
+    stream = StringIO()
+    batcher = seam.EdgeBatcher(
+        provider,
+        batch_size=2,
+        linger_seconds=60.0,
+        max_facts=1000,
+        logger=configure_logging(stream),
+    )
+    first, second = await asyncio.gather(
+        batcher.submit(_context("a"), None), batcher.submit(_context("b"), None)
+    )
+    assert first == {"duplicate_facts": [0], "contradicted_facts": []}
+    assert second == {"duplicate_facts": [], "contradicted_facts": [1]}
+    assert [call["prompt_name"] for call in provider.calls] == [
+        "dedupe_edges.resolve_edge_batch",
+        "dedupe_edges.resolve_edge",
+        "dedupe_edges.resolve_edge",
+    ]
+    payloads = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert [(p["item"], p["size"], p["answered"]) for p in payloads] == [
+        (0, 2, len(numbers)),
+        (1, 2, len(numbers)),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_failed_single_retry_fails_only_its_own_waiter() -> None:
+    error = RuntimeError("provider down")
+    provider = _FakeProvider(
+        [
+            _resolutions({"item": 0, "duplicate_facts": [9], "contradicted_facts": []}),
+            error,
+        ]
+    )
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=2, linger_seconds=60.0, max_facts=1000
+    )
+    results = await asyncio.gather(
+        batcher.submit(_context("answered"), None),
+        batcher.submit(_context("orphaned"), None),
+        return_exceptions=True,
+    )
+    answered, orphan = results
+    assert answered == {"duplicate_facts": [9], "contradicted_facts": []}
+    assert orphan is error
+
+
+class _CancellableRetryProvider:
+    """Answers the combined call with item 0 only, then gates each retry."""
+
+    def __init__(self) -> None:
+        self.combined = asyncio.get_running_loop().create_future()
+        self.release = asyncio.get_running_loop().create_future()
+        self.retried: list[str] = []
+        self.cancelled: list[str] = []
+
+    async def __call__(self, messages: Any, **kwargs: Any) -> dict[str, object]:
+        if kwargs["prompt_name"] == "dedupe_edges.resolve_edge_batch":
+            await self.combined
+            return _resolutions(
+                {"item": 0, "duplicate_facts": [], "contradicted_facts": []}
+            )
+        name = "b" if "edge b" in str(messages) else "c"
+        self.retried.append(name)
+        try:
+            # Shielded: cancelling one retry must not cancel the shared gate.
+            await asyncio.shield(self.release)
+        except asyncio.CancelledError:
+            self.cancelled.append(name)
+            raise
+        return {"duplicate_facts": [], "contradicted_facts": [len(name)]}
+
+
+@pytest.mark.anyio
+async def test_a_waiter_cancelled_during_the_combined_call_is_not_asked_again() -> None:
+    provider = _CancellableRetryProvider()
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=3, linger_seconds=60.0, max_facts=1000
+    )
+    a, b, c = (
+        asyncio.ensure_future(batcher.submit(_context(f"edge {n}"), None))
+        for n in "abc"
+    )
+    for _ in range(3):
+        await asyncio.sleep(0)
+    b.cancel()  # GraphitiIndex._call's timeout, while the combined call is out
+    await asyncio.sleep(0)
+    provider.combined.set_result(None)
+    provider.release.set_result(None)
+    await asyncio.wait_for(asyncio.gather(a, c), 2)
+    assert provider.retried == ["c"]
+
+
+@pytest.mark.anyio
+async def test_a_waiter_cancelled_during_its_retry_cancels_only_that_call() -> None:
+    provider = _CancellableRetryProvider()
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=3, linger_seconds=60.0, max_facts=1000
+    )
+    a, b, c = (
+        asyncio.ensure_future(batcher.submit(_context(f"edge {n}"), None))
+        for n in "abc"
+    )
+    provider.combined.set_result(None)
+    for _ in range(10):  # combined call answers item 0; b and c retry
+        await asyncio.sleep(0)
+    assert sorted(provider.retried) == ["b", "c"]
+    b.cancel()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert provider.cancelled == ["b"]
+    provider.release.set_result(None)
+    assert await asyncio.wait_for(c, 2) == {
+        "duplicate_facts": [],
+        "contradicted_facts": [1],
+    }
+    assert a.done() and not a.cancelled()
+    await asyncio.sleep(0)
+    assert batcher._inflight == set()
+
+
+@pytest.mark.anyio
+async def test_a_flush_cancelled_during_a_single_retry_fails_its_waiter() -> None:
+    gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    class _GatedRetryProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __call__(self, *args: Any, **kwargs: Any) -> dict[str, object]:
+            self.calls += 1
+            if self.calls == 1:
+                return _resolutions(
+                    {"item": 0, "duplicate_facts": [], "contradicted_facts": []}
+                )
+            await gate
+            return {"duplicate_facts": [], "contradicted_facts": []}
+
+    provider = _GatedRetryProvider()
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=2, linger_seconds=60.0, max_facts=1000
+    )
+    answered = asyncio.ensure_future(batcher.submit(_context("a"), None))
+    orphan = asyncio.ensure_future(batcher.submit(_context("b"), None))
+    for _ in range(5):  # combined call returns; the single retry blocks
+        await asyncio.sleep(0)
+    assert provider.calls == 2
+    (flush_task,) = batcher._inflight
+    flush_task.cancel()
+    assert await asyncio.wait_for(answered, 2) == {
+        "duplicate_facts": [],
+        "contradicted_facts": [],
+    }
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(orphan, 2)
+    await asyncio.sleep(0)
+    assert batcher._inflight == set()
 
 
 @pytest.mark.anyio

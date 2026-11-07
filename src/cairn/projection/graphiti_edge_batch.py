@@ -16,6 +16,7 @@ fixture in ``tests/projection/test_graphiti_edge_batch.py`` does.
 """
 
 import asyncio
+import functools
 import logging
 from collections.abc import Awaitable, Callable
 from importlib.metadata import version
@@ -101,6 +102,31 @@ IMPORTANT constraints, per item:
 """,
         ),
     ]
+
+
+def _trusted_answers(
+    parsed: EdgeDuplicateBatch, size: int
+) -> dict[int, EdgeDuplicateItem]:
+    """The combined answer keyed by item, or nothing when its numbering is wrong.
+
+    An item number outside the batch, or one answered twice, means the
+    model is not numbering items as asked (1-based, say), so no answer
+    can be trusted to belong to the item it names. So does an answer
+    without item 0: 1-based numbering that also dropped its last item
+    would otherwise pass. Every item is then asked again on its own.
+    """
+    answers: dict[int, EdgeDuplicateItem] = {}
+    for resolution in parsed.resolutions:
+        if not 0 <= resolution.item < size or resolution.item in answers:
+            return {}
+        answers[resolution.item] = resolution
+    if 0 not in answers:
+        return {}
+    return answers
+
+
+def _cancel_task(task: asyncio.Task[Any], _: asyncio.Future[Any]) -> None:
+    task.cancel()
 
 
 async def _single_resolve(
@@ -257,15 +283,15 @@ class EdgeBatcher:
         _LOGGER.debug(
             "edge_batch_combined size=%d pending=%d", len(batch), len(self._pending)
         )
-        by_item = {resolution.item: resolution for resolution in parsed.resolutions}
-        for index, (_, future, _) in enumerate(batch):
-            resolution = by_item.get(index)
+        answers = _trusted_answers(parsed, len(batch))
+        unanswered = []
+        for index, item in enumerate(batch):
+            resolution = answers.get(index)
             if resolution is None:
-                # Conservative: an unanswered item dedupes against
-                # nothing rather than guessing; content-free log.
-                # `answered` distinguishes "the model dropped one item"
-                # from "the model is answering with the wrong item
-                # numbering and dedup is globally off" — those look
+                # Content-free witness, then the item is asked again on
+                # its own below. `answered` distinguishes "the model
+                # dropped one item" from "the model numbered the items
+                # wrongly and no answer was trusted" — those look
                 # identical without it.
                 if self._logger is not None:
                     self._logger.emit(
@@ -276,17 +302,61 @@ class EdgeBatcher:
                         size=len(batch),
                         answered=len(parsed.resolutions),
                     )
-                payload: dict[str, Any] = {
-                    "duplicate_facts": [],
-                    "contradicted_facts": [],
-                }
-            else:
-                payload = {
-                    "duplicate_facts": resolution.duplicate_facts,
-                    "contradicted_facts": resolution.contradicted_facts,
-                }
+                unanswered.append(item)
+                continue
+            future = item[1]
             if not future.done():
-                future.set_result(payload)
+                future.set_result(
+                    {
+                        "duplicate_facts": resolution.duplicate_facts,
+                        "contradicted_facts": resolution.contradicted_facts,
+                    }
+                )
+        if unanswered:
+            await self._resolve_singly(unanswered)
+
+    async def _resolve_singly(
+        self,
+        items: list[tuple[dict[str, Any], asyncio.Future[dict[str, Any]], int | None]],
+    ) -> None:
+        """Ask each item the un-batched question graphiti would have asked.
+
+        The combined answer left these items out, so each one gets its own
+        small-model call. A failed call fails only its own waiter, as it
+        would without batching; answered items are already settled.
+        """
+        # A waiter cancelled while the combined call was out (a timeout or
+        # shutdown in GraphitiIndex._call) needs no answer, so no call.
+        live = [item for item in items if not item[1].done()]
+        tasks = []
+        for context, future, tokens in live:
+            task = asyncio.ensure_future(
+                _single_resolve(self._original_call, context, tokens)
+            )
+            # The same holds once the call is out: cancel it with its
+            # waiter, leaving the other items' calls running.
+            future.add_done_callback(functools.partial(_cancel_task, task))
+            tasks.append(task)
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        except BaseException as error:
+            # Only this task's own cancellation reaches here; gather has
+            # already cancelled the single calls. Unblock their waiters.
+            for _, future, _ in live:
+                if not future.done():
+                    future.set_exception(error)
+            if not isinstance(error, Exception):
+                raise
+            return
+        for (_, future, _), result in zip(live, results, strict=True):
+            if future.done():
+                continue
+            if isinstance(result, asyncio.CancelledError):
+                future.cancel()
+            elif isinstance(result, BaseException):
+                future.set_exception(result)
+            else:
+                future.set_result(result)
 
 
 class _ContextMessages(list[Message]):

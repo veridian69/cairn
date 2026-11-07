@@ -1,6 +1,7 @@
 package attention
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,5 +135,155 @@ func TestProfileOpenCodeExampleLoads(t *testing.T) {
 	}
 	if p.HostAPIVersion != "2" {
 		t.Fatalf("example API version %q", p.HostAPIVersion)
+	}
+}
+
+// Profiles and credentials get the import sources' rule (issue #200): no other account may be
+// able to replace them or a directory above them.
+func TestProfileAndCredentialRefuseReplaceableLocations(t *testing.T) {
+	write := func(t *testing.T, dirMode, fileMode os.FileMode) (string, string) {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "profile")
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		profile, token := filepath.Join(dir, "profile.json"), filepath.Join(dir, "token")
+		if err := os.WriteFile(profile, []byte(validProfile), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(token, []byte("synthetic-token\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{profile, token} {
+			if err := os.Chmod(path, fileMode); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chmod(dir, dirMode); err != nil {
+			t.Fatal(err)
+		}
+		return profile, token
+	}
+	profile, token := write(t, 0770, 0600)
+	if _, err := LoadProfile(profile); err == nil {
+		t.Fatal("profile in a group-writable directory accepted")
+	}
+	if _, err := ReadCredential(token); err == nil {
+		t.Fatal("credential in a group-writable directory accepted")
+	}
+	profile, _ = write(t, 0700, 0620)
+	if _, err := LoadProfile(profile); err == nil {
+		t.Fatal("group-writable profile accepted")
+	}
+	profile, token = write(t, 0755, 0600)
+	if err := os.Chmod(profile, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProfile(profile); err != nil {
+		t.Fatalf("readable profile refused: %v", err)
+	}
+	if _, err := ReadCredential(token); err != nil {
+		t.Fatalf("private credential refused: %v", err)
+	}
+}
+
+func TestTrustedCARule(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tls")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, []byte("pem"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ca, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkTrustedCA(ca); err != nil {
+		t.Fatalf("readable CA refused: %v", err)
+	}
+	if err := checkTrustedCA(""); err != nil {
+		t.Fatalf("no CA refused: %v", err)
+	}
+	if info, err := os.Lstat("/etc/passwd"); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0022 == 0 {
+		if err := checkTrustedCA("/etc/passwd"); err != nil {
+			t.Fatalf("root-owned CA refused: %v", err)
+		}
+	}
+	link := filepath.Join(dir, "link.pem")
+	if err := os.Symlink(ca, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkTrustedCA(link); err == nil {
+		t.Fatal("symlinked CA accepted")
+	}
+	if err := os.Chmod(ca, 0664); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkTrustedCA(ca); err == nil || !strings.Contains(err.Error(), "must not be writable") {
+		t.Fatalf("group-writable CA accepted: %v", err)
+	}
+	_ = os.Chmod(ca, 0644)
+	if err := os.Chmod(dir, 0775); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkTrustedCA(ca); err == nil || !strings.Contains(err.Error(), "group- or other-writable") {
+		t.Fatalf("CA in a group-writable directory accepted: %v", err)
+	}
+}
+
+func TestConnectRefusesReplaceableCABeforeDialling(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "profile")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	token, ca := filepath.Join(dir, "token"), filepath.Join(dir, "tls", "ca.pem")
+	if err := os.WriteFile(token, []byte("synthetic-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Dir(ca), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ca, []byte("pem"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(ca), 0777); err != nil {
+		t.Fatal(err)
+	}
+	// The endpoint is never dialled: nothing listens there.
+	p := Profile{GardenEndpoint: "https://127.0.0.1:1/mcp", GardenTLSCAFile: ca, CredentialFile: token}
+	if _, err := Connect(context.Background(), p); err == nil || !strings.Contains(err.Error(), "TLS CA file") {
+		t.Fatalf("replaceable CA reached the dial: %v", err)
+	}
+}
+
+// The parent check walks the cleaned path; the reader follows the spelling. "link/.." must not let
+// a CA in a directory others can write pass as the one beside link (Sol, #200).
+func TestTrustedCARefusesNonCanonicalPath(t *testing.T) {
+	base := t.TempDir()
+	trusted, wide := filepath.Join(base, "trusted"), filepath.Join(base, "wide")
+	for _, dir := range []string{trusted, wide, filepath.Join(wide, "sub")} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(wide, "ca.pem"), []byte("pem"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(wide, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(wide, "sub"), filepath.Join(trusted, "link")); err != nil {
+		t.Fatal(err)
+	}
+	// The kernel reads wide/ca.pem; filepath.Clean says trusted/ca.pem.
+	spelled := trusted + "/link/../ca.pem"
+	if err := checkTrustedCA(spelled); err == nil {
+		t.Fatal("CA reached through link/.. into a writable directory accepted")
+	}
+	for _, path := range []string{"relative/ca.pem", trusted + "/./ca.pem", trusted + "//ca.pem"} {
+		if err := checkTrustedCA(path); err == nil {
+			t.Fatalf("non-canonical CA path accepted: %s", path)
+		}
 	}
 }

@@ -45,6 +45,7 @@ from cairn.operations.metrics import Metrics, OutboxQueue
 from cairn.projection.adapter import IndexAdapter
 from cairn.projection.graphiti import GraphitiIndex
 from cairn.projection.memory import build_memory_index
+from cairn.projection.repair import coverage_auditor
 from cairn.runtime.config import CairnConfig
 from cairn.runtime.delivery import run_delivery_loop
 from cairn.runtime.lease import DataDirectoryLease, LeaseError
@@ -438,7 +439,9 @@ def build_application(
     )
     memory_manager = build_session_manager(
         build_memory_server(
-            memory_dispatch, connector_instructions(config.mcp.instructions_realm)
+            memory_dispatch,
+            connector_instructions(config.mcp.instructions_realm),
+            version=__version__,
         )
     )
 
@@ -543,6 +546,11 @@ def build_application(
             # scope on the way out interrupts the loop between passes; a
             # pass already on a worker thread runs to completion, so the
             # confirming transaction is never torn mid-flight (I-25).
+            # I-99: unverified before the first request can arrive, which is
+            # after this startup returns; the loop's audit verifies it.
+            auditor = coverage_auditor(index) if index is not None else None
+            if auditor is not None and config.delivery.repair_cap > 0:
+                auditor.set_coverage_verified(False)
             async with anyio.create_task_group() as delivery_scope:
                 delivery_scope.start_soon(
                     partial(
@@ -552,6 +560,7 @@ def build_application(
                         index=index,
                         interval_seconds=float(config.delivery.interval_seconds),
                         chunk_size=config.delivery.chunk_size,
+                        repair_cap=config.delivery.repair_cap,
                         clock=clock,
                         metrics=metrics,
                         logger=logger,

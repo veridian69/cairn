@@ -712,12 +712,20 @@ PY
 # interrupted removal never looks like a snapshot, and the next run ends it.
 # Garden's shared runtime lease excludes snapshot maintenance meanwhile, as
 # the running daemon would; Garden may be stopped if it was stopped before.
+# A lease timeout exits 75 (EX_TEMPFAIL) with its own message, apart from a
+# failed rename or sweep; either way the archive is already published.
 backups=/var/lib/garden/.garden/backups
 lease=/var/lib/garden/.garden/runtime.lock
-runuser -u ACCOUNT -- flock -s -w 300 "$lease" sh -c '
+status=0
+runuser -u ACCOUNT -- flock -s -w 300 -E 75 "$lease" sh -c '
   mv -T -- "$1/$2" "$1/.deleting-$2" &&
   find "$1" -mindepth 1 -maxdepth 1 -name ".deleting-*" -exec rm -rf -- {} +
-' sh "$backups" "$id"
+' sh "$backups" "$id" || status=$?
+case $status in
+  0) ;;
+  75) echo "garden-backup: archive published; Garden's runtime lease stayed busy for 300 s, so snapshot $id was kept" >&2; exit 75;;
+  *) echo "garden-backup: archive published; removing snapshot $id failed (exit $status)" >&2; exit "$status";;
+esac
 """
     for key, value in (
         ("EXPORT_DIR", shlex.quote(hook["export_dir"])),

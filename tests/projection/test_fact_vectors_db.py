@@ -595,3 +595,34 @@ def test_deletion_after_preflight_is_not_hidden_by_hits_or_limit(
             await driver.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "statement", ["DELETE v", "SET v.dim=99"], ids=["missing", "invalid"]
+)
+def test_audit_names_the_episode_the_vector_gate_refuses(
+    adapter: Any, statement: str
+) -> None:
+    """#204: the audit and the gate agree on what is torn. The damaged
+    episode is present and defective, its neighbour present and healthy, and
+    preflight still refuses the partition."""
+    from cairn.projection.graphiti import GraphitiIndexError
+    from cairn.projection.partition import derive_group_id
+
+    partition = "synthetic\n[]"
+    group = derive_group_id(partition)
+    adapter.project_many((state(), state(OTHER)))
+    driver = adapter._driver.clone(database=group)
+    adapter._call(
+        driver.execute_query(
+            "MATCH (v:CairnFactVector {uuid:$uuid}) " + statement, uuid=OTHER
+        )
+    )
+
+    audit = adapter.coverage_audit(partition)
+
+    assert audit.present == frozenset({IDENTITY, OTHER})
+    assert audit.defective == frozenset({OTHER})
+    assert audit.unidentified == 0
+    with pytest.raises(GraphitiIndexError, match="fact_vector_rebuild_required"):
+        adapter._call(adapter._fact_vector_index().preflight(driver, group))

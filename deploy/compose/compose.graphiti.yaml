@@ -146,7 +146,7 @@ services:
       timeout: 5s
       retries: 3
     stop_grace_period: 30s
-    restart: unless-stopped
+    restart: always
 
   # Compose's init container: the one-shot that hands the index's volume
   # to the index, and the reason the operator has no fifth step to

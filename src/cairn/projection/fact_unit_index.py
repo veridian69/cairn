@@ -15,14 +15,19 @@ from uuid import UUID
 
 from graphiti_core.driver.driver import GraphDriver
 
-from cairn.projection.adapter import ProjectedFactState
+from cairn.projection.adapter import CoverageAudit, ProjectedFactState
 from cairn.projection.fact_chunks import (
     EmbeddedLocalFact,
     UnitSpan,
     chunk_spans,
     embed_local,
 )
-from cairn.projection.fact_vectors import FactRepresentation, FactVectorError, _ready
+from cairn.projection.fact_vectors import (
+    FactRepresentation,
+    FactVectorError,
+    _ready,
+    audit_rows,
+)
 from cairn.projection.semantic_evidence import (
     GRADE_LIMIT,
     PARTITION_LIMIT,
@@ -321,6 +326,14 @@ _COVERAGE_ONLY = (
     + "RETURN count(CASE WHEN valid THEN null ELSE 1 END) = 0 AS coverage_valid\n"
 )
 
+# #204: per-episode verdicts under the same gathered domain and predicate.
+_COVERAGE_ROWS = (
+    _GATHER
+    + "WITH e, coalesce("
+    + _VALID
+    + ", false) AS valid\n"
+    + "RETURN e.uuid AS uuid, valid\n"
+)
 
 # Shared predicate; coverage is retained even for zero hits. Never select chunks
 # before validating all retained facts. Scores examine distinct children once.
@@ -514,6 +527,16 @@ class FactUnitIndex:
             or rows[0]["coverage_valid"] is not True
         ):
             raise FactVectorError("fact_vector_rebuild_required")
+
+    async def audit(self, driver: GraphDriver, group: str) -> CoverageAudit:
+        """Every episode identity this gate sees, with its verdict."""
+        await _ready(driver)
+        rows, _, _ = await driver.execute_query(
+            _COVERAGE_ROWS,
+            group_id=group,
+            representation=local_representation_sha256(),
+        )
+        return audit_rows(rows)
 
     async def search(
         self, driver: GraphDriver, group: str, vector: list[float]
