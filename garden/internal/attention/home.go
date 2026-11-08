@@ -3,6 +3,7 @@ package attention
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -148,6 +149,25 @@ func exactKeys(data []byte, allowed ...string) (map[string]json.RawMessage, erro
 // TokenFile is the protected credential for one identity.
 func (h Home) TokenFile(identity string) string {
 	return filepath.Join(h.Dir, "identities", identity+".token")
+}
+
+// CheckHarnessIdentity refuses a harness session for name when name is a passphrase-sealed human
+// identity. Harness sessions read only identities/<name>.token. This checks by name whether
+// identities/<name>.sealed exists and never opens it, so an agent cannot use a human identity.
+func (h Home) CheckHarnessIdentity(name string) error {
+	root, err := existingHome(h.Dir)
+	if err != nil {
+		return err
+	}
+	defer closeRoot(root)
+	_, sealed, err := identityFiles(root, name)
+	if err != nil {
+		return err
+	}
+	if sealed {
+		return fmt.Errorf("%s is a passphrase-sealed human identity and cannot connect a harness session; use the harness default or a token identity", name)
+	}
+	return nil
 }
 
 // Choice is the Garden identity selected for one harness session.

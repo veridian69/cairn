@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/veridian69/cairn/garden/internal/model"
+	"github.com/veridian69/cairn/garden/internal/remotecli"
 	"github.com/veridian69/cairn/garden/internal/state"
 	"github.com/veridian69/cairn/garden/internal/transport"
 )
@@ -28,8 +30,18 @@ var historyCmd = &cobra.Command{
 	Example: "  garden history --last 200\n" +
 		"  garden history --by claude\n" +
 		"  garden history --thread 3fae21\n" +
-		"  garden history --raw",
+		"  garden history --raw\n" +
+		"  garden history --remote --last 100",
+	PersistentPreRunE: remotePreRun,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		remote, err := remoteRequested(cmd)
+		if err != nil {
+			return err
+		}
+		if remote {
+			return historyRemote()
+		}
+
 		url, err := ReadDaemonURL()
 		if err != nil {
 			return err
@@ -77,14 +89,7 @@ var historyCmd = &cobra.Command{
 			if historyBy != "" && msg.AuthorName != historyBy {
 				continue
 			}
-			ts := msg.CreatedAt.Local().Format("2006-01-02 15:04:05")
-			id := model.ShortID(msg.ID)
-			replyInfo := ""
-			if msg.ReplyTo != nil {
-				r := model.ShortID(*msg.ReplyTo)
-				replyInfo = fmt.Sprintf(" (re: %s)", r)
-			}
-			fmt.Printf("[%s] %s %s%s: %s\n", ts, id, msg.AuthorName, replyInfo, renderContent(msg, reasons, historyRaw))
+			fmt.Println(formatHistoryLine(msg, renderContent(msg, reasons, historyRaw)))
 			count++
 		}
 		if count == 0 {
@@ -99,7 +104,66 @@ func init() {
 	historyCmd.Flags().StringVar(&historyBy, "by", "", "filter by author")
 	historyCmd.Flags().BoolVar(&historyRaw, "raw", false, "show raw content for redacted messages")
 	historyCmd.Flags().StringVar(&historyThread, "thread", "", "follow a reply chain from a message ID")
+	addRemoteFlag(historyCmd)
 	rootCmd.AddCommand(historyCmd)
+}
+
+// formatHistoryLine renders one history row: timestamp, short ID, author, optional reply, content.
+func formatHistoryLine(msg model.Message, content string) string {
+	ts := msg.CreatedAt.Local().Format("2006-01-02 15:04:05")
+	replyInfo := ""
+	if msg.ReplyTo != nil {
+		replyInfo = fmt.Sprintf(" (re: %s)", model.ShortID(*msg.ReplyTo))
+	}
+	return fmt.Sprintf("[%s] %s %s%s: %s", ts, model.ShortID(msg.ID), msg.AuthorName, replyInfo, content)
+}
+
+// historyRemote shows the newest --last messages from the Garden gateway. The gateway's tail read
+// is the only window remote mode has, so a reply chain and the unredacted view are local-only.
+func historyRemote() error {
+	if historyThread != "" {
+		return errors.New("--thread needs the full history, which remote mode does not read; use local history")
+	}
+	if historyRaw {
+		return errors.New("--raw is not available in remote mode; the gateway already renders redactions")
+	}
+	if historyLast < 1 || historyLast > remotecli.MaxTail {
+		return fmt.Errorf("--last must be 1 to %d in remote mode", remotecli.MaxTail)
+	}
+
+	// The session opens without the call deadline: unlocking a sealed identity waits for the
+	// passphrase, which must not use up the time for the call (Val's review, 8 November 2026).
+	// Each gateway request is still bounded by the client's own HTTP timeout.
+	open, stop := context.WithCancel(context.Background())
+	defer stop()
+	session, err := openRemote(open)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	ctx, cancel := context.WithTimeout(open, remoteCallTimeout)
+	defer cancel()
+
+	window, err := remotecli.Tail(ctx, session, historyLast)
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, raw := range window.Messages {
+		if historyBy != "" && raw.AuthorName != historyBy {
+			continue
+		}
+		msg, err := remotecli.Convert(raw)
+		if err != nil {
+			return err
+		}
+		fmt.Println(formatHistoryLine(msg, msg.Content))
+		count++
+	}
+	if count == 0 {
+		fmt.Println("(no messages)")
+	}
+	return nil
 }
 
 func renderContent(msg model.Message, reasons map[string]string, raw bool) string {

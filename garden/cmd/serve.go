@@ -3,7 +3,10 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -39,6 +42,21 @@ var serveCmd = &cobra.Command{
 		httpServer := &http.Server{Addr: cfg.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 		done := make(chan struct{})
 		defer close(done)
+		// SIGHUP rereads --config. Reload applies only principal changes; anything else is refused.
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer signal.Stop(hup)
+		go func() {
+			principals := cfg.Principals
+			for {
+				select {
+				case <-done:
+					return
+				case <-hup:
+					principals = reloadFromFile(ctx, srv, serveConfig, version, principals, os.Stderr)
+				}
+			}
+		}()
 		go func() {
 			select {
 			case <-ctx.Done():
@@ -59,6 +77,35 @@ var serveCmd = &cobra.Command{
 		}
 		return err
 	},
+}
+
+// reloadFromFile applies the configuration at path to srv and writes one line to out. It returns
+// the principal map now in force: the new one on success, the current one when the reload is refused.
+func reloadFromFile(ctx context.Context, srv *garden.Server, path, version string, current map[string]string, out io.Writer) map[string]string {
+	next, err := garden.LoadConfig(path)
+	if err == nil {
+		next.Version = version
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err = srv.Reload(rctx, next)
+		cancel()
+	}
+	if err != nil {
+		fmt.Fprintf(out, "garden: reload of %s refused, keeping the running configuration: %v\n", path, err)
+		return current
+	}
+	added, removed := 0, 0
+	for id := range next.Principals {
+		if _, ok := current[id]; !ok {
+			added++
+		}
+	}
+	for id := range current {
+		if _, ok := next.Principals[id]; !ok {
+			removed++
+		}
+	}
+	fmt.Fprintf(out, "garden: reloaded %s: %d principal(s) added, %d removed\n", path, added, removed)
+	return next.Principals
 }
 
 func init() {

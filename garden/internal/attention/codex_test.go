@@ -215,9 +215,9 @@ func TestCodexAdapterDoneRemainsStableAcrossReconnect(t *testing.T) {
 	}
 }
 
-// The server's request is refused with -32601 by the adapter (checked by the
-// fake), and the turn then proceeds normally.
-func TestCodexRefusesServerRequestsWithMethodNotFound(t *testing.T) {
+// The server's request is left unanswered by the adapter (checked by the fake), and the turn
+// then proceeds normally.
+func TestCodexLeavesServerRequestsUnanswered(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	fake := newFakeCodex(t, "msg-one", "server-request")
@@ -228,6 +228,12 @@ func TestCodexRefusesServerRequestsWithMethodNotFound(t *testing.T) {
 	defer host.Close()
 	if err := host.Deliver(ctx, Event{ID: "msg-one", Payload: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.answered) != 0 {
+		t.Fatalf("adapter answered host requests %v; they belong to the human's client", fake.answered)
 	}
 }
 
@@ -303,6 +309,8 @@ type fakeCodex struct {
 	mu      sync.Mutex
 	conns   int
 	seen    []string
+	// answered records host requests the adapter answered; it must never answer one.
+	answered []string
 }
 
 func newFakeCodex(t *testing.T, message string, modes ...string) *fakeCodex {
@@ -359,6 +367,12 @@ func (f *fakeCodex) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		method, _ := frame["method"].(string)
+		if id, ok := frame["id"].(string); ok && method == "" && strings.HasPrefix(id, "srv-") {
+			f.mu.Lock()
+			f.answered = append(f.answered, id)
+			f.mu.Unlock()
+			continue
+		}
 		if method == "" || method == "initialized" {
 			continue
 		}
@@ -463,19 +477,9 @@ func (f *fakeCodex) handle(ctx context.Context, conn *websocket.Conn, mode strin
 			f.t.Errorf("turn/start sent to an active thread")
 			return false
 		case "server-request":
-			// A host request must be refused with -32601 before the turn proceeds.
+			// A host request must be left unanswered (issue 156), and the turn still proceeds. Any
+			// answer would reach the fake's read loop as a frame without a method and fail there.
 			if f.send(ctx, conn, map[string]any{"id": "srv-1", "method": "item/tool/call", "params": map[string]any{}}) != nil {
-				return false
-			}
-			_, data, err := conn.Read(ctx)
-			var answer struct {
-				ID    string `json:"id"`
-				Error *struct {
-					Code int `json:"code"`
-				} `json:"error"`
-			}
-			if err != nil || json.Unmarshal(data, &answer) != nil || answer.ID != "srv-1" || answer.Error == nil || answer.Error.Code != -32601 {
-				f.t.Errorf("server request not refused with -32601: %q", data)
 				return false
 			}
 		}

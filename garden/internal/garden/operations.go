@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/veridian69/cairn/garden/internal/model"
+	"github.com/veridian69/cairn/garden/internal/transport"
 )
 
 func (s *Server) render(m model.Message, seq uint64) (Message, error) {
@@ -84,7 +85,7 @@ func (s *Server) send(ctx context.Context, principal string, a SendArgs) (SendRe
 		return SendResult{}, failure("invalid_argument", "Invalid message content, recipients or reply ID")
 	}
 	names := map[string]bool{}
-	for _, name := range s.cfg.Principals {
+	for _, name := range s.principalMap() {
 		names[name] = true
 	}
 	seen := map[string]bool{}
@@ -242,7 +243,7 @@ func (s *Server) recordLoopGuard(ctx context.Context, id string, seq, first uint
 // is deliverable. Inbox rows of principals removed from the configuration are retained but not listed.
 func (s *Server) presenceByName(ctx context.Context, now time.Time) (map[string]Presence, error) {
 	configured := map[string]bool{}
-	for _, name := range s.cfg.Principals {
+	for _, name := range s.principalMap() {
 		configured[name] = true
 	}
 	rows, err := s.sql.QueryContext(ctx, "SELECT name,consumer,lease_until,deliverable FROM garden_inbox ORDER BY name")
@@ -310,12 +311,23 @@ func (s *Server) heartbeat(ctx context.Context, principal string, a HeartbeatArg
 	return HeartbeatResult{Generation: b.generation, LeaseExpiresAt: time.Unix(0, b.leaseUntil).UTC().Format(time.RFC3339Nano), Deliverable: b.deliverable}, nil
 }
 
+// historyJSONBudget caps the JSON records in one history response. Reserve envelope space and
+// cap the records themselves: MCP repeats this JSON inside a text-content string, which can at
+// most double escaping, so 2 MiB structured output stays comfortably under the 8 MiB wire cap.
+const historyJSONBudget = 2 * 1024 * 1024
+
 func (s *Server) read(ctx context.Context, principal string, a ReadArgs) (ReadResult, error) {
-	if a.Limit < 0 || a.Limit > 100 || (a.AfterSeq > 0 && a.Generation == "") {
-		return ReadResult{}, failure("invalid_argument", "History requires limit 1..100 and a generation with after_seq")
-	}
-	if a.Limit == 0 {
-		a.Limit = 50
+	if a.Tail != 0 {
+		if a.Tail < 0 || a.Tail > 100 || a.AfterSeq != 0 || a.Limit != 0 {
+			return ReadResult{}, failure("invalid_argument", "Tail requires 1..100 without after_seq or limit")
+		}
+	} else {
+		if a.Limit < 0 || a.Limit > 100 || (a.AfterSeq > 0 && a.Generation == "") {
+			return ReadResult{}, failure("invalid_argument", "History requires limit 1..100 and a generation with after_seq")
+		}
+		if a.Limit == 0 {
+			a.Limit = 50
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -325,6 +337,9 @@ func (s *Server) read(ctx context.Context, principal string, a ReadArgs) (ReadRe
 	}
 	if a.Generation != "" && a.Generation != b.generation {
 		return ReadResult{}, failure("stream_reset", "History cursor belongs to another stream generation")
+	}
+	if a.Tail != 0 {
+		return s.readTail(ctx, p, b.generation, a.Tail)
 	}
 	after := a.AfterSeq
 	if after > p.Last {
@@ -337,10 +352,6 @@ func (s *Server) read(ctx context.Context, principal string, a ReadArgs) (ReadRe
 		return ReadResult{}, failure("retention_gap", "History cursor precedes retained messages")
 	}
 	out := ReadResult{Messages: []Message{}, Generation: b.generation, NextSeq: after}
-	// Reserve envelope space and cap the JSON records themselves. MCP repeats
-	// this JSON inside a text-content string, which can at most double escaping;
-	// 2 MiB structured output therefore stays comfortably under the 8 MiB wire cap.
-	const historyJSONBudget = 2 * 1024 * 1024
 	encodedBytes := 1024
 	for seq := after + 1; seq <= p.Last && len(out.Messages) < a.Limit; seq++ {
 		m, e := s.exact(ctx, seq)
@@ -366,6 +377,42 @@ func (s *Server) read(ctx context.Context, principal string, a ReadArgs) (ReadRe
 		out.NextSeq = seq
 	}
 	out.More = out.NextSeq < p.Last
+	return out, nil
+}
+
+// readTail returns the newest n retained messages in ascending order. It walks back from the
+// tail, so when the history budget binds it drops the oldest messages of the window and never
+// the newest. More stays false: a tail has no older cursor to page back with.
+func (s *Server) readTail(ctx context.Context, p transport.Position, generation string, n int) (ReadResult, error) {
+	newestFirst := []Message{}
+	encodedBytes := 1024
+	for seq := p.Last; len(newestFirst) < n && seq >= p.First && seq > 0; seq-- {
+		m, err := s.exact(ctx, seq)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		msg, err := s.render(m, seq)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		encoded, err := json.Marshal(msg)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		if encodedBytes+len(encoded)+1 > historyJSONBudget {
+			if len(newestFirst) == 0 {
+				return ReadResult{}, failure("unavailable", "Garden message exceeds the history response budget")
+			}
+			break
+		}
+		encodedBytes += len(encoded) + 1
+		newestFirst = append(newestFirst, msg)
+	}
+	slices.Reverse(newestFirst)
+	out := ReadResult{Messages: newestFirst, Generation: generation, NextSeq: p.Last}
+	if len(out.Messages) > 0 {
+		out.NextSeq = out.Messages[len(out.Messages)-1].Sequence
+	}
 	return out, nil
 }
 func (s *Server) poll(ctx context.Context, principal string, a PollArgs) (PollResult, error) {

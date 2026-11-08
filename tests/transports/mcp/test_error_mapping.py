@@ -661,6 +661,10 @@ def test_the_admitted_methods_are_the_handshake_and_the_surface() -> None:
     *server-initiated* notifications, and this one is the client's half of
     the ``initialize`` sequence. Refusing it would refuse every conforming
     client while the three protocol methods still appeared to work.
+
+    ``notifications/cancelled`` is the client's too: it is sent when a user
+    interrupts a call, and refusing it ended Claude Code's stdio bridge on
+    7 November 2026.
     """
     assert ADMITTED_METHODS == {
         "initialize",
@@ -668,7 +672,41 @@ def test_the_admitted_methods_are_the_handshake_and_the_surface() -> None:
         "tools/list",
         "tools/call",
         "notifications/initialized",
+        "notifications/cancelled",
     }
+
+
+@pytest.mark.anyio
+async def test_a_cancellation_is_accepted_and_the_session_carries_on(
+    tmp_path: Path,
+) -> None:
+    """An interrupted call's ``notifications/cancelled`` is accepted like any
+    notification, and the next call still works. A malformed one is still
+    refused by the screen, never handed to the SDK."""
+    config = make_config(tmp_path)
+    token = credential(config.paths.data)
+    cancelled = {
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": 7, "reason": "User interrupted"},
+    }
+    malformed = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": "x"}
+    instance = {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {"name": "instance", "arguments": {}},
+    }
+
+    async with running(build_application(config)) as client:
+        first = await post(client, token, content=json.dumps(cancelled))
+        second = await post(client, token, content=json.dumps(malformed))
+        third = await post(client, token, content=json.dumps(instance))
+
+    assert first.status_code == 202
+    assert second.status_code == 400
+    assert third.status_code == 200
+    assert third.json()["result"]["isError"] is False
 
 
 def test_the_screened_tool_names_are_the_advertised_registry() -> None:

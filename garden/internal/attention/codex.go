@@ -211,15 +211,14 @@ func (h *Codex) read() {
 			return
 		}
 		if head.Method != "" {
-			// Never grant a permission or answer a host request on an agent's behalf.
+			// Never grant a permission or answer a host request on an agent's behalf. Replying with
+			// an error is an answer too: Codex took it as a refusal and failed the human's own tool
+			// calls in the attended thread (issue 156). Host requests are left for the human's
+			// client to answer.
 			if len(head.ID) > 0 {
-				ctx, cancel := context.WithTimeout(context.Background(), codexCallTimeout)
-				err := h.write(ctx, map[string]any{"id": head.ID, "error": map[string]any{"code": -32601, "message": "Garden adapter does not handle host approvals or requests"}})
-				cancel()
-				if err != nil {
-					return
-				}
-			} else if head.Method == "thread/closed" || head.Method == "thread/archived" {
+				continue
+			}
+			if head.Method == "thread/closed" || head.Method == "thread/archived" {
 				var notice struct {
 					Params struct {
 						ThreadID string `json:"threadId"`

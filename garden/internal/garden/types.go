@@ -25,6 +25,8 @@ type ReadArgs struct {
 	AfterSeq   uint64 `json:"after_seq,omitempty"`
 	Generation string `json:"generation,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
+	// Tail asks for the newest Tail messages (1..100) instead of a page after AfterSeq.
+	Tail int `json:"tail,omitempty"`
 }
 
 // PollArgs identifies one adapter process and its maximum wait.

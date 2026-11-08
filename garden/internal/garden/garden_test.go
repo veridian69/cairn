@@ -35,6 +35,8 @@ type fixture struct {
 	mu       sync.Mutex
 	denied   map[string]bool
 	readonly map[string]bool
+	// tokens maps the bearer tokens the fake Cairn accepts to principal IDs; guarded by mu.
+	tokens map[string]string
 	// now, when set before start, replaces the gateway clock for lease and loop-guard tests.
 	now func() time.Time
 }
@@ -42,19 +44,16 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture { return fixtureBeforeStart(t, nil) }
 func fixtureBeforeStart(t *testing.T, before func(*fixture)) *fixture {
 	t.Helper()
-	f := &fixture{t: t, denied: map[string]bool{}, readonly: map[string]bool{}}
+	f := &fixture{t: t, denied: map[string]bool{}, readonly: map[string]bool{}, tokens: map[string]string{"alice": principalA, "bob": principalB}}
 	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		f.mu.Lock()
 		denied, ro := f.denied[token], f.readonly[token]
+		id, known := f.tokens[token]
 		f.mu.Unlock()
-		if denied || (token != "alice" && token != "bob") {
+		if denied || !known {
 			w.WriteHeader(401)
 			return
-		}
-		id := principalA
-		if token == "bob" {
-			id = principalB
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"instance_id": instance, "product_version": "0.1.0", "contract_identity": "cairn.memory/v1", "contract_digest": strings.Repeat("a", 64), "mcp_contract_digest": strings.Repeat("b", 64), "principal_id": id, "principal_kind": "workload", "scope": map[string]any{"realm": "test", "segments": []any{}}, "classification": "internal", "permissions": map[string]bool{"retrieve": true, "ingest": !ro, "promote": false, "invalidate": false}, "evaluated_at": "2026-09-17T00:00:00.000000Z", "permission_basis": "current_grants_only"})

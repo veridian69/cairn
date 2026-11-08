@@ -66,3 +66,4 @@ integration: $(CACHE_DIR) build
 	GARDEN_CAIRN_PYTHON="$(GARDEN_CAIRN_PYTHON)" $(GO) test -count=1 -race -timeout 180s ./internal/garden -run '^(TestRealCairnGardenDelivery|TestRealCairnGardenTLSCompatibility)$$'
 	GARDEN_TEST_BINARY="$(CURDIR)/garden" $(GO) test -count=1 -race -timeout 60s ./internal/attention -run '^TestAttentionAdaptersEndToEndWithCentralGarden$$'
 	cd .. && GARDEN_TEST_BINARY="$(CURDIR)/garden" "$(GARDEN_CAIRN_PYTHON)" -m pytest tests/installer/test_garden_live.py -q -o addopts=''
+	GARDEN_TEST_BINARY="$(CURDIR)/garden" GARDEN_CAIRN_PYTHON="$(GARDEN_CAIRN_PYTHON)" "$(GARDEN_CAIRN_PYTHON)" -m unittest discover -s integration -p 'test_invite_e2e.py' -v
