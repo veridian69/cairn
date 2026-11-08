@@ -40,6 +40,7 @@ from mcp.types import PARSE_ERROR as JSONRPC_PARSE_ERROR
 from mcp.types import (
     CallToolRequest,
     CallToolResult,
+    CancelledNotification,
     InitializedNotification,
     InitializeRequest,
     JSONRPCNotification,
@@ -287,6 +288,10 @@ ADMITTED_METHODS: frozenset[str] = frozenset(
         "tools/list",
         TOOLS_CALL_METHOD,
         "notifications/initialized",
+        # A client sends this when its user interrupts a call. The server is stateless and has
+        # nothing to cancel, but refusing it with 400 ended Claude Code's stdio bridge, and with
+        # it every later Cairn call in that session (7 November 2026).
+        "notifications/cancelled",
     }
 )
 
@@ -332,6 +337,7 @@ _REQUEST_MODEL_BY_METHOD: dict[str, type[BaseModel]] = {
 
 _NOTIFICATION_MODEL_BY_METHOD: dict[str, type[BaseModel]] = {
     "notifications/initialized": InitializedNotification,
+    "notifications/cancelled": CancelledNotification,
 }
 
 

@@ -58,9 +58,19 @@ func (s *Server) initStore(ctx context.Context, generation string, tail uint64) 
 	if err != nil {
 		return err
 	}
-	for principal, name := range s.cfg.Principals {
+	if err = s.enrolPrincipals(ctx, tx, s.principalMap(), generation, tail); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// enrolPrincipals gives every principal without an inbox one at generation and tail, so it sees
+// only messages sent after enrolment. A principal that already has an inbox must keep its name
+// and participant. Startup and principal reload both enrol through here, in the caller's transaction.
+func (s *Server) enrolPrincipals(ctx context.Context, tx *sql.Tx, principals map[string]string, generation string, tail uint64) error {
+	for principal, name := range principals {
 		var oldName, participant string
-		err = tx.QueryRowContext(ctx, "SELECT name,participant FROM garden_inbox WHERE principal=?", principal).Scan(&oldName, &participant)
+		err := tx.QueryRowContext(ctx, "SELECT name,participant FROM garden_inbox WHERE principal=?", principal).Scan(&oldName, &participant)
 		if err == nil {
 			if name != oldName {
 				return errors.New("Garden principal name cannot be rebound")
@@ -82,7 +92,7 @@ func (s *Server) initStore(ctx context.Context, generation string, tail uint64) 
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // addColumnIfMissing upgrades tables created by an older schema; CREATE TABLE IF NOT EXISTS never adds columns.

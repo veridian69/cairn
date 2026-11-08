@@ -123,6 +123,52 @@ class MCPConfigTests(unittest.TestCase):
         self.run_helper("codex", "--remove")
         self.assertEqual(self.config.read_bytes(), before + extra)
 
+    def test_codex_tool_approvals_inside_the_block_are_tolerated_and_removed(self):
+        # Codex writes "always allow" as a tools table inside the managed block (issue 156).
+        self.config = self.root / "config.toml"
+        before = b'model = "custom"\n'
+        self.config.write_bytes(before)
+        self.run_helper("codex")
+        text = self.config.read_text()
+        approval = '[mcp_servers.garden.tools.status]\napproval_mode = "approve"\n'
+        marker = "# END garden-config managed MCP\n"
+        self.config.write_text(text.replace(marker, approval + marker))
+        approved = self.config.read_bytes()
+        self.run_helper("codex")
+        self.assertEqual(self.config.read_bytes(), approved)
+        doc = tomllib.loads(self.config.read_text())
+        self.assertEqual(
+            doc["mcp_servers"]["garden"]["tools"]["status"]["approval_mode"], "approve"
+        )
+        self.run_helper("codex", "--remove")
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_codex_tool_approval_outside_the_block_blocks_removal_clearly(self):
+        self.config = self.root / "config.toml"
+        self.config.write_bytes(b'model = "custom"\n')
+        self.run_helper("codex")
+        self.config.write_text(
+            self.config.read_text()
+            + '\n[mcp_servers.garden.tools.send_message]\napproval_mode = "approve"\n'
+        )
+        self.run_helper("codex")
+        changed = self.config.read_bytes()
+        result = self.run_helper("codex", "--remove", success=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tool approval tables", result.stderr)
+        self.assertEqual(self.config.read_bytes(), changed)
+
+    def test_codex_other_changes_inside_the_block_are_still_refused(self):
+        self.config = self.root / "config.toml"
+        self.config.write_bytes(b"")
+        self.run_helper("codex")
+        marker = "# END garden-config managed MCP\n"
+        self.config.write_text(
+            self.config.read_text().replace(marker, 'env = { X = "1" }\n' + marker)
+        )
+        result = self.run_helper("codex", success=False)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_verified_tls_profile_fields_work_for_all_hosts_without_reading_ca(self):
         self.data.update(
             garden_tls_ca_file="relative-missing-ca.pem",

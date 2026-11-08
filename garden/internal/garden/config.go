@@ -28,6 +28,8 @@ type Config struct {
 	TLSKeyFile     string            `json:"tls_key_file,omitempty"`
 	Auth           gardenauth.Config `json:"auth"`
 	Principals     map[string]string `json:"principals"`
+	// InvitesDir holds sealed invites that POST /enrol redeems; empty disables enrolment.
+	InvitesDir string `json:"invites_dir,omitempty"`
 	// LoopGuard bounds agent-to-agent attention; zero fields take the defaults.
 	LoopGuard LoopGuard `json:"loop_guard,omitempty"`
 	// Version is the build's release version, reported as the MCP server
@@ -112,6 +114,10 @@ func (c Config) validate() error {
 	}
 	if !filepath.IsAbs(c.DataDir) || !filepath.IsAbs(c.DaemonURLFile) {
 		return errors.New("Garden data_dir and daemon_url_file must be absolute")
+	}
+	// Existence is checked per request, so a missing directory answers 503 rather than blocking start.
+	if c.InvitesDir != "" && !filepath.IsAbs(c.InvitesDir) {
+		return errors.New("Garden invites_dir must be absolute")
 	}
 	if len(c.Principals) == 0 || len(c.Principals) > 1000 {
 		return errors.New("Garden requires 1..1000 principals")

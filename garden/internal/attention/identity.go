@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,6 +31,9 @@ func AddIdentity(dest, name, tokenFile, harness string) (AddIdentityResult, erro
 	result := AddIdentityResult{Name: name, Harness: harness}
 	if !participantName.MatchString(name) {
 		return result, errInvalidIdentity
+	}
+	if harness == "cli" {
+		return result, errors.New("the cli default belongs to a passphrase-sealed identity; install one with `garden join`")
 	}
 	if harness != "" && !slices.Contains(legacyHarnesses, harness) {
 		return result, fmt.Errorf("--default: unknown harness %q", harness)
@@ -63,6 +67,11 @@ func AddIdentity(dest, name, tokenFile, harness string) (AddIdentityResult, erro
 	// Plan, under the lock: the identities directory, any existing token, and the default.
 	if err := rootExistingPrivateDir(root, "identities"); err != nil {
 		return result, err
+	}
+	if _, sealed, err := identityFiles(root, name); err != nil {
+		return result, err
+	} else if sealed {
+		return result, fmt.Errorf("%s is a passphrase-sealed identity; a name has a .token or a .sealed file, never both", name)
 	}
 	rel := "identities/" + name + ".token"
 	current, exists, err := rootReadFile(root, rel, 64*1024, true)
@@ -112,6 +121,31 @@ func AddIdentity(dest, name, tokenFile, harness string) (AddIdentityResult, erro
 		result.DefaultSet = true
 	}
 	return result, nil
+}
+
+// identityFiles reports which of identities/<name>.token and identities/<name>.sealed exist, by
+// name only; neither file is opened. A name has one of them, never both. A nil root has none.
+func identityFiles(root *os.Root, name string) (token, sealed bool, err error) {
+	if root == nil {
+		return false, false, nil
+	}
+	present := func(rel string) (bool, error) {
+		_, err := root.Lstat(rel)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("cannot inspect %s", rel)
+		}
+		return true, nil
+	}
+	if token, err = present("identities/" + name + ".token"); err != nil {
+		return false, false, err
+	}
+	if sealed, err = present("identities/" + name + ".sealed"); err != nil {
+		return false, false, err
+	}
+	return token, sealed, nil
 }
 
 // defaultsUpdate reads garden.json under the home lock and returns it with one harness default

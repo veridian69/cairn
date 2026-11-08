@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "source_revision": "52f300315f83bdb68609280f47927cc08c6ad786",
+  "source_revision": "dad13d22d1b9c533352df8d9ddfe7ad88f01c461",
   "release_configuration": {
-    "files.json": "a492686c7d7be98c1d797d808ebba82ca100d4a0959e2128bc824bd488a67f83",
+    "files.json": "0fa71ae8030e4c6cdf37b218401e76cc81a98c0776fb4e3d4ea0575f97e06431",
     "export.py": "32fcebedc2e13acfb352b904abd206f71555754ce7807b18af0e65769ccaa0b1",
     "public_tests.py": "160e2793eed5ac64891bedefa3b036e13e23c8a8d8aef9d8bbc215faf79e84b4",
     "sanitise.py": "acebb36afb368cdd1839aee4c248962e8fdc1a9fe2a8bc2a6bff8a0c5efad746",
-    "overlay_set_sha256": "0303b111b38606372d2f24eca52865e0bd858f77f74c5c94897624ca98c95df1"
+    "overlay_set_sha256": "09bbeb3b57596986547ea11e4e2de9dd96f5da3898013713c6da21f618115a3c"
   },
   "files": {
     ".dockerignore": {
@@ -66,7 +66,7 @@
       "mode": 420
     },
     "Dockerfile": {
-      "sha256": "ddb4b077c6c04595ae3b038994bcb30bb44e4da477208a4960926a59056ff9b1",
+      "sha256": "57b80a3bd6e29fb09184ff200f92382e057b5fd131f1af11cd20e939fd674ebf",
       "mode": 420
     },
     "LICENSE-Apache-2.0.txt": {
@@ -86,11 +86,11 @@
       "mode": 420
     },
     "README.md": {
-      "sha256": "08c9d44ee86acf7c2730d9a6e6c79cf2febaa47e2c7329f99febbc6e6fceb09b",
+      "sha256": "641df124fb803238f409c067d987d0481c2666b989e7ecc206dcf6366eaa1653",
       "mode": 420
     },
     "SECURITY.md": {
-      "sha256": "d4eff8afcf7f11463b88901c12e43fd236822aebdfcbb59246ba85969c7a0c3f",
+      "sha256": "6fae05dd65f1c9f01b150cebff8fd92a99bb515d668dbdd0cbe6335a669ac2cf",
       "mode": 420
     },
     "cairn-install": {
@@ -273,8 +273,12 @@
       "sha256": "2319f6fb4758ad083f1a01b77d3a23db927de8a41fbb9141d97b015057ba92ef",
       "mode": 420
     },
+    "cairn-mcp/internal/upstream/refusal_test.go": {
+      "sha256": "4e47f522150ad8a2a7cb53c0be78b0555a3135c240da5c0e0d66612846e350a9",
+      "mode": 420
+    },
     "cairn-mcp/internal/upstream/session.go": {
-      "sha256": "9567c7f3613562e53a676b06167a0f1d215b24ed1a7221f58f876385f199846a",
+      "sha256": "b62b951d92decbcefde1094322424a3d014375feae81cb654ffa3636575d7988",
       "mode": 420
     },
     "cairn-mcp/internal/upstream/session_test.go": {
@@ -350,7 +354,7 @@
       "mode": 420
     },
     "deploy/compose/README.md": {
-      "sha256": "fb1607b091849cf3741ff758282ede0c259f33e5fb3a1b50bd07abc86296f52f",
+      "sha256": "e1c023babb90a0c8dde31efc259fe444a1d80fe9d6a584f5113856dcd1d80295",
       "mode": 420
     },
     "deploy/compose/compose.edge.yaml": {
@@ -426,7 +430,7 @@
       "mode": 493
     },
     "deploy/images.lock": {
-      "sha256": "28a9dbbbf674dc72ab307dc89b5fee26d5d3aa7154a997f6d8eb37b1eef6dd4e",
+      "sha256": "fb072f96000a644f07fb7a785b85e871eec82d7bd37786854484a634fc0e18c0",
       "mode": 420
     },
     "deploy/kustomize/base/README.md": {
@@ -454,7 +458,7 @@
       "mode": 420
     },
     "deploy/kustomize/base/statefulset.yaml": {
-      "sha256": "ad908b8f2258b59008604efcf043944e8bc138fb5c5965a18643827607f1bf31",
+      "sha256": "38d9a53a65f1ec869816cfbee861d3c97dcb9b45635c524948255f9f4935525e",
       "mode": 420
     },
     "deploy/kustomize/components/falkordb/README.md": {
@@ -574,11 +578,11 @@
       "mode": 420
     },
     "deploy/kustomize/rendered/base.yaml": {
-      "sha256": "ec6efc6993b784cb57356b667b7752abbcafdb6a66b4355611471f1d96fc17c3",
+      "sha256": "12b6d27ca6d9f9b3bb5f43868b0f7c42f2532d9f4a1a09636335fb959bd4d9aa",
       "mode": 420
     },
     "deploy/kustomize/rendered/base.yaml.sha256": {
-      "sha256": "8f2e8a8caa1468902efd3f86f26e370e8cc04f75b3f0be03ced960e56cbe8da0",
+      "sha256": "689f49962577acb5042b5f9684a782e4b7c607f5cd00d24552029190dddbdf5d",
       "mode": 420
     },
     "deploy/kustomize/rendered/egress-gateway-reference.yaml": {
@@ -598,35 +602,35 @@
       "mode": 420
     },
     "deploy/kustomize/rendered/kind.yaml": {
-      "sha256": "ad7054ada1fe694e6c38458f311cdec3a839919dc7dc432123fe9f2957724782",
+      "sha256": "f776aa4f02bf9ba31fc0b6b3eaf91bb35720e24ea1547cb95928c9c15e1000b6",
       "mode": 420
     },
     "deploy/kustomize/rendered/kind.yaml.sha256": {
-      "sha256": "dc86cc7967d6038e0bbf39d5ee0b1bf5fcefa17af26bff275643879853128e71",
+      "sha256": "f093f419e3843cb365f1201e517e2892d7a1b9feb6a42969ca419ce8b7404f7f",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes-retrieval.yaml": {
-      "sha256": "de2f0734112a82b5dfbce47f342ffbcbf064a222893c87e95d10ee395941b893",
+      "sha256": "0b67fbdeb3fb462e02c1d35a448bf63c87043759cc144909b28989b5fcdc09e2",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes-retrieval.yaml.sha256": {
-      "sha256": "8e4eeb2daa3a586020a224a6d954674aea2fc2971907ab43ac93f37a4da877cb",
+      "sha256": "2fb06a09d690717057357c67644228cabc6ed7dc818ed742ebc2fbb70b154581",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes.yaml": {
-      "sha256": "f4bddb285aeb2834171dbeccc5de3d3db7a252c62946898cb7eaeec6fd020bcf",
+      "sha256": "e3cc56b4ad1c0fbafb6e695d5d767b5860fcea51791d376f9be91815f725764b",
       "mode": 420
     },
     "deploy/kustomize/rendered/kubernetes.yaml.sha256": {
-      "sha256": "fddf2483eb9e145106134f6b87eddf970211d38f75cc0fee638170a5a8e00ea0",
+      "sha256": "33a462687127534dfe8c46d6814d87083b20d589793d7b8182c049f163bc36c1",
       "mode": 420
     },
     "deploy/kustomize/rendered/openshift.yaml": {
-      "sha256": "ec6efc6993b784cb57356b667b7752abbcafdb6a66b4355611471f1d96fc17c3",
+      "sha256": "12b6d27ca6d9f9b3bb5f43868b0f7c42f2532d9f4a1a09636335fb959bd4d9aa",
       "mode": 420
     },
     "deploy/kustomize/rendered/openshift.yaml.sha256": {
-      "sha256": "30a252e748709685f3c8be8f1a58e9962f573395030e954db9c51aea6fc088b9",
+      "sha256": "a6fb4c231558a8598d977143b46bb98f50ac760bd50a862c901026707dcd84d9",
       "mode": 420
     },
     "docs/assets/cairn-attic-garden-correction-demo.gif": {
@@ -738,7 +742,7 @@
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-inventory.md": {
-      "sha256": "7862434f636f83e9fe046dd8c02446cd961fabd7832b4d76e58b503b88c4ab84",
+      "sha256": "9d2910cca158857db48c43ed0fa4e5b94591ded36dc933c4487fddcd4dfaf690",
       "mode": 420
     },
     "docs/evidence/release/v0.5.0-security.md": {
@@ -786,7 +790,7 @@
       "mode": 420
     },
     "docs/operations/deployment.md": {
-      "sha256": "918af7fbee08e0938f87bbc0548c6736859a007163f37958cea11d1bed21c757",
+      "sha256": "fcffe355d647f488bbb934d135393d728121d663a54f133d0c6f164da3d03bf3",
       "mode": 420
     },
     "docs/operations/docker-firewalld.md": {
@@ -810,7 +814,7 @@
       "mode": 420
     },
     "docs/operations/kubernetes-site.md": {
-      "sha256": "73407d38cc716c169a11f313eee3e678a1934b1d432a0aeb445745175a26d435",
+      "sha256": "14194429cbbe1a247864c16dd0517d6f43c027b772d6b587d1c128c8c2029346",
       "mode": 420
     },
     "docs/operations/macos-foreground.md": {
@@ -830,7 +834,7 @@
       "mode": 420
     },
     "docs/operations/migration.md": {
-      "sha256": "fe38020b3bd219a7bf00161b5f50fc16c1eb9f750d49385aad6d91dffe31d7f1",
+      "sha256": "51f2158952b076a4b742dcfaa300dcc33170a51c441a74f51da1fae77dd997ef",
       "mode": 420
     },
     "docs/operations/native-installation.md": {
@@ -842,7 +846,7 @@
       "mode": 420
     },
     "docs/operations/shared-garden.md": {
-      "sha256": "226c943e2f328d36e9ae9e2a9675651fcf8d50230e0e8957fe469c7e4c598537",
+      "sha256": "92b9977187f34063af25f5bfb3f2029ff11dccba28ea9ad7a92a3c9b1c03d767",
       "mode": 420
     },
     "docs/quickstart.md": {
@@ -961,6 +965,10 @@
       "sha256": "a7db5fe4557f522366d6c67c4c03377efac72d545545906fb854ffcf432f95d1",
       "mode": 420
     },
+    "docs/releases/v0.9.0.md": {
+      "sha256": "9090adadceb9e2f33e7aa450176a0dae7a3d0e4e5c83a97c7d76e7d00167f6a8",
+      "mode": 420
+    },
     "docs/runbooks/runbook-reference-task11a-posture.md": {
       "sha256": "5813138b87579c75bebac72ebf180ea7954e3460c2915e0c2cff4ec44b0d832a",
       "mode": 420
@@ -998,11 +1006,11 @@
       "mode": 420
     },
     "garden/Makefile": {
-      "sha256": "52d2691a4ce3a027eab0fbf47bc768501d8a029e761a9d830b49719985c72039",
+      "sha256": "485cbc40b40e9e0a0ae180d7e453e76eea61cab60a844b71e5d71e11e1e3ab99",
       "mode": 420
     },
     "garden/README.md": {
-      "sha256": "808845f39a4bab0d2018f1225569757e1a03f22968289fdd1337ef8a79c13fbd",
+      "sha256": "78666f61f230f17ee4c64d89787042cf2c18f992b2cfc7609ac4ee5bdfefda9c",
       "mode": 420
     },
     "garden/THIRD_PARTY_LICENSES/github.com/antithesishq/antithesis-sdk-go@v0.6.0-default-no-op/LICENSE": {
@@ -1266,7 +1274,7 @@
       "mode": 420
     },
     "garden/cmd/chat.go": {
-      "sha256": "b495ec03be4d1ee6f7fda9275f9fbcd08c4a3c8472b3e29907d81582ac5f2a56",
+      "sha256": "9f237d352d3c4f90f44994454c330494bd14250868aa681ea8add37d3e10d0e7",
       "mode": 420
     },
     "garden/cmd/chat_test.go": {
@@ -1294,7 +1302,7 @@
       "mode": 420
     },
     "garden/cmd/history.go": {
-      "sha256": "dd09d9ef63f5ccdfee82e69494084202c8503d271c7b4b458ecc5c45ef5f8ad7",
+      "sha256": "2d06307b0d2154e6f20786908048d799bd6be919e623f33f11a51548fa9fcf87",
       "mode": 420
     },
     "garden/cmd/history_test.go": {
@@ -1311,6 +1319,22 @@
     },
     "garden/cmd/host_test.go": {
       "sha256": "75628f22fd61b1ca8f3855020f577c1dffefe87a7f00aecbddc1a9ba642e2ec2",
+      "mode": 420
+    },
+    "garden/cmd/invite.go": {
+      "sha256": "f96f0bfaf4b4227477b2e04824e3870b0f2502ddc3eb41727a91787df7917a4b",
+      "mode": 420
+    },
+    "garden/cmd/invite_test.go": {
+      "sha256": "095719a72ab3fece6fbe07b1b734d00ffd0b8039c2b63e906a8e77a8acdfdd08",
+      "mode": 420
+    },
+    "garden/cmd/join.go": {
+      "sha256": "f543369cbbd6992891cba488191e010529e5eb06ffe130f7b02990ad916d2a20",
+      "mode": 420
+    },
+    "garden/cmd/join_test.go": {
+      "sha256": "75636b26a786b795c60ec50cc468f8e100003d692ab5f81186ac5b23c53c9bc1",
       "mode": 420
     },
     "garden/cmd/mcp.go": {
@@ -1369,6 +1393,14 @@
       "sha256": "651327c5fe2d34d178d56520ab0f517e85e906dbb7747e72a419aa5012ccc57a",
       "mode": 420
     },
+    "garden/cmd/remote.go": {
+      "sha256": "60966ced48e8ae48158b7635a01cc58fe9ea7abaabde295f7e17e41a54e30efa",
+      "mode": 420
+    },
+    "garden/cmd/remote_test.go": {
+      "sha256": "cee0446209094ce74ce161f80445de35398960dbecce3b1798c2f84ed1938f43",
+      "mode": 420
+    },
     "garden/cmd/reset.go": {
       "sha256": "a43b55a532284041b57714f3248d163b455cc07bf1efc7f0f2cad87171ed9f17",
       "mode": 420
@@ -1382,7 +1414,7 @@
       "mode": 420
     },
     "garden/cmd/say.go": {
-      "sha256": "c9f543c62da07f5b8030178c0c1d3196e30bbf193c9891b6720456e9c2bf7bd2",
+      "sha256": "13ee3e6b96d9e2606757da88be98432dfbf6902f206737cf007d136b6f26cda5",
       "mode": 420
     },
     "garden/cmd/say_test.go": {
@@ -1390,7 +1422,11 @@
       "mode": 420
     },
     "garden/cmd/serve.go": {
-      "sha256": "fe12b20852bedba4b1e88d7f3193f16ecf924a55082dd1c965cb88afe00d2d32",
+      "sha256": "8137d46a3f6478d5f6d9611cf0763328e1d5d29a86d58340bed9f6585e8ef5c7",
+      "mode": 420
+    },
+    "garden/cmd/serve_test.go": {
+      "sha256": "3a7e13b364017f74800f80d1866e4afc33da6c47c2dd976624f63e384e87b593",
       "mode": 420
     },
     "garden/cmd/snapshot.go": {
@@ -1410,7 +1446,7 @@
       "mode": 420
     },
     "garden/cmd/watch.go": {
-      "sha256": "d31745c467f964e81acd04ef55e5775a235c4d0c57aba29906c50b717e1a02b7",
+      "sha256": "1875e92bf3bbe55d33190406248da80531dc916859aa416906635997b750875b",
       "mode": 420
     },
     "garden/deploy/claude.mcp.example.json": {
@@ -1438,11 +1474,11 @@
       "mode": 420
     },
     "garden/deploy/garden-mcp.service": {
-      "sha256": "6cfa2bfc4ff8fa4c5036f071defd294b9c11595cfb76842d0b1fa67c31e11ac0",
+      "sha256": "029f151e46f1f26334d897bcfc2583ee6a5ac195ec3e806613a0f98490aae773",
       "mode": 420
     },
     "garden/deploy/garden.example.json": {
-      "sha256": "688590ab5e566c5cdcce2fb6c09fc53ce62110f3f4765b4ecf9020b0f57fc4f1",
+      "sha256": "81a5f2d39afd59f2459d3abe645305d07d0a0ed2e653286d91d4396316622063",
       "mode": 420
     },
     "garden/deploy/opencode.mcp.example.json": {
@@ -1458,7 +1494,7 @@
       "mode": 420
     },
     "garden/go.mod": {
-      "sha256": "c1cc4d1e34b96eaaf8793193ef92fda6447414782984a53429cc60200d0b1710",
+      "sha256": "dd53991ab69d823b256b8dc300140219813980509c009b5752eb00b6e60e65c4",
       "mode": 420
     },
     "garden/go.sum": {
@@ -1466,7 +1502,7 @@
       "mode": 420
     },
     "garden/integration/cairn_fixture.py": {
-      "sha256": "18201b779e40cab6e4de1ed3012b8908eea45134327689901e59aac25fb295e8",
+      "sha256": "5146510daf92d304cb55e43940371f18dc6c39b5b291588a329c50cd57883a75",
       "mode": 420
     },
     "garden/integration/test_build.py": {
@@ -1477,8 +1513,12 @@
       "sha256": "e1aecae2d66413d968a25f24ce19e05f3e38538df7a5ff50a7af8ab536ce0da7",
       "mode": 420
     },
+    "garden/integration/test_invite_e2e.py": {
+      "sha256": "b87c4e3bf9ac8af2c1728d8da04dcdaf49899fe9bef155bc84ef62c99128f227",
+      "mode": 420
+    },
     "garden/integration/test_mcp_config.py": {
-      "sha256": "6b838b087333208d059fe7bb7996f0dbb83e630c77e01207d85888152025015c",
+      "sha256": "b74af6834e0556bbebb286131444fc2262fd2fc3a265ed1a1e971866bd1086c4",
       "mode": 420
     },
     "garden/integration/test_session.py": {
@@ -1510,7 +1550,7 @@
       "mode": 420
     },
     "garden/internal/attention/codex.go": {
-      "sha256": "ac8840a62dbd22c4a0e31c6fb3cc7f137a9c4d40a4207f330cebc0c442fd9e2b",
+      "sha256": "70179db38c447071b16b99bfcfb13bcc7c6cd38ca967b66864bcdea0aa31c1ff",
       "mode": 420
     },
     "garden/internal/attention/codex_core.go": {
@@ -1530,7 +1570,7 @@
       "mode": 420
     },
     "garden/internal/attention/codex_test.go": {
-      "sha256": "8e34bfd2a3b3ed8251041b5dd411f45820c222175a2b2bb5d9feca554dd59b8f",
+      "sha256": "a44f18abbc2adf179845c57f169bbf7a356057574b6a0568a3bae320d02ba1aa",
       "mode": 420
     },
     "garden/internal/attention/consumer_test.go": {
@@ -1554,7 +1594,7 @@
       "mode": 420
     },
     "garden/internal/attention/home.go": {
-      "sha256": "08d68b01e1125018e248109ea038645d3ca4caf734e93d5c79da6eebd9814149",
+      "sha256": "b113b3564fb8d7885ba012a948a5c4137ec513e1fce309f1d0f518617870831d",
       "mode": 420
     },
     "garden/internal/attention/home_test.go": {
@@ -1574,7 +1614,7 @@
       "mode": 420
     },
     "garden/internal/attention/identity.go": {
-      "sha256": "3a362023a964c075b853ce5788c879095e2898426b59bf5a1dd906dc25041a17",
+      "sha256": "ac580f9af71235edb483d335f09e15d13f7079cf1e51624016270f1c588e7d34",
       "mode": 420
     },
     "garden/internal/attention/identity_test.go": {
@@ -1583,6 +1623,14 @@
     },
     "garden/internal/attention/integration_e2e_test.go": {
       "sha256": "10f557f4678244e0264e2cb94e0940b1c3ef926b478fda683537b3569812b6f8",
+      "mode": 420
+    },
+    "garden/internal/attention/join.go": {
+      "sha256": "76a4e56e52cc8c314736e83ef827a1acb7a431cb13a6ca7c75575733f3663d9d",
+      "mode": 420
+    },
+    "garden/internal/attention/join_test.go": {
+      "sha256": "3783f50da2873b4419fd4f9d2f358afc45258a944bb9fa17f7fb848b8bfd12b2",
       "mode": 420
     },
     "garden/internal/attention/migrate.go": {
@@ -1641,8 +1689,20 @@
       "sha256": "f6f30b1cef76a558b8771e826b43ab911c095ad84b0d1d43bbdf15468f11fd5a",
       "mode": 420
     },
+    "garden/internal/attention/sealed.go": {
+      "sha256": "434ccb6aa7c42ecbcd8264d09e6d5988d45ac842c04b51820111fe6535fa9c94",
+      "mode": 420
+    },
+    "garden/internal/attention/sealed_pty_test.go": {
+      "sha256": "704126480cdba8c6f5cad80789d26b7afda96f30053687391103f9a61ece0587",
+      "mode": 420
+    },
+    "garden/internal/attention/sealed_test.go": {
+      "sha256": "f572aaeee8379f6dfe2c3505485c8e0edde7ad014aebe223292b2ba8a691ed43",
+      "mode": 420
+    },
     "garden/internal/attention/session.go": {
-      "sha256": "96f55a22470600d60f1d5460484b5402c1a3f77b85e2f410ce7e1a8fe1cfca9d",
+      "sha256": "b5a07e4b510e17d9c7b3a36288a28f182e557c508724730cf88034cc89df730a",
       "mode": 420
     },
     "garden/internal/attention/session_test.go": {
@@ -1662,11 +1722,19 @@
       "mode": 420
     },
     "garden/internal/chat/msgs.go": {
-      "sha256": "bd19ea8c0207713bd4030021c7a5a75952b9aee0c10d38590db1fe90da9d9ec0",
+      "sha256": "3f4f4efdf50524ba9eb1fda46cb0bf95aed4aeb5caced730bf87e8b23a61ca9a",
       "mode": 420
     },
     "garden/internal/chat/msgs_test.go": {
       "sha256": "60cc2a1da5f53168c2fe7e937d5fe14e4cbfbe34a216c9435e4d500b026ee07d",
+      "mode": 420
+    },
+    "garden/internal/chat/remote.go": {
+      "sha256": "a1481da0739145a3635c15b31ca8fd56ae786cb0f99fe983c7bf0b0415342d4f",
+      "mode": 420
+    },
+    "garden/internal/chat/remote_test.go": {
+      "sha256": "84a840dcd1a0b0e7b71290183e2dc4139c7c2e66eda1627b263ee07105b2630f",
       "mode": 420
     },
     "garden/internal/chat/render.go": {
@@ -1770,15 +1838,23 @@
       "mode": 420
     },
     "garden/internal/garden/config.go": {
-      "sha256": "a9156e9e04f86bd6fc6db61188ec2889a53bd7c53cb576da4b276eca889c5eb7",
+      "sha256": "eacde08ef1da790647fc4c21bb23c8289350db16b2e48c3124da072c24f4bb8b",
       "mode": 420
     },
     "garden/internal/garden/delivery_test.go": {
       "sha256": "8ced9c9cb63b0904518914e8a5bef1459eaa38f26b34e84c4a0a32f8afbc3bfa",
       "mode": 420
     },
+    "garden/internal/garden/enrol.go": {
+      "sha256": "bc790101025daaf47542ce00bbc11d16eb0c253cfd6173f18ae9d4cc9ae0401a",
+      "mode": 420
+    },
+    "garden/internal/garden/enrol_test.go": {
+      "sha256": "20a2d1de27420c83539ffa369019142c385d1da471e9551d558ff2704021c125",
+      "mode": 420
+    },
     "garden/internal/garden/garden_test.go": {
-      "sha256": "5f871eeb8fec1248bf107899a13b0e88415e296a515b7b1597f3f17a61e81e30",
+      "sha256": "da776e31b4656fbd7012965a8b56130b35a146cab913a0a81868c813cb8f6a73",
       "mode": 420
     },
     "garden/internal/garden/host.go": {
@@ -1790,7 +1866,7 @@
       "mode": 420
     },
     "garden/internal/garden/operations.go": {
-      "sha256": "dd23c6b968b888b9f648b57d498982e667bd51e7f4e032dd8bf54042f16d991c",
+      "sha256": "e44bb942b055da8de8b9d4003c1360a33d4bde62ba7b3ada0683b9bcfdd3630c",
       "mode": 420
     },
     "garden/internal/garden/public_endpoint.go": {
@@ -1801,8 +1877,16 @@
       "sha256": "ed6f94ee289a8c3768bdee87913300392de4560ca66cecf003809499769b7bc0",
       "mode": 420
     },
+    "garden/internal/garden/reload.go": {
+      "sha256": "43a0403b6330394a82c0e9af8dd51da07fac48de8da65ddd8375dfb8e3b3a266",
+      "mode": 420
+    },
+    "garden/internal/garden/reload_test.go": {
+      "sha256": "f4720aadb5c2872f781ec5a5dc500292e59328c66bf0a3f83d5d505577699095",
+      "mode": 420
+    },
     "garden/internal/garden/server.go": {
-      "sha256": "61b14a6aaabdc22cfff6c9baa8d118ca9d82a70d42ff5b553f773cbdabc8838c",
+      "sha256": "e3e3114e9a024b2864c60e2e4e1e3f1f0c822060d1cb1588ae4dbc4e2cd2c719",
       "mode": 420
     },
     "garden/internal/garden/startup_test.go": {
@@ -1810,15 +1894,19 @@
       "mode": 420
     },
     "garden/internal/garden/store.go": {
-      "sha256": "cff81afb6d39221966076c29980c36626583233b862196745517f164c733dc6f",
+      "sha256": "5694ab5cfe1c044b1aa5f59c811f088d1bc67be6059b36aef294b84358308c12",
       "mode": 420
     },
     "garden/internal/garden/strictjson.go": {
       "sha256": "36832a160c63b0157aa4b634869af70954f55082e47e116bd2f6a56339ce816c",
       "mode": 420
     },
+    "garden/internal/garden/tail_test.go": {
+      "sha256": "1837638e60ba81474d7009df055a8858b2a72fbabd00395f82638503289881fc",
+      "mode": 420
+    },
     "garden/internal/garden/types.go": {
-      "sha256": "3f7db372d79963575a31d790f8c5f56b6e2560704dca4a693ed78f94243ad7f8",
+      "sha256": "3a7770ad88e81f06beb56c5ffda7e9f7a49d7651b8683194b250599bdfc86dbc",
       "mode": 420
     },
     "garden/internal/gardenauth/auth.go": {
@@ -1827,6 +1915,50 @@
     },
     "garden/internal/gardenauth/auth_test.go": {
       "sha256": "97a15b82aeba8f375cb93f02ed5d540360261eed8e012930927ac9f80adfb500",
+      "mode": 420
+    },
+    "garden/internal/identityseal/seal.go": {
+      "sha256": "149298612019ac1f04ae76742ccbcfe5a2541afc0a7a35cda7e17bcb374b5a4f",
+      "mode": 420
+    },
+    "garden/internal/identityseal/seal_test.go": {
+      "sha256": "381969cb20c9d9358687a50ba495b6c3e36b4aaa9f95345bfc4972f27c71f1b9",
+      "mode": 420
+    },
+    "garden/internal/invite/admin.go": {
+      "sha256": "d839753e5143d7b231a30db9e09a0da473e90f19d0e72fdc6f5b05ec0015e712",
+      "mode": 420
+    },
+    "garden/internal/invite/admin_ledger.go": {
+      "sha256": "3c88cf4b000cc094127fe86dc3522bb59f8acfa99df73861b52971314b11bdd4",
+      "mode": 420
+    },
+    "garden/internal/invite/admin_ledger_test.go": {
+      "sha256": "774ce648a2b4b51f0a4fef2ff3cdb4d3bafd037061937e9a77825c76a173a504",
+      "mode": 420
+    },
+    "garden/internal/invite/admin_test.go": {
+      "sha256": "050eee1fc2b0e8191ef1df1c9fc4ae0aa619e85a7d426cf0e9918bd874f3c8a1",
+      "mode": 420
+    },
+    "garden/internal/invite/gateway_ca.go": {
+      "sha256": "ca497be1a3eee8d34faea7fc4b674da44aac52c1106cfd7f2412f7efb961c255",
+      "mode": 420
+    },
+    "garden/internal/invite/gateway_ca_test.go": {
+      "sha256": "7cc2ba5ab2409cda204f5f12a46585a228cb032473b8a434090587ae0a663292",
+      "mode": 420
+    },
+    "garden/internal/invite/invite.go": {
+      "sha256": "ae1eed41878956a79939f908e02499a06748c245e2b8be8e464ae2d6cb4f5f86",
+      "mode": 420
+    },
+    "garden/internal/invite/invite_test.go": {
+      "sha256": "8a1fb19f3ef5e172c5ee62bc5debbf878cd864273c946f0a8e3bb11c8d8238b5",
+      "mode": 420
+    },
+    "garden/internal/invite/store.go": {
+      "sha256": "75e5c363329ad1ca5032e0e0ebb5eadf6ca4bf97ee3c83a8af4ca48392c68ff9",
       "mode": 420
     },
     "garden/internal/maintenance/lock.go": {
@@ -1963,6 +2095,34 @@
     },
     "garden/internal/provider/provider_test.go": {
       "sha256": "d1dc97162526f98e2e0cef6db40eed3727266ef0caa154a37fb225e68be0d05a",
+      "mode": 420
+    },
+    "garden/internal/remotecli/fake_test.go": {
+      "sha256": "10f022054c5fc5c772add4f08eca7236679bd1ec8e88eaf5c85c4d2e0c4e4459",
+      "mode": 420
+    },
+    "garden/internal/remotecli/follow.go": {
+      "sha256": "7569386022e8f3530566573822ddfd73d7169fc9bd82d14221e2cbd3e5aae6b5",
+      "mode": 420
+    },
+    "garden/internal/remotecli/follow_test.go": {
+      "sha256": "3cbdcd2d5193a2633106b0f058bdc588e51a59b2bb8f248f8eef3f6b2f01c895",
+      "mode": 420
+    },
+    "garden/internal/remotecli/session.go": {
+      "sha256": "e2b6800c2ac459f4d484e2a3ef1c45e20361abac86d60468a65142ebc65776c5",
+      "mode": 420
+    },
+    "garden/internal/remotecli/session_test.go": {
+      "sha256": "55848881213e2e115a3266d57b37f650bd43ea178f21448fed0467e549c07b29",
+      "mode": 420
+    },
+    "garden/internal/remotecli/token.go": {
+      "sha256": "a31410381b655a9f182087009c9b168d9cb0f5a118dda2600a2c186de5b106b4",
+      "mode": 420
+    },
+    "garden/internal/remotecli/window.go": {
+      "sha256": "2527b86aee96db0ee8ed4e36c246380970d0f67b29bd6516e100eac723b4c2d9",
       "mode": 420
     },
     "garden/internal/snapshot/files.go": {
@@ -2130,7 +2290,7 @@
       "mode": 493
     },
     "garden/scripts/garden-config": {
-      "sha256": "f1a1f0217b3222359f2f9fd74e8b52572cb885c9bb5e14cce1e7f9ebcd0b05b8",
+      "sha256": "404edd6c3f38f00a60009a9940ee7311bfa3f38d2e5c3c4aff315cdb2c937570",
       "mode": 493
     },
     "garden/scripts/garden-session": {
@@ -2154,7 +2314,7 @@
       "mode": 420
     },
     "pyproject.toml": {
-      "sha256": "ac2af3d108921b45d6abbd41299e9153cd2d03cfbdcc248613b449c16857c9e2",
+      "sha256": "215bb3cf0efe700db892dd98e0365f89d7cfd2af2e79d98d1782006da3154836",
       "mode": 420
     },
     "scripts/backup/backup_common.py": {
@@ -2234,7 +2394,7 @@
       "mode": 493
     },
     "scripts/host_handover.py": {
-      "sha256": "642f4bc652a0b8dccc60fb111305db01d97fd9fb96eb54254dae23da8f35b3ea",
+      "sha256": "f3f1ff28290f9499d27403daabddf4ddd09441d1af65b5dd545f4b6aea775939",
       "mode": 420
     },
     "scripts/host_workflow_bridge.py": {
@@ -2326,7 +2486,7 @@
       "mode": 493
     },
     "scripts/reference-posture-acceptance": {
-      "sha256": "b8875bb17def240074a583f02b3e42a582bf0f622a19834ee3157b136a59bdf3",
+      "sha256": "c657553cf692f0ee9124a399f0602d2626a894f85dc0c997ed8acd2c02ba1352",
       "mode": 493
     },
     "scripts/reference-posture-launch": {
@@ -2942,7 +3102,7 @@
       "mode": 420
     },
     "src/cairn/transports/mcp/server.py": {
-      "sha256": "1092fafbd1f01e7486d9fe66fb00da678ef66840187a20674e7902605a4d38d2",
+      "sha256": "6a08cde21ec9a9aba931a71e6a4f3463a499adcd815e15a7b58a9edf6be490d1",
       "mode": 420
     },
     "src/cairn/transports/memory/__init__.py": {
@@ -3138,7 +3298,7 @@
       "mode": 420
     },
     "src/cairn_install/kubernetes_assets.py": {
-      "sha256": "82554706501406774ea91063a6a0c279dab9388432b56223925b0df2fb72705f",
+      "sha256": "459d700c6d1f319e68b6f4747acc15d00cdd1a5067b19f234fafcee2e6d0fac0",
       "mode": 420
     },
     "src/cairn_install/kubernetes_endpoint.py": {
@@ -3302,11 +3462,11 @@
       "mode": 420
     },
     "tests/acceptance/reference/task11a-listener-pod.yaml": {
-      "sha256": "e9875b2f0ec5faad5ba3275ed0a14e8a4c93dc60bb4f362fb678cdd1bff26763",
+      "sha256": "c5eb065875c63093952495cebc5b962f3fca3181319fff59df5e4dcec5382c98",
       "mode": 420
     },
     "tests/acceptance/reference/task11a-probe-pod.yaml": {
-      "sha256": "8b1aa9ca0dfc48bab1eeeff3d0c602421c9900172bccd11deb106a1e266b7564",
+      "sha256": "d453eeba63ea8995f82bf7c999697ca980790254980015688b966ca700577fc2",
       "mode": 420
     },
     "tests/administration/test_audit_read.py": {
@@ -3602,7 +3762,7 @@
       "mode": 420
     },
     "tests/client/test_host_handover.py": {
-      "sha256": "e031e8d8c6123835f4cd1ea0bc90d7549ccc64ac13cc25bb2f129a505ab38b2e",
+      "sha256": "54dcdaeb2550d36b21bbe64c805ce8f2c12b5d4e8de417aec0b251690a6353bd",
       "mode": 420
     },
     "tests/client/test_host_installation.py": {
@@ -3870,7 +4030,7 @@
       "mode": 420
     },
     "tests/deploy/test_compose_acceptance.py": {
-      "sha256": "404b9042d1cb19b03f75b0637b335775c210b713ff5a5f18f43f5b1a0c86c287",
+      "sha256": "a938bcf972c82337945e8141c12d3ccd0f09c10ba64680f3698506448570dc40",
       "mode": 420
     },
     "tests/deploy/test_compose_project.py": {
@@ -4366,7 +4526,7 @@
       "mode": 420
     },
     "tests/transports/mcp/test_error_mapping.py": {
-      "sha256": "474b822e4e502c0da8e70ae9c420a8b09c61c2b32141550772eea999435a0504",
+      "sha256": "537f93fc04fca1ee7456bb1a7012f01b3bac97d638e19a63c14726d7f6086040",
       "mode": 420
     },
     "tests/transports/mcp/test_framing.py": {
@@ -4526,7 +4686,7 @@
       "mode": 420
     },
     "uv.lock": {
-      "sha256": "dfa6b811f153f9d332cf1273d78ff35c49e229f56922c85f446ab397be5db13f",
+      "sha256": "1724d5ea2976ba355674b90abb7d941229a9b1b545a535e920c198f120ef21ef",
       "mode": 420
     }
   }

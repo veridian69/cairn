@@ -137,9 +137,9 @@ func (s *Session) Send(ctx context.Context, message json.RawMessage) error {
 		return nil
 	}
 	if response.StatusCode != http.StatusOK {
-		_ = response.Body.Close()
-		cleanup()
-		return fmt.Errorf("unsupported upstream status %d", response.StatusCode)
+		defer cleanup()
+		defer response.Body.Close()
+		return s.handleRefusal(requestCtx, response, message)
 	}
 
 	contentType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -296,6 +296,79 @@ func (s *Session) captureProtocolVersion(message json.RawMessage, initializeID s
 	s.protocolVersion = result.ProtocolVersion
 	s.mu.Unlock()
 	return nil
+}
+
+// maxRefusalBytes bounds the body of a refused POST; a JSON-RPC error object is small.
+const maxRefusalBytes = 64 << 10
+
+// handleRefusal turns a client-error response that carries a JSON-RPC error into an ordinary
+// failure of that one call, instead of ending the session. Cairn answers a frame it will not
+// admit with 400 and such a body, and Claude Code sends notifications/cancelled when a user
+// interrupts a call; before this, that one refusal killed the stdio process (issue: bridge died
+// on an interrupted recall, 7 November 2026). Nothing is retried, so no write can repeat:
+//   - a refused request whose body is a JSON-RPC error with the same id reaches the client as
+//     that error;
+//   - a refused notification has no reply to deliver and is dropped, provided the refusal is a
+//     JSON-RPC error with a null id;
+//   - anything else (5xx, HTML from an access proxy, a body that is not that error) stays
+//     terminal, as before.
+//
+// A refused response never installs a session ID or protocol version.
+func (s *Session) handleRefusal(ctx context.Context, response *http.Response, outbound json.RawMessage) error {
+	terminal := fmt.Errorf("unsupported upstream status %d", response.StatusCode)
+	if response.StatusCode < 400 || response.StatusCode > 499 {
+		return terminal
+	}
+	var request struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if json.Unmarshal(outbound, &request) != nil {
+		return terminal
+	}
+	notification := len(request.ID) == 0 || string(request.ID) == "null"
+	contentType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || contentType != "application/json" {
+		return terminal
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxRefusalBytes+1))
+	if err != nil || len(body) > maxRefusalBytes || !json.Valid(body) {
+		return terminal
+	}
+	var reply struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   *struct {
+			Code    *int    `json:"code"`
+			Message *string `json:"message"`
+		} `json:"error"`
+		Result json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(body, &reply) != nil || reply.JSONRPC != "2.0" || reply.Error == nil ||
+		reply.Error.Code == nil || reply.Error.Message == nil || reply.Result != nil {
+		return terminal
+	}
+	if notification {
+		// A notification has no reply to deliver. Only a genuine JSON-RPC refusal, with a null
+		// id, is dropped; an access proxy's 403 page, a 401 or a 429 stays terminal, so the
+		// session does not look healthy while upstream is refusing it (Val's review).
+		if string(reply.ID) != "null" {
+			return terminal
+		}
+		return nil
+	}
+	if !sameJSON(reply.ID, request.ID) {
+		return terminal
+	}
+	return s.emitMessage(ctx, body)
+}
+
+// sameJSON compares two JSON values after compaction, so 7 and 7 match but 7 and "7" do not.
+func sameJSON(a, b json.RawMessage) bool {
+	var ca, cb bytes.Buffer
+	if json.Compact(&ca, a) != nil || json.Compact(&cb, b) != nil {
+		return false
+	}
+	return bytes.Equal(ca.Bytes(), cb.Bytes())
 }
 
 func (s *Session) handleMessage(ctx context.Context, message json.RawMessage, initializeID string) error {

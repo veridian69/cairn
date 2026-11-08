@@ -107,6 +107,10 @@ func OpenHarness(ctx context.Context, harness, explicit string) *HarnessSession 
 // connect claims the resolved identity and connects it, or leaves a disconnected session.
 func (s *HarnessSession) connect(ctx context.Context) *HarnessSession {
 	home, harness, name := s.home, s.harness, s.name
+	// A human's sealed identity is never used by an agent session, even when asked for by name.
+	if err := home.CheckHarnessIdentity(name); err != nil {
+		return s.disconnect(name, err.Error())
+	}
 	claim, err := home.ClaimIdentity(name)
 	s.blocked = errors.Is(err, ErrIdentityClaimed)
 	if s.blocked {

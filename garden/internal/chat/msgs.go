@@ -58,10 +58,13 @@ type msgSender interface {
 
 const serviceCallTimeout = 5 * time.Second
 
+// runSubscriptions subscribes to connection events first: the remote service reports an outage
+// from its first poll, which the stream subscription starts, and an event emitted before its
+// handler exists would be lost.
 func runSubscriptions(ctx context.Context, svc Service, sender msgSender) error {
-	if err := svc.Subscribe(ctx, func(event StreamEvent) {
+	if err := svc.SubscribeConnection(ctx, func(event ConnectionEvent) {
 		if ctx.Err() == nil {
-			sender.Send(streamMsg(event))
+			sender.Send(connectionMsg(event))
 		}
 	}); err != nil {
 		return err
@@ -73,9 +76,9 @@ func runSubscriptions(ctx context.Context, svc Service, sender msgSender) error 
 	}); err != nil {
 		return err
 	}
-	return svc.SubscribeConnection(ctx, func(event ConnectionEvent) {
+	return svc.Subscribe(ctx, func(event StreamEvent) {
 		if ctx.Err() == nil {
-			sender.Send(connectionMsg(event))
+			sender.Send(streamMsg(event))
 		}
 	})
 }

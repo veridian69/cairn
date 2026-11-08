@@ -10,6 +10,8 @@ User=garden
 Group=garden
 WorkingDirectory=/var/lib/garden
 ExecStart=/usr/local/bin/garden serve --config /etc/garden/garden.json
+# `garden invite` reloads the principals with SIGHUP; other settings still need a restart.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 UMask=0077

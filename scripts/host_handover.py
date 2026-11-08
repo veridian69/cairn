@@ -224,9 +224,14 @@ async def capture(
 
     async def collect() -> tuple[bytes, bytes]:
         assert process.stdin is not None
-        process.stdin.write(prompt)
-        await process.stdin.drain()
-        process.stdin.close()
+        try:
+            process.stdin.write(prompt)
+            await process.stdin.drain()
+            process.stdin.close()
+        except (BrokenPipeError, ConnectionResetError):
+            # A host that fails fast (expired OAuth, usage limit) can exit before reading its
+            # prompt. Its output still classifies the failure, so keep collecting.
+            pass
         out, err = await asyncio.gather(
             bounded(process.stdout), bounded(process.stderr)
         )

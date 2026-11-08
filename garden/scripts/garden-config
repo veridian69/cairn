@@ -6,6 +6,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -251,6 +252,43 @@ def encode(value):
     return (json.dumps(value, indent=2, ensure_ascii=True) + "\n").encode()
 
 
+# Codex records "always allow" for a Garden tool as [mcp_servers.garden.tools.<name>] with an
+# approval_mode, and writes it next to the managed table, inside the managed block (issue 156).
+# Those tables are the user's, not this helper's: they are tolerated, kept on re-runs and
+# removed with the entry, but nothing else may change.
+APPROVAL_TABLE = re.compile(
+    r'(?m)^\n?\[mcp_servers\.garden\.tools\.(?:[A-Za-z0-9_-]+|"[A-Za-z0-9_.-]+")\]\n'
+    r'(?:approval_mode = "[a-z_]+"\n)?'
+)
+
+
+def approvals(existing):
+    """The entry without valid per-tool approval tables, or None when tools is malformed."""
+    if not isinstance(existing, dict) or "tools" not in existing:
+        return existing
+    tools = existing["tools"]
+    if not isinstance(tools, dict) or not all(
+        isinstance(name, str)
+        and isinstance(table, dict)
+        and set(table) <= {"approval_mode"}
+        and all(isinstance(v, str) for v in table.values())
+        for name, table in tools.items()
+    ):
+        return None
+    return {key: value for key, value in existing.items() if key != "tools"}
+
+
+def managed_region(text, start, end):
+    """The managed block as it stands in text, and the same block without approval tables."""
+    first = text.find(start)
+    last = text.find(end, first)
+    require(first >= 0 and last > first, "managed block is missing or modified")
+    if first > 0 and text[first - 1] == "\n":
+        first -= 1
+    region = text[first : last + len(end)]
+    return region, APPROVAL_TABLE.sub("", region)
+
+
 def entry_for(host, binary, profile):
     command = [str(binary), "connect", "--profile", str(profile)]
     if host == "opencode":
@@ -274,8 +312,9 @@ def plan(host, original, ownership, entry, remove):
             "ownership does not match requested host, binary and profile",
         )
     if "garden" in servers:
+        bare = approvals(existing) if host == "codex" else existing
         require(
-            ownership is not None and existing == entry,
+            ownership is not None and bare == entry,
             "refusing unowned or modified Garden entry",
         )
     elif remove:
@@ -300,12 +339,18 @@ def plan(host, original, ownership, entry, remove):
                 "invalid ownership block",
             )
             require(
-                text.count(start) == 1
-                and text.count(end) == 1
-                and text.count(block) == 1,
+                text.count(start) == 1 and text.count(end) == 1,
                 "managed block is missing or modified",
             )
-            updated = text.replace(block, "", 1) if remove else text
+            region, bare_region = managed_region(text, start, end)
+            require(
+                bare_region in (block, block.lstrip("\n")) or region == block,
+                "managed block is missing or modified",
+            )
+            if not remove:
+                # Already installed; the user's approval tables stay as they are.
+                return original, ownership
+            updated = text.replace(region, "", 1)
         else:
             require(
                 start.strip() not in text and end.strip() not in text,
@@ -317,6 +362,11 @@ def plan(host, original, ownership, entry, remove):
         expected = dict(document)
         expected[root] = dict(servers)
         if remove:
+            require(
+                "garden" not in parsed.get(root, {}),
+                "Garden tool approval tables outside the managed block; remove the"
+                " [mcp_servers.garden.tools.*] tables first",
+            )
             del expected[root]["garden"]
             # TOML may drop the parent table when the managed child is removed.
             if root not in parsed and not expected[root]:

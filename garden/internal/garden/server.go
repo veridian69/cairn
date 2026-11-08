@@ -3,6 +3,7 @@ package garden
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -21,18 +22,28 @@ import (
 
 // Server owns one gateway's connection, deployment lock and durable inbox state.
 type Server struct {
-	cfg      Config
-	binding  Binding
-	auth     *gardenauth.Client
-	mu       sync.Mutex
-	stream   *transport.Stream
-	daemonID string
-	db       *state.DB
-	sql      *sql.DB
-	lock     *os.File
-	closed   bool
-	done     chan struct{}
-	// now is the lease and loop-guard clock; tests replace it.
+	// cfg is the running configuration. Its DataDir is the daemon's actual store and its
+	// Principals are stale after New; read principals only through principalMap.
+	cfg Config
+	// loaded holds the non-principal fields exactly as New first received them, as JSON.
+	// Reload compares against it, because ensure rewrites cfg.DataDir.
+	loaded  map[string]json.RawMessage
+	binding Binding
+	auth    *gardenauth.Client
+	// principals maps principal IDs to participant names. Reload replaces the map and never
+	// mutates it, so a reader that holds the map needs no lock beyond principalMap's.
+	principalsMu sync.RWMutex
+	principals   map[string]string
+	enrolBucket  enrolBucket
+	mu           sync.Mutex
+	stream       *transport.Stream
+	daemonID     string
+	db           *state.DB
+	sql          *sql.DB
+	lock         *os.File
+	closed       bool
+	done         chan struct{}
+	// now is the lease, loop-guard and invite clock; tests replace it.
 	now func() time.Time
 }
 
@@ -45,6 +56,10 @@ var afterEnsure func()
 // New validates and enrols configured principals before any data is exposed.
 func New(ctx context.Context, cfg Config) (s *Server, err error) {
 	if err = cfg.validate(); err != nil {
+		return nil, err
+	}
+	loaded, err := configFields(cfg)
+	if err != nil {
 		return nil, err
 	}
 	cfg.Auth.Scope.Segments = append([]gardenauth.Segment{}, cfg.Auth.Scope.Segments...)
@@ -61,7 +76,7 @@ func New(ctx context.Context, cfg Config) (s *Server, err error) {
 	if err != nil {
 		return nil, err
 	}
-	s = &Server{cfg: cfg, auth: auth, binding: Binding{cfg.Auth.InstanceID, cfg.Auth.Scope, cfg.Auth.Classification}, done: make(chan struct{}), now: time.Now}
+	s = &Server{cfg: cfg, loaded: loaded, principals: principals, auth: auth, binding: Binding{cfg.Auth.InstanceID, cfg.Auth.Scope, cfg.Auth.Classification}, done: make(chan struct{}), now: time.Now}
 	defer func(owned *Server) {
 		if err != nil {
 			_ = owned.Close()
@@ -180,15 +195,20 @@ func (s *Server) authenticate(ctx context.Context, token string) (gardenauth.Ide
 		}
 		return id, failure("unavailable", "Garden authentication unavailable")
 	}
-	if !id.CanRead || s.cfg.Principals[id.PrincipalID] == "" {
+	if !id.CanRead || s.principalMap()[id.PrincipalID] == "" {
 		return id, failure("forbidden", "Garden access denied")
 	}
 	return id, nil
 }
 
-// Handler serves only authenticated stateless MCP requests at /mcp.
+// Handler serves authenticated stateless MCP requests at /mcp, and invite redemption at /enrol
+// when invites_dir is configured.
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/enrol" && r.URL.RawQuery == "" && s.cfg.InvitesDir != "" {
+			s.enrol(w, r)
+			return
+		}
 		if r.URL.Path != "/mcp" || r.URL.RawQuery != "" {
 			http.NotFound(w, r)
 			return
@@ -313,8 +333,9 @@ func (s *Server) status(ctx context.Context, principal string) (StatusResult, er
 	if err != nil {
 		return StatusResult{}, err
 	}
-	names := make([]string, 0, len(s.cfg.Principals))
-	for _, name := range s.cfg.Principals {
+	principals := s.principalMap()
+	names := make([]string, 0, len(principals))
+	for _, name := range principals {
 		names = append(names, name)
 	}
 	sort.Strings(names)

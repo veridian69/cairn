@@ -225,6 +225,21 @@ async def test_expired_oauth_error_is_classified_without_raw_output() -> None:
         )
 
 
+@pytest.mark.anyio
+async def test_host_that_exits_before_reading_its_prompt_is_still_classified() -> None:
+    # A prompt far larger than the pipe buffer makes drain() meet the closed pipe every time,
+    # instead of only under load (issue 152).
+    with pytest.raises(host.HostFailure, match="^host_authentication_failed$"):
+        await host.capture(
+            [
+                sys.executable,
+                "-c",
+                "import os, sys; os.close(0); print('Failed to authenticate: OAuth session expired'); sys.exit(1)",
+            ],
+            prompt=b"x" * (4 * 1024 * 1024),
+        )
+
+
 def test_timeout_reaps_orphan_group_without_signalling_unrelated_process(
     tmp_path: Path,
 ) -> None:

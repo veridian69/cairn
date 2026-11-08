@@ -1,9 +1,11 @@
 {
+  "public_endpoint": "https://garden.example.net:8443/mcp",
   "listen": "0.0.0.0:8443",
   "data_dir": "/var/lib/garden/.garden/data",
   "daemon_url_file": "/var/lib/garden/.garden/daemon.url",
   "tls_cert_file": "/etc/garden/tls/fullchain.pem",
   "tls_key_file": "/etc/garden/tls/key.pem",
+  "invites_dir": "/var/lib/garden/.garden/invites",
   "auth": {
     "endpoint": "https://cairn.example.net/memory/v1/diagnose",
     "instance_id": "11111111-1111-4111-8111-111111111111",
