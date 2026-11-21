@@ -1121,3 +1121,56 @@ async def test_long_input_uses_bounded_recall_cue_but_full_callback_input() -> N
     assert len(sent_queries[0].encode("utf-8")) <= MAX_QUERY_BYTES
     assert sent_queries[0].startswith("A" * 100)
     assert sent_queries[0].endswith("Z" * 100)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status", "body", "code", "retry", "correlation"),
+    [
+        (
+            403,
+            {
+                "failure": {
+                    "code": "authorisation_denied",
+                    "message": "PRIVATE server prose",
+                    "retry": "never",
+                    "correlation_id": "77777777-7777-4777-8777-777777777777",
+                }
+            },
+            "authorisation_denied",
+            "never",
+            "77777777-7777-4777-8777-777777777777",
+        ),
+        (
+            500,
+            {
+                "failure": {
+                    "code": "invented PRIVATE code",
+                    "message": "PRIVATE server prose",
+                    "retry": "never",
+                    "correlation_id": "77777777-7777-4777-8777-777777777777",
+                }
+            },
+            "http_error",
+            "never",
+            None,
+        ),
+    ],
+)
+async def test_remember_failure_keeps_closed_metadata_and_no_server_prose(
+    status: int, body: object, code: str, retry: str, correlation: str | None
+) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(status, json=body)),
+        base_url="https://cairn.invalid",
+    ) as http:
+        with pytest.raises(RememberFailure) as caught:
+            await _client(http).remember(
+                (DurableObservation("required fact"),), idempotency_key=TURN_ID
+            )
+
+    failure = caught.value.failure
+    assert (failure.code, failure.retry, failure.status_code) == (code, retry, status)
+    assert failure.correlation_id == correlation
+    assert failure.message == "Cairn rejected the memory request."
+    assert "PRIVATE" not in repr(failure) + repr(caught.value) + str(caught.value)

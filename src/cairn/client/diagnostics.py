@@ -36,19 +36,43 @@ def _document(response: httpx.Response) -> object:
     )
 
 
+def unrecognised_failure(
+    status_code: int, *, cairn_shaped: bool = False
+) -> FailureMetadata:
+    """Classify a refusal whose body is not a readable Cairn failure envelope.
+
+    Cairn answers 401 and 403 with its own envelope. One without it came from
+    something in front of Cairn, such as an access proxy, so it must not be
+    reported as a fault in the Cairn credential. A body that has the envelope's
+    shape but an unreadable member stays the generic HTTP fallback.
+    """
+    if status_code in (401, 403) and not cairn_shaped:
+        return FailureMetadata(
+            "upstream_access_denied",
+            "A proxy in front of Cairn refused the request.",
+            "never",
+            None,
+            status_code,
+        )
+    return FailureMetadata(
+        "http_error", "Cairn rejected the memory request.", "never", None, status_code
+    )
+
+
 def safe_failure(response: httpx.Response) -> FailureMetadata:
     """Keep only closed vocabulary and canonical correlation identity."""
-    code, retry, correlation = "http_error", "never", None
+    cairn_shaped = False
     try:
         value = _document(response)
         if type(value) is not dict or type(value.get("failure")) is not dict:
             raise ValueError("invalid_failure")
+        cairn_shaped = True
         failure = value["failure"]
         code = FailureCode(failure["code"]).value
         retry = RetryClass(failure["retry"]).value
         correlation = _uuid(failure["correlation_id"])
     except (ValueError, TypeError, KeyError, RecursionError):
-        code, retry, correlation = "http_error", "never", None
+        return unrecognised_failure(response.status_code, cairn_shaped=cairn_shaped)
     return FailureMetadata(
         code,
         "Cairn rejected the memory request.",
@@ -70,7 +94,10 @@ def diagnostic_result(
             401: ConnectionStatus.AUTHENTICATION_FAILED,
             403: ConnectionStatus.AUTHORISATION_DENIED,
         }.get(response.status_code, ConnectionStatus.INVALID_RESPONSE)
-        return ConnectionDiagnostics(status, failure=safe_failure(response))
+        failure = safe_failure(response)
+        if failure.code == "upstream_access_denied":
+            status = ConnectionStatus.UPSTREAM_ACCESS_DENIED
+        return ConnectionDiagnostics(status, failure=failure)
     try:
         raw = _document(response)
         if type(raw) is not dict or set(raw) != set(DiagnoseBody.model_fields):

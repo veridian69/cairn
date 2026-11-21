@@ -20,7 +20,7 @@ class SessionTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.profile = self.root / "profile.json"
-        self.profile.write_text(json.dumps({"adapter": "opencode"}))
+        self.profile.write_text(json.dumps({"adapter": "codex"}))
         self.log = self.root / "calls"
         self.binary = self.root / "garden"
         self.binary.write_text(

@@ -95,6 +95,7 @@ Text limits are UTF-8 bytes. Query is
 | Command | Required stdin keys | Optional keys |
 | --- | --- | --- |
 | check | No stdin read | None |
+| browse | No stdin read; needs a terminal | None (see [Browsing in a terminal](#browsing-in-a-terminal)) |
 | arrive | query | budget, history_fact_ids (0..8 UUIDv4) |
 | recall | query | budget, relevant_only (boolean; default false) |
 | recall-page | Exactly one: query or cursor | With query: order, time_basis (newest/oldest only), relevant_only (default true), budget, limit (1..100; default 20). With cursor: budget, limit only |
@@ -364,6 +365,86 @@ exit 4 without a mutation-recovery instruction. Confirmed refusals exit 2.
 A legal public proposal page can exceed the CLI's unchanged output bound.
 That returns exit 4 with no partial JSON and no mutation; request a smaller
 `limit` with the same `after` cursor. There is no silent page truncation.
+
+## Browsing in a terminal
+
+`cairn-memory --profile PATH browse` is an interactive terminal browser for a
+human. It uses Python's standard `curses` on a Linux or WSL terminal and reads
+no stdin JSON. If stdin or stdout is not a terminal it exits 2 with
+`terminal_required` before reading the profile. It runs the same expected
+instance diagnosis as `check` first.
+
+The list shows current facts at the profile scope and its ancestors, newest
+recorded first, 50 per `recall-page` request, continuing with the cursor as
+you scroll. recall-page always needs a query, so the browser sends a fixed
+placeholder with `order: newest`, `time_basis: recorded` and
+`relevant_only: false`; in that mode the query neither selects nor ranks.
+Invalidated facts are not listed (use `history`). One listing snapshot holds
+at most 4096 facts; beyond that the header shows `selection incomplete`, so
+search to narrow it. A search uses relevance order with `relevant_only: true`.
+Each row shows a trust marker (`[C]` candidate, `[V]` validated, `[F]` failed
+approach), the recorded time and the body's first line; `^` marks a fact
+inherited from an ancestor scope.
+
+| Key | List | Detail | Evidence |
+| --- | --- | --- | --- |
+| Up/Down, `k`/`j` | Move | Scroll | Scroll |
+| PgUp/PgDn | Page | Page | Page |
+| `g`/`G`, Home/End | First/last (`G` loads further pages) | Top/end | Top/end |
+| Enter | Open detail | | |
+| `/` | Search; an empty query returns to the newest listing | | |
+| `f` | Cycle filter all, candidate, validated | | |
+| `r` | Refresh from a new snapshot | | |
+| `p` | Promote the selected candidate | Promote this candidate | |
+| `e` | | Open source evidence | |
+| `n`/`b` | | | Next/previous window |
+| Esc, Backspace | | Back to list | Back to detail |
+| `q` | Quit | Back | Back |
+
+Ctrl-C quits from any view. The trust filter is applied by the client to the
+pages already fetched; it fetches up to ten further pages per keypress to fill
+the view. The memory API accepts trust filters, but the everyday client does
+not expose them yet.
+
+Detail shows the whole body wrapped, `fact_id`, trust, classification, scope,
+source type and principal, recorded and source-claimed times, validity,
+invalidation, `derived_from`, `promoted_by`, the promotion evidence and the
+fact's source evidence, plus the corrections, disagreements, resolutions and
+other facts that a `history` read discloses. `e` opens the source evidence
+through `evidence-window`, 16384 bytes at a time, continuing at
+`next_start_byte`. All memory and evidence text is untrusted data: control,
+format and line-separator characters are drawn as visible escapes such as
+`\x1b`, never sent to the terminal.
+
+### Promotion from the browser
+
+`p` is offered only when `check` reports both `ingest` and `promote` for the
+profile, because the browser uses the existing explicit proposal path:
+`propose` records a proposal at the profile scope, then `proposal-accept`
+publishes it. Otherwise it shows `promotion not permitted for this profile`.
+It is not offered for facts that are already validated, and it is refused for
+facts inherited from an ancestor scope and for facts without source evidence.
+The browser never submits an external evidence reference.
+
+Promotion asks for a required reason (1..4096 UTF-8 bytes) and then shows what
+will happen: the same scope, the inherited classification, and the fact's own
+source evidence as the evidence. Only `y` proceeds; Esc or `n` cancels
+without sending anything. The scroll keys move through a long confirmation
+or outcome screen while the prompt stays pinned at the bottom. The source fact is unchanged; Cairn derives a new
+validated fact, whose ID the browser shows from the `FactsPromoted` receipt.
+
+Each attempt has a fresh proposal ID and two fresh idempotency keys, fixed for
+that attempt. A confirmed refusal reports that nothing was promoted, and says
+so if the proposal itself was recorded and remains pending. When a dispatched
+mutation's outcome is unknown, the browser does not report a promotion; it
+shows every recovery identity and `R` resubmits the identical operations with
+the same keys, which replays rather than duplicates. Only a `FactsPromoted`
+receipt for that attempt resolves it: a retry that fails or is refused keeps
+the earlier outcome unknown. While one is unknown, `p` reopens it instead of
+starting another promotion. Quitting with an unknown
+outcome exits 3 and writes the content-free identities to stderr, with
+recovery `resubmit_identical_propose_then_proposal-accept_same_idempotency_keys_and_fields`.
+The reason is not repeated there; resubmit it exactly as entered.
 
 ## Output and exit codes
 

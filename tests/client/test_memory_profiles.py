@@ -194,6 +194,7 @@ def test_credential_is_loaded_only_explicitly_and_never_stored_in_profile(
     profile = module.load_profile(write_profile(tmp_path, document()))
     profile.credential_file.parent.mkdir()
     profile.credential_file.write_text(token() + "\n")
+    profile.credential_file.chmod(0o600)
     assert module.load_credential(profile) == token()
     assert token() not in repr(profile)
     assert not hasattr(profile, "token")
@@ -208,6 +209,7 @@ def test_bad_credentials_produce_only_safe_codes(tmp_path: Path, raw: bytes) -> 
     value["credential_file"] = "token"
     profile = module.load_profile(write_profile(tmp_path, value))
     profile.credential_file.write_bytes(raw)
+    profile.credential_file.chmod(0o600)
     with pytest.raises(module.ProfileError) as caught:
         module.load_credential(profile)
     assert str(caught.value) in {"invalid_credential", "credential_too_large"}
@@ -274,6 +276,7 @@ def test_real_parent_directory_reference_remains_supported(tmp_path: Path) -> No
     value = document()
     value["credential_file"] = "../token"
     (tmp_path / "token").write_text(token())
+    (tmp_path / "token").chmod(0o600)
     profile = module.load_profile(write_profile(nested, value))
     assert module.load_credential(profile) == token()
 
@@ -285,3 +288,109 @@ def test_missing_profile_is_not_replaced_by_ambient_configuration(
     monkeypatch.setenv("CAIRN_TOKEN", "SECRET")
     with pytest.raises(module.ProfileError, match="profile_unavailable"):
         module.load_profile(tmp_path / "missing.json")
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o660])
+def test_credential_file_must_be_owner_only(tmp_path: Path, mode: int) -> None:
+    module = api()
+    value = document()
+    value["credential_file"] = "token"
+    profile = module.load_profile(write_profile(tmp_path, value))
+    profile.credential_file.write_text(token())
+    profile.credential_file.chmod(mode)
+    with pytest.raises(module.ProfileError) as caught:
+        module.load_credential(profile)
+    assert str(caught.value) == "credential_not_protected"
+    profile.credential_file.chmod(0o400)
+    assert module.load_credential(profile) == token()
+
+
+def access_profile(tmp_path: Path, module: Any) -> Any:
+    value = document()
+    value["access_client_id_file"] = "access/id"
+    value["access_client_secret_file"] = "access/secret"
+    (tmp_path / "access").mkdir()
+    for name, text in (("id", "client-id.access\n"), ("secret", "f" * 64 + "\n")):
+        path = tmp_path / "access" / name
+        path.write_text(text)
+        path.chmod(0o600)
+    return module.load_profile(write_profile(tmp_path, value))
+
+
+def test_access_service_token_files_are_optional_paired_and_profile_relative(
+    tmp_path: Path,
+) -> None:
+    module = api()
+    plain = module.load_profile(write_profile(tmp_path, document()))
+    assert plain.access_client_id_file is None
+    assert plain.access_client_secret_file is None
+    assert module.load_access_headers(plain) == {}
+    profile = access_profile(tmp_path, module)
+    assert profile.access_client_id_file == tmp_path / "access" / "id"
+    assert profile.access_client_secret_file == tmp_path / "access" / "secret"
+    assert module.load_access_headers(profile) == {
+        "CF-Access-Client-Id": "client-id.access",
+        "CF-Access-Client-Secret": "f" * 64,
+    }
+    assert "f" * 64 not in repr(profile)
+    for field in ("access_client_id_file", "access_client_secret_file"):
+        for bad in (None, "", "$HOME/x", "~/x", 1):
+            value = document()
+            value["access_client_id_file"] = "access/id"
+            value["access_client_secret_file"] = "access/secret"
+            if bad is None:
+                del value[field]
+            else:
+                value[field] = bad
+            with pytest.raises(module.ProfileError, match="^invalid_profile$"):
+                module.load_profile(write_profile(tmp_path, value))
+
+
+@pytest.mark.parametrize("name", ["id", "secret"])
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o660])
+def test_access_service_token_files_must_be_owner_only(
+    tmp_path: Path, name: str, mode: int
+) -> None:
+    module = api()
+    profile = access_profile(tmp_path, module)
+    (tmp_path / "access" / name).chmod(mode)
+    with pytest.raises(module.ProfileError) as caught:
+        module.load_access_headers(profile)
+    assert str(caught.value) == "access_credential_not_protected"
+    (tmp_path / "access" / name).chmod(0o400)
+    assert len(module.load_access_headers(profile)) == 2
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"", b" \n", b"SECRET value", b"x" * 513, b"\xff", b"SECRET\nheader: injected"],
+)
+def test_bad_access_service_token_files_produce_only_safe_codes(
+    tmp_path: Path, raw: bytes
+) -> None:
+    module = api()
+    profile = access_profile(tmp_path, module)
+    (tmp_path / "access" / "secret").write_bytes(raw)
+    with pytest.raises(module.ProfileError) as caught:
+        module.load_access_headers(profile)
+    assert str(caught.value) in {
+        "invalid_access_credential",
+        "access_credential_too_large",
+    }
+    assert "SECRET" not in repr(caught.value)
+
+
+def test_access_service_token_paths_are_not_followed_through_symlinks(
+    tmp_path: Path,
+) -> None:
+    module = api()
+    profile = access_profile(tmp_path, module)
+    secret = tmp_path / "access" / "secret"
+    actual = tmp_path / "actual-secret"
+    secret.rename(actual)
+    secret.symlink_to(actual)
+    with pytest.raises(module.ProfileError, match="^access_credential_unavailable$"):
+        module.load_access_headers(profile)
+    secret.unlink()
+    with pytest.raises(module.ProfileError, match="^access_credential_unavailable$"):
+        module.load_access_headers(profile)

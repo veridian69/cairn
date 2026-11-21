@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/releases/v0.9.0.md"><img alt="Release v0.9.0" src="https://img.shields.io/badge/release-v0.9.0-b68235"></a>
+  <a href="docs/releases/v0.10.0.md"><img alt="Release v0.10.0" src="https://img.shields.io/badge/release-v0.10.0-b68235"></a>
   <a href="LICENSE.md"><img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-555"></a>
 </p>
 
@@ -31,7 +31,7 @@ Semantic search is optional. Agents must explicitly save context; Cairn does not
 
 <sub>Real tool calls on a disposable instance. Headings and summaries are written for the edit; excerpts are verbatim and labelled; waiting time is shortened.</sub>
 
-Minimal mechanism demos: [a correction with Garden and Attic](docs/cairn-attic-garden-correction-demo.md) · [a plan checked against its Attic source](docs/cairn-attic-garden-demo.md)
+Minimal mechanism demos: [a fresh-session correction in five minutes](docs/fresh-session-correction-demo.md) · [a correction with Garden and Attic](docs/cairn-attic-garden-correction-demo.md) · [a plan checked against its Attic source](docs/cairn-attic-garden-demo.md)
 
 **Try it:** [run the disposable quickstart](docs/quickstart.md) — one throwaway instance, no OpenAI API key.
 
@@ -137,7 +137,7 @@ make check
 
 The locked gate covers formatting, linting, typing, tests, generated contracts, deployment renders and dependency audit. The hosted check runs on demand: **Actions → Check → Run workflow**, or `gh workflow run check.yml --ref BRANCH`. GitHub excludes the marked Bubblewrap/namespace tests and says so in the run summary — run `make check` locally for the complete suite.
 
-[Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md) · [v0.9.0 release notes](docs/releases/v0.9.0.md) · [macOS native installation](docs/operations/macos-native.md)
+[Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md) · [v0.10.0 release notes](docs/releases/v0.10.0.md) · [macOS native installation](docs/operations/macos-native.md)
 
 Apache-2.0 ([license](LICENSE.md) · [notices](NOTICE.md)). Cairn is the memory service behind [Drystane](https://github.com/veridian69/drystane), the control plane that prompted its design.
 

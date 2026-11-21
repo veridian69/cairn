@@ -164,6 +164,10 @@ def session_actors(actors: dict[str, ChatActor]) -> Iterator[dict[str, ChatActor
                 "credential_file": str(profile.credential_file),
                 "session_id": str(uuid4()),
             }
+            for field in ("access_client_id_file", "access_client_secret_file"):
+                access_file = getattr(profile, field)
+                if access_file is not None:
+                    document[field] = str(access_file)
             path = Path(temp) / (name + ".json")
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
             with os.fdopen(fd, "w") as stream:

@@ -19,6 +19,7 @@ MAX_OUTPUT_BYTES = 1048576
 _COMMANDS = frozenset(
     {
         "check",
+        "browse",
         "arrive",
         "recall",
         "recall-page",

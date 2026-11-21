@@ -611,6 +611,21 @@ class InternalErrorAfterEffect(Boundary):
         return response
 
 
+class ProxyDenialAfterEffect(Boundary):
+    """Keep real ASGI effects; a proxy then replaces the receipt with its own."""
+
+    def __init__(self, upstream: httpx.AsyncBaseTransport, operation: str) -> None:
+        super().__init__(upstream)
+        self.operation = operation
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await super().handle_async_request(request)
+        if request.url.path.endswith("/" + self.operation):
+            assert response.status_code == 200
+            return httpx.Response(403, content=b"<html>private proxy page</html>")
+        return response
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "command,operation,body",
@@ -641,7 +656,7 @@ async def test_internal_error_reads_are_operational(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("failure", ["internal_error", "lost_response"])
+@pytest.mark.parametrize("failure", ["internal_error", "lost_response", "proxy_denial"])
 async def test_uncertain_sessionless_correction_guides_exact_replay(
     tmp_path: Path,
     memory_support: ModuleType,
@@ -663,13 +678,19 @@ async def test_uncertain_sessionless_correction_guides_exact_replay(
             "reason": "Measurement corrected",
             "idempotency_key": str(uuid4()),
         }
-        transport = (
-            InternalErrorAfterEffect(http._transport, "correct")
-            if failure == "internal_error"
-            else Boundary(http._transport, "correct")
-        )
+        transport = {
+            "internal_error": InternalErrorAfterEffect(http._transport, "correct"),
+            "lost_response": Boundary(http._transport, "correct"),
+            "proxy_denial": ProxyDenialAfterEffect(http._transport, "correct"),
+        }[failure]
         code, result = await invoke(path, "correct", body, transport)
         assert code == 3, result
+        if failure == "proxy_denial":
+            assert result["result"]["error"] == {
+                "code": "upstream_access_denied",
+                "operation": "correct",
+                "http_status": 403,
+            }
         assert result["result"]["last_confirmed_stage"] == "unconfirmed"
         assert (
             result["result"]["recovery"]
@@ -882,3 +903,126 @@ async def test_argv_errors_do_not_echo_sensitive_unknown_arguments() -> None:
         and b"private-query" not in err.getvalue()
         and b"secret" not in err.getvalue()
     )
+
+
+class AccessProxy(httpx.AsyncBaseTransport):
+    """Refuse, as an access proxy does, any request without its service token."""
+
+    def __init__(self, upstream: httpx.AsyncBaseTransport) -> None:
+        self.upstream = upstream
+        self.admitted: list[str] = []
+        self.refused: list[str] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if (
+            request.headers.get("CF-Access-Client-Id") != "client-id.access"
+            or request.headers.get("CF-Access-Client-Secret") != "s" * 64
+        ):
+            self.refused.append(request.url.path)
+            return httpx.Response(
+                401,
+                headers={"WWW-Authenticate": 'Bearer realm="OAuth"'},
+                content=b"PRIVATE proxy page",
+            )
+        self.admitted.append(request.url.path)
+        return await self.upstream.handle_async_request(request)
+
+
+@pytest.mark.anyio
+async def test_access_proxy_refusal_is_named_and_service_token_is_sent_every_request(
+    tmp_path: Path, memory_support: ModuleType
+) -> None:
+    instance = memory_support.Instance(tmp_path)
+    _, token = instance.add_actor()
+    async with memory_support.serve(instance) as http:
+        path = profile(tmp_path, instance, token, str(http.base_url).rstrip("/"))
+        proxy = AccessProxy(http._transport)
+        before = inventory(instance)
+        for command, body in (
+            ("check", {}),
+            ("recall", {"query": "port"}),
+            ("remember", checkpoint()),
+        ):
+            code, result = await invoke(path, command, body, proxy)
+            assert result["result"] == {
+                "error": {
+                    "code": "upstream_access_denied",
+                    "operation": "diagnose",
+                    "http_status": 401,
+                },
+                "last_confirmed_stage": "unconfirmed",
+            }
+            assert code == 2
+            assert "PRIVATE" not in json.dumps(result)
+        assert proxy.refused == ["/memory/v1/diagnose"] * 3
+        assert not proxy.admitted and inventory(instance) == before
+
+        value = json.loads(path.read_text())
+        value["access_client_id_file"] = "access-id"
+        value["access_client_secret_file"] = "access-secret"
+        path.write_text(json.dumps(value))
+        for name, text in (
+            ("access-id", "client-id.access"),
+            ("access-secret", "s" * 64),
+        ):
+            (tmp_path / name).write_text(text)
+            (tmp_path / name).chmod(0o600)
+        proxy.refused.clear()
+        code, result = await invoke(path, "check", {}, proxy)
+        assert code == 0, result
+        code, result = await invoke(path, "recall", {"query": "port"}, proxy)
+        assert code == 0, result
+        assert not proxy.refused
+        assert proxy.admitted.count("/memory/v1/diagnose") == 2
+        assert len(set(proxy.admitted)) > 1
+
+        (tmp_path / "access-secret").chmod(0o644)
+        proxy.admitted.clear()
+        code, result = await invoke(path, "check", {}, proxy)
+        assert code == 2
+        assert result["result"]["error"]["code"] == "access_credential_not_protected"
+        assert not proxy.admitted and not proxy.refused
+
+
+class DenyAfterPreflight(httpx.AsyncBaseTransport):
+    """Admit the diagnose preflight; refuse every later request as a proxy would."""
+
+    def __init__(self, upstream: httpx.AsyncBaseTransport) -> None:
+        self.upstream = upstream
+        self.refused: list[str] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/memory/v1/diagnose":
+            return await self.upstream.handle_async_request(request)
+        self.refused.append(request.url.path)
+        return httpx.Response(403, content=b"<html>private proxy page</html>")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "command,body",
+    [
+        ("recall", {"query": "port"}),
+        ("suggest", {"observation": "x"}),
+        ("proposal-list", {}),
+        ("proposal-read", {"proposal_id": "22222222-2222-4222-8222-222222222222"}),
+    ],
+)
+async def test_proxy_refusal_of_a_read_after_preflight_is_a_confirmed_refusal(
+    tmp_path: Path, memory_support: ModuleType, command: str, body: object
+) -> None:
+    instance = memory_support.Instance(tmp_path)
+    _, token = instance.add_actor()
+    async with memory_support.serve(instance) as http:
+        path = profile(tmp_path, instance, token, str(http.base_url).rstrip("/"))
+        proxy = DenyAfterPreflight(http._transport)
+        code, result = await invoke(path, command, body, proxy)
+        assert proxy.refused == [f"/memory/v1/{command}"], result
+        assert result["result"]["error"] == {
+            "code": "upstream_access_denied",
+            "operation": command,
+            "http_status": 403,
+        }
+        assert code == 2
+        assert "recovery" not in result["result"]
+        assert "private" not in json.dumps(result)

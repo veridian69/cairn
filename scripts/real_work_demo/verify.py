@@ -27,11 +27,14 @@ WRITES = {
 READS = ("retrieve", "read-evidence")
 # A failing run: a pytest summary, a traceback, or a recorded non-zero exit code.
 FAILING = re.compile(
-    r"\b\d+ failed\b|Traceback \(most recent call last\)|exit code:? *[1-9]", re.I
+    r"\b[1-9]\d* failed\b|Traceback \(most recent call last\)|exit code:? *[1-9]", re.I
 )
 # A passing run: a summary line with passes and no failures on that same line, so
 # `30 failed, 1 passed` is not a pass but a before-and-after pair can still show one.
-PASSING = re.compile(r"^(?!.*\b[1-9]\d* (?:failed|errors?)\b).*\b\d+ passed\b", re.M)
+# Zero counts are neither: `0 failed, 10 passed` is a pass, `0 passed` is nothing.
+PASSING = re.compile(
+    r"^(?!.*\b[1-9]\d* (?:failed|errors?)\b).*\b[1-9]\d* passed\b", re.M
+)
 DIFF = re.compile(r"^(diff --git |--- |\+\+\+ )", re.M)
 # Check 7, when no fix was promoted: a sentence claiming validation with no negation.
 CLAIMS_VALID = re.compile(r"\b(validated|verified|promoted)\b", re.I)
@@ -271,7 +274,8 @@ def check_code(
             # By name within the touched files: a method's node id would need its
             # class, which the diff does not reliably show.
             names = " or ".join(sorted({t.split("::")[1] for t in regression_tests}))
-            return _pytest(venv, clone, *test_files, "-k", names) != 0
+            # Exit 1 is a test failure; 2 is a collection error, 5 selects nothing.
+            return _pytest(venv, clone, *test_files, "-k", names) == 1
 
         # A failed approach can pass the existing suite (rehearsal 1's did); what
         # proves it failed is the fix's own regression test (Operator, 24 September 2026).
@@ -617,6 +621,11 @@ def worker_disputed(
     return False
 
 
+def turns_exited_cleanly(turns: list[dict[str, Any]]) -> bool:
+    """Every turn that ran exited 0. A skipped turn has no result to judge."""
+    return all(t["result"]["exit"] == 0 for t in turns if not t.get("skipped"))
+
+
 def verify(out: Path, build_venv: bool = True) -> dict[str, Any]:
     """Checks 1-8 from the run directory alone; re-runnable after teardown."""
     from scripts.real_work_demo import logs
@@ -708,7 +717,11 @@ def verify(out: Path, build_venv: bool = True) -> dict[str, Any]:
         for t in meta["turns"]
         if not t.get("skipped") and t["result"]["timed_out"]
     ]
-    evidence_valid = all(c.passed for c in checks) and not timed_out
+    evidence_valid = (
+        all(c.passed for c in checks)
+        and not timed_out
+        and turns_exited_cleanly(meta["turns"])
+    )
     t1_failed_run = any(
         c.name in ("command_execution", "Bash")
         and isinstance(c.result, str)

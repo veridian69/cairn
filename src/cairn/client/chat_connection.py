@@ -14,6 +14,7 @@ from cairn.client.memory import MemoryClient
 from cairn.client.profiles import (
     MemoryProfile,
     ProfileError,
+    load_access_headers,
     load_credential,
     load_profile,
 )
@@ -36,7 +37,10 @@ async def _diagnose(
     del expected_principal
     async with httpx.AsyncClient(
         base_url=profile.endpoint,
-        headers={"Authorization": f"Bearer {credential}"},
+        headers={
+            "Authorization": f"Bearer {credential}",
+            **load_access_headers(profile),
+        },
         timeout=httpx.Timeout(10),
         trust_env=False,
         follow_redirects=False,
@@ -136,6 +140,7 @@ def checked_turn(actor: ChatActor, task: bytes) -> str | ChatTurn:
     try:
         profile = load_profile(actor.profile_path)
         credential = load_credential(profile)
+        load_access_headers(profile)
     except (AttributeError, ProfileError):
         raise ChatHostError("invalid_host_profile") from None
     return _checked_turn(

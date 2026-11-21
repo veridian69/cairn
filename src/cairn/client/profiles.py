@@ -31,6 +31,9 @@ _FIELDS = frozenset(
         "credential_file",
     }
 )
+_ACCESS_FIELDS = ("access_client_id_file", "access_client_secret_file")
+_ACCESS_HEADERS = ("CF-Access-Client-Id", "CF-Access-Client-Secret")
+_OPTIONAL = frozenset({"session_id", *_ACCESS_FIELDS})
 _PROFILE_BYTES = 32768
 _CREDENTIAL_BYTES = 512
 
@@ -47,10 +50,17 @@ class MemoryProfile:
     classification: Classification
     credential_file: Path
     session_id: UUID | None = None
+    # Cloudflare Access service token for a Cairn behind an access proxy:
+    # both files or neither.
+    access_client_id_file: Path | None = None
+    access_client_secret_file: Path | None = None
 
 
-def _read_regular(path: Path, *, limit: int, kind: str) -> bytes:
-    """Open every component without following symlinks, then read a bounded file."""
+def _read_regular(path: Path, *, limit: int, kind: str, private: bool = False) -> bytes:
+    """Open every component without following symlinks, then read a bounded file.
+
+    A private file must belong to this user and grant group and others nothing.
+    """
     directory: int | None = None
     descriptor: int | None = None
     try:
@@ -71,8 +81,12 @@ def _read_regular(path: Path, *, limit: int, kind: str) -> bytes:
             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
             dir_fd=directory,
         )
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
             raise ProfileError(f"{kind}_unavailable")
+        # Checked on the open descriptor, so the file read is the file checked.
+        if private and (info.st_uid != os.getuid() or info.st_mode & 0o077):
+            raise ProfileError(f"{kind}_not_protected")
         data = bytearray()
         while len(data) <= limit:
             chunk = os.read(descriptor, limit + 1 - len(data))
@@ -156,9 +170,11 @@ def load_profile(path: Path) -> MemoryProfile:
     raw = _read_regular(path, limit=_PROFILE_BYTES, kind="profile")
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-        if type(value) is not dict or not _FIELDS <= value.keys() <= _FIELDS | {
-            "session_id"
-        }:
+        if (
+            type(value) is not dict
+            or not _FIELDS <= value.keys() <= _FIELDS | _OPTIONAL
+            or len(value.keys() & set(_ACCESS_FIELDS)) == 1
+        ):
             raise ProfileError("invalid_profile")
         if value["schema"] != _SCHEMA:
             raise ProfileError("invalid_profile")
@@ -184,6 +200,11 @@ def load_profile(path: Path) -> MemoryProfile:
             session_id=_identity(value["session_id"])
             if "session_id" in value
             else None,
+            **{
+                field: _credential_path(value[field], path)
+                for field in _ACCESS_FIELDS
+                if field in value
+            },
         )
     except (
         ValueError,
@@ -197,11 +218,17 @@ def load_profile(path: Path) -> MemoryProfile:
 
 
 def load_credential(profile: MemoryProfile) -> str:
-    """Read only this profile's designated token; no ambient fallback or caching."""
+    """Read only this profile's designated token; no ambient fallback or caching.
+
+    The file must be owned by this user with no group or other access (0600).
+    """
     if type(profile) is not MemoryProfile:
         raise ProfileError("invalid_profile")
     raw = _read_regular(
-        profile.credential_file, limit=_CREDENTIAL_BYTES, kind="credential"
+        profile.credential_file,
+        limit=_CREDENTIAL_BYTES,
+        kind="credential",
+        private=True,
     )
     try:
         token = raw.decode("ascii").strip()
@@ -210,3 +237,32 @@ def load_credential(profile: MemoryProfile) -> str:
     if parse_token(token) is None:
         raise ProfileError("invalid_credential")
     return token
+
+
+def load_access_headers(profile: MemoryProfile) -> dict[str, str]:
+    """Read this profile's access-proxy service token; empty when it names none.
+
+    The two files follow the credential file's path, symlink, size and
+    owner-only (0600) rules.
+    Their values are opaque to Cairn, so only header safety is checked.
+    """
+    if type(profile) is not MemoryProfile:
+        raise ProfileError("invalid_profile")
+    paths = (profile.access_client_id_file, profile.access_client_secret_file)
+    if paths == (None, None):
+        return {}
+    headers: dict[str, str] = {}
+    for header, path in zip(_ACCESS_HEADERS, paths, strict=True):
+        if path is None:
+            raise ProfileError("invalid_profile")
+        raw = _read_regular(
+            path, limit=_CREDENTIAL_BYTES, kind="access_credential", private=True
+        )
+        try:
+            value = raw.decode("ascii").strip()
+        except UnicodeError:
+            raise ProfileError("invalid_access_credential") from None
+        if not value or any(not 33 <= ord(character) <= 126 for character in value):
+            raise ProfileError("invalid_access_credential")
+        headers[header] = value
+    return headers

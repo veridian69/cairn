@@ -78,7 +78,7 @@ def test_all_provider_roles_share_one_httpx2_pool_with_the_accepted_policy(
         assert llm_client.client is shared
         assert embedder.client is shared
         assert reranker.client is shared
-        assert llm_client.config.model == "gpt-5.4-nano"
+        assert llm_client.config.model == "gpt-6-luna"
         assert llm_client.config.small_model == "gpt-5.6-luna"
         assert llm_client.reasoning == "none"
         assert reranker.config.model == "gpt-5.6-luna"
@@ -239,7 +239,7 @@ def test_all_three_graphiti_roles_parse_openai3_responses(
         "/v1/embeddings",
         "/v1/chat/completions",
     ]
-    assert requests[0][1]["model"] == "gpt-5.4-nano"
+    assert requests[0][1]["model"] == "gpt-6-luna"
     assert requests[0][1]["reasoning"] == {"effort": "none"}
     assert requests[2][1]["model"] == "gpt-5.6-luna"
 
@@ -278,6 +278,54 @@ def test_small_model_request_is_reasoning_shaped(
     assert "max_output_tokens" in body
     assert "temperature" not in body
     assert "max_tokens" not in body
+
+
+def test_medium_model_request_is_gpt6_shaped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # graphiti-core 0.30.2 treats gpt-6 as a non-reasoning model: it sends
+    # temperature and no effort, and the provider then reasons at medium.
+    requests: list[tuple[str, dict[str, Any]]] = []
+
+    async def serve(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        requests.append((request.url.path, body))
+        if request.url.path == "/v1/chat/completions":
+            return _response(_chat_response(body["model"]))
+        return _response(_parsed_response(body["model"]))
+
+    shared, llm_client, _embedder, _reranker = _clients_with_transport(
+        monkeypatch, serve
+    )
+
+    async def exercise() -> None:
+        try:
+            answer = await llm_client.generate_response(
+                [Message(role="user", content="return the accepted answer")],
+                _Answer,
+            )
+            await llm_client._create_completion(
+                "gpt-6-luna", [{"role": "user", "content": "json"}], 1, 64
+            )
+        finally:
+            await shared.close()
+        assert answer == {"answer": "accepted"}
+
+    asyncio.run(exercise())
+
+    [(path, body), (chat_path, chat_body)] = requests
+    assert path == "/v1/responses"
+    assert body["model"] == "gpt-6-luna"
+    assert body["reasoning"] == {"effort": "none"}
+    assert body["text"]["verbosity"] == "low"
+    assert body["prompt_cache_options"] == {"mode": "explicit"}
+    assert "max_output_tokens" in body
+    assert "temperature" not in body
+    assert chat_path == "/v1/chat/completions"
+    assert chat_body["max_completion_tokens"] == 64
+    assert chat_body["prompt_cache_options"] == {"mode": "explicit"}
+    assert "max_tokens" not in chat_body
+    assert "temperature" not in chat_body
 
 
 def test_search_never_selects_the_cross_encoder() -> None:

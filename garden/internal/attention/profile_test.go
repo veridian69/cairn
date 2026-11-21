@@ -93,48 +93,37 @@ func TestProfileTLSVerificationOverridesAreExplicit(t *testing.T) {
 	}
 }
 
-func TestProfileOpenCodeAPIVersionIsExplicit(t *testing.T) {
-	opencode := strings.Replace(validProfile, `"adapter":"codex","session_id":"thread-id","codex_socket":"/tmp/test-codex.sock"`, `"adapter":"opencode","session_id":"ses_target","host_endpoint":"http://127.0.0.1:4096"`, 1)
-	load := func(text string) (Profile, error) {
+// The OpenCode HTTP adapter is retired: attend, connect and doctor name the plugin instead of
+// reporting an obscure unknown field, and only a legacy home import still reads the old profile.
+func TestProfileRetiredOpenCodeAdapterIsRefused(t *testing.T) {
+	old := strings.Replace(validProfile, `"adapter":"codex","session_id":"thread-id","codex_socket":"/tmp/test-codex.sock"`, `"adapter":"opencode","session_id":"ses_target","host_endpoint":"http://127.0.0.1:4096","host_api_version":"2"`, 1)
+	bare := strings.Replace(validProfile, `"adapter":"codex","session_id":"thread-id","codex_socket":"/tmp/test-codex.sock"`, `"adapter":"opencode"`, 1)
+	for _, text := range []string{old, bare} {
 		path := filepath.Join(t.TempDir(), "profile.json")
 		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
-		return LoadProfile(path)
-	}
-	for version, want := range map[string]string{"": "1", "1": "1", "2": "2"} {
-		text := opencode
-		if version != "" {
-			text = strings.Replace(opencode, `"host_endpoint":"http://127.0.0.1:4096"`, `"host_endpoint":"http://127.0.0.1:4096","host_api_version":"`+version+`"`, 1)
-		}
-		p, err := load(text)
-		if err != nil || p.HostAPIVersion != want {
-			t.Fatalf("version %q: got %q, %v", version, p.HostAPIVersion, err)
-		}
-	}
-	if _, err := load(strings.Replace(opencode, `"host_endpoint"`, `"host_api_version":"3","host_endpoint"`, 1)); err == nil {
-		t.Fatal("unknown OpenCode API version accepted")
-	}
-	if _, err := load(strings.Replace(validProfile, `"session_id":"thread-id"`, `"session_id":"thread-id","host_api_version":"2"`, 1)); err == nil {
-		t.Fatal("API version accepted for a non-OpenCode adapter")
-	}
-	for _, text := range []string{
-		strings.Replace(opencode, `"host_endpoint"`, `"host_api_version":null,"host_endpoint"`, 1),
-		strings.Replace(validProfile, `"session_id":"thread-id"`, `"session_id":"thread-id","host_api_version":null`, 1),
-	} {
-		if _, err := load(text); err == nil {
-			t.Fatal("explicit null API version accepted")
+		if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "OpenCode HTTP adapter was removed") || !strings.Contains(err.Error(), "opencode --standalone") {
+			t.Fatalf("retired OpenCode profile: %v", err)
 		}
 	}
 }
 
-func TestProfileOpenCodeExampleLoads(t *testing.T) {
-	p, err := LoadProfile(filepath.Join("..", "..", "deploy", "opencode.profile.example.json"))
+func TestProfileRejectsRetiredHostFieldsOutsideLegacyImport(t *testing.T) {
+	text := strings.Replace(validProfile, `"codex_socket"`, `"host_endpoint":"http://127.0.0.1:4096","codex_socket"`, 1)
+	if _, err := parseProfile([]byte(text), filepath.Join(t.TempDir(), "profile.json"), false); err == nil {
+		t.Fatal("host_endpoint accepted outside a legacy import")
+	}
+}
+
+func TestLegacyImportReadsRetiredOpenCodeProfileWithoutHostBinding(t *testing.T) {
+	text := strings.Replace(validProfile, `"adapter":"codex","session_id":"thread-id","codex_socket":"/tmp/test-codex.sock"`, `"adapter":"opencode","session_id":"ses_target","host_endpoint":"http://127.0.0.1:4096","host_username":"opencode","host_api_version":"2","host_credential_file":"password"`, 1)
+	p, err := parseProfile([]byte(text), filepath.Join(t.TempDir(), "profile.json"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.HostAPIVersion != "2" {
-		t.Fatalf("example API version %q", p.HostAPIVersion)
+	if p.Adapter != "opencode" || p.Participant != "Val" {
+		t.Fatalf("legacy identity lost: %#v", p)
 	}
 }
 

@@ -192,6 +192,11 @@ def backend(ctx: Context, *, foreground: bool = False) -> Adapter:
         from cairn_install.kubernetes import Backend as KubernetesBackend
 
         return KubernetesBackend(ctx)
+    if ctx.mode == "garden-server":
+        from cairn_install.garden_server_upgrade import ServerGarden
+
+        # Only garden-upgrade drives this adapter; other lifecycles refuse the mode.
+        return cast(Adapter, ServerGarden(ctx))
     from cairn_install.native import Backend as NativeBackend
 
     return NativeBackend(ctx, foreground=foreground)
@@ -274,30 +279,7 @@ def status_install(ctx: Context) -> dict[str, Any]:
             "verification": ctx.state["steps"].get("garden_verify", "not_checked"),
             "data_policy": "Restart and rollback preserve Garden data; blitz deletes it.",
         }
-        source = garden.get("source")
-        if isinstance(source, dict) and "version" in source:
-            result["garden"]["version"] = source["version"]
-        previous = garden.get("previous")
-        if isinstance(previous, dict):
-            result["garden"]["previous_version"] = previous["version"]
-        if isinstance(garden.get("upgrade"), dict):
-            result["garden"]["upgrade_phase"] = garden["upgrade"]["phase"]
-        upgrades = garden.get("upgrades", [])
-        if upgrades:
-            last = upgrades[-1]
-            result["garden"]["last_upgrade"] = {
-                "from": last["from_version"],
-                "to": last["to_version"],
-                "at": last["at"],
-                "data_choice": last["data_choice"],
-                "cold_copy": last["cold_copy"],
-            }
-        copies = {
-            entry["cold_copy"]["path"]: entry["cold_copy"]
-            for entry in upgrades
-            if entry.get("cold_copy")
-        }
-        result["garden"]["cold_copies"] = list(copies.values())[-2:]
+        result["garden"].update(upgrade_status(garden))
         if isinstance(garden.get("backup"), dict):
             result["garden"]["backup_phase"] = garden["backup"]["phase"]
         if garden.get("backups"):
@@ -316,6 +298,36 @@ def status_install(ctx: Context) -> dict[str, Any]:
     pending = ctx.pending_replacements()
     if pending:
         result["pending_replacements"] = pending
+    return result
+
+
+def upgrade_status(garden: dict[str, Any]) -> dict[str, Any]:
+    """Recorded release-change fields, shared by every Garden mode's status."""
+    result: dict[str, Any] = {}
+    source = garden.get("source")
+    if isinstance(source, dict) and "version" in source:
+        result["version"] = source["version"]
+    previous = garden.get("previous")
+    if isinstance(previous, dict):
+        result["previous_version"] = previous["version"]
+    if isinstance(garden.get("upgrade"), dict):
+        result["upgrade_phase"] = garden["upgrade"]["phase"]
+    upgrades = garden.get("upgrades", [])
+    if upgrades:
+        last = upgrades[-1]
+        result["last_upgrade"] = {
+            "from": last["from_version"],
+            "to": last["to_version"],
+            "at": last["at"],
+            "data_choice": last["data_choice"],
+            "cold_copy": last["cold_copy"],
+        }
+    copies = {
+        entry["cold_copy"]["path"]: entry["cold_copy"]
+        for entry in upgrades
+        if entry.get("cold_copy")
+    }
+    result["cold_copies"] = list(copies.values())[-2:]
     return result
 
 

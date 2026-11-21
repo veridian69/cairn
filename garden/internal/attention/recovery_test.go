@@ -89,19 +89,6 @@ func TestStdioWorkerFailureClosesBlockedInput(t *testing.T) {
 	}
 }
 
-func TestPermanentPreSubmissionHTTPFailuresStop(t *testing.T) {
-	for _, code := range []int{301, 307, 400, 401, 403, 404, 405, 409, 422} {
-		if !errors.Is(rejectedStatus(code, false), ErrRejected) {
-			t.Errorf("HTTP %d must stop", code)
-		}
-	}
-	for _, code := range []int{408, 425, 429, 500, 503} {
-		if !errors.Is(rejectedStatus(code, false), ErrUnavailable) {
-			t.Errorf("HTTP %d must retry", code)
-		}
-	}
-}
-
 func TestStdioShutdownPreservesWorkerUncertainty(t *testing.T) {
 	for _, cause := range []string{"cancel", "eof"} {
 		t.Run(cause, func(t *testing.T) {

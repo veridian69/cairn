@@ -177,8 +177,8 @@ func TestAttentionAdaptersEndToEndWithCentralGarden(t *testing.T) {
 	}
 	defer bob.Close()
 
-	messageIDs := make([]string, 0, 3)
-	for _, content := range []string{"claude channel", "codex task", "opencode session"} {
+	messageIDs := make([]string, 0, 2)
+	for _, content := range []string{"claude channel", "codex task"} {
 		value, err := alice.Call(ctx, "send_message", json.RawMessage(`{"content":`+mustJSON(t, content)+`,"recipients":["bob"]}`))
 		if err != nil {
 			t.Fatal(err)
@@ -253,54 +253,7 @@ func TestAttentionAdaptersEndToEndWithCentralGarden(t *testing.T) {
 		go func() { finished <- runner.Run(runCtx) }()
 		awaitAckAndExit(t, inbox.acked, finished)
 	})
-	assertPending(t, ctx, bob, consumer, messageIDs[2])
 
-	t.Run("opencode", func(t *testing.T) {
-		var mu sync.Mutex
-		var stored map[string]any
-		hostHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.Contains(r.URL.Path, "/message/"):
-				mu.Lock()
-				defer mu.Unlock()
-				if stored == nil {
-					w.WriteHeader(http.StatusNotFound)
-					return
-				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"info": map[string]string{"id": stored["messageID"].(string), "role": "user", "sessionID": "ses_target"}, "parts": stored["parts"]})
-			case r.URL.Path == "/session/status":
-				_, _ = io.WriteString(w, `{}`)
-			case r.URL.Path == "/session/ses_target/prompt_async" && r.Method == http.MethodPost:
-				var submitted map[string]any
-				if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
-					t.Error(err)
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				encoded, _ := json.Marshal(submitted)
-				if !strings.Contains(string(encoded), messageIDs[2]) || !strings.Contains(string(encoded), "external_untrusted") {
-					t.Error("OpenCode submission lost Garden provenance")
-				}
-				mu.Lock()
-				stored = submitted
-				mu.Unlock()
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer hostHTTP.Close()
-		host, err := NewOpenCode(hostHTTP.URL, "ses_target", "", "", "1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		runCtx, runCancel := context.WithCancel(ctx)
-		inbox := &cancelAfterAckInbox{Inbox: bob, cancel: runCancel, acked: make(chan struct{})}
-		runner := Runner{Inbox: inbox, Host: host, ConsumerID: consumer, retryAfter: time.Millisecond}
-		finished := make(chan error, 1)
-		go func() { finished <- runner.Run(runCtx) }()
-		awaitAckAndExit(t, inbox.acked, finished)
-	})
 	empty, err := bob.api.Poll(ctx, garden.PollArgs{ConsumerID: consumer})
 	if err != nil || empty.Message != nil {
 		t.Fatalf("accepted deliveries remain pending: %#v %v", empty.Message, err)

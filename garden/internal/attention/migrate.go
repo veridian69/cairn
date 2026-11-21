@@ -78,7 +78,7 @@ func ImportLegacyHome(from, dest string, defaults map[string]string) (ImportResu
 		if err != nil {
 			return result, fmt.Errorf("profile %s: %w", name, err)
 		}
-		p, err := parseProfile(data, path)
+		p, err := parseProfile(data, path, true)
 		if err != nil {
 			return result, fmt.Errorf("profile %s: %w", name, err)
 		}

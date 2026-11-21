@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pytest
 
-from cairn_install import cli, garden, garden_backup, sudo, workflow
+from cairn_install import cli, garden, garden_backup, garden_upgrade, sudo, workflow
 from cairn_install import garden_server as server
 from cairn_install.core import Context, InstallError, atomic_write, open_context
 
@@ -467,13 +467,21 @@ def test_complete_flow_policy_exactness_and_remove_keeps_data(managed: Any) -> N
     assert all(call in commands for call in privileged)
     text = sudo.snippet(ctx)
     emitted = [
-        line.split("NOPASSWD: ", 1)[1]
-        for line in text.splitlines()
-        if "NOPASSWD:" in line
+        line.split(" ALL=", 1)[1] for line in text.splitlines() if "NOPASSWD:" in line
     ]
+    # Data commands run as the Garden account, never as root.
     assert emitted == [
-        " ".join(sudo._escape(arg) for arg in call[2:]) for call in commands
+        f"({call[3]}) NOPASSWD: " + " ".join(sudo._escape(arg) for arg in call[4:])
+        if call[2] == "-u"
+        else "(root) NOPASSWD: " + " ".join(sudo._escape(arg) for arg in call[2:])
+        for call in commands
     ]
+    assert {call[3] for call in commands if call[2] == "-u"} == {"garden"}
+    assert all(
+        Path(call[4]).name in {"tar", "du", "stat", "install", "mv"}
+        for call in commands
+        if call[2] == "-u"
+    )
     assert len(set(emitted)) == len(emitted)
     for path in sudo.files(ctx):
         assert [
@@ -787,7 +795,7 @@ def test_cli_refuses_irrelevant_options(
     assert "garden-server refuses" in capsys.readouterr().err
 
 
-def test_cli_install_resume_status_remove_and_refuse_upgrade(
+def test_cli_install_resume_status_remove_and_upgrade(
     managed: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx, world, path, config_path = managed
@@ -823,7 +831,16 @@ def test_cli_install_resume_status_remove_and_refuse_upgrade(
     )
     assert cli.main(["resume", *args], default_source=ROOT) == 0
     assert cli.main(["status", *args]) == 0
-    assert cli.main(["garden-upgrade", *args]) == 2
+    # garden-upgrade now reaches the engine for this mode (S12).
+    reached: list[str] = []
+
+    def engine(parsed: Any, root: Path) -> dict[str, Any]:
+        reached.append(parsed.name)
+        return {"status": "verified"}
+
+    monkeypatch.setattr(garden_upgrade, "run", engine)
+    assert cli.main(["garden-upgrade", "--source", str(ROOT), *args]) == 0
+    assert reached == ["wired"]
     assert cli.main(["garden-remove", "--delete-data", "--yes", *args]) == 2
     monkeypatch.setattr(server, "check_remove", lambda context, **kw: None)
     monkeypatch.setattr(

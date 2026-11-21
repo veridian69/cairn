@@ -91,6 +91,12 @@ from cairn.projection.graphiti_extraction_cache import (
     install_edge_timestamp_caching,
     search_embedding_passthrough,
 )
+from cairn.projection.models import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    LLM_MEDIUM_MODEL,
+    LLM_SMALL_MODEL,
+)
 from cairn.projection.partition import derive_group_id
 from cairn.projection.semantic_evidence import (
     PARTITION_LIMIT,
@@ -132,13 +138,82 @@ _TASK_CLEANUP_WAIT_SECONDS = 5.0
 _PROVIDER_KEEPALIVE_EXPIRY: float | None = None
 _PROVIDER_MAX_CONNECTIONS = 1000
 _PROVIDER_MAX_KEEPALIVE_CONNECTIONS = 100
-_PROVIDER_MEDIUM_MODEL = "gpt-5.4-nano"
-# gpt-4.1-nano shuts down 23 October 2026; OpenAI names gpt-5.6-luna as its
-# replacement. The reranker inherits it but cannot drive it: a live probe
-# (10 October 2026) rejected max_tokens and temperature=0. No Cairn path
-# selects a cross-encoder config (_SEARCH_CONFIG reranks by RRF), so it is
-# never called.
-_PROVIDER_SMALL_MODEL = "gpt-5.6-luna"
+
+
+class _Gpt6OpenAIClient(OpenAIClient):
+    """graphiti-core 0.30.2 recognises reasoning models by a ``gpt-5`` prefix.
+
+    A ``gpt-6`` model therefore gets ``temperature`` and no ``reasoning``. The
+    provider accepts that and silently runs at its default medium effort
+    (live probe, 21 November 2026: 18 reasoning tokens for a one-word answer,
+    none with effort ``none``). This sends the request shape graphiti-core
+    0.31.2 sends for ``gpt-6``, including explicit prompt-cache mode, which
+    stops the default 1.25x cache writes for prompts of 1,024+ tokens.
+
+    Remove when the graphiti-core pin reaches 0.31.2 or later.
+    """
+
+    async def _create_structured_completion(
+        self,
+        model: str,
+        messages: list[Any],
+        temperature: float | None,
+        max_tokens: int,
+        response_model: type[BaseModel],
+        reasoning: str | None = None,
+        verbosity: str | None = None,
+    ) -> Any:
+        if not model.startswith("gpt-6"):
+            return await super()._create_structured_completion(
+                model,
+                messages,
+                temperature,
+                max_tokens,
+                response_model,
+                reasoning,
+                verbosity,
+            )
+        request: dict[str, Any] = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+            "text_format": response_model,
+            "extra_body": {"prompt_cache_options": {"mode": "explicit"}},
+        }
+        effort = self._resolve_reasoning_effort(model, reasoning)
+        if effort:
+            request["reasoning"] = {"effort": effort}
+        if verbosity is not None:
+            request["text"] = {"verbosity": verbosity}
+        return await self.client.responses.parse(**request)
+
+    async def _create_completion(
+        self,
+        model: str,
+        messages: list[Any],
+        temperature: float | None,
+        max_tokens: int,
+        response_model: type[BaseModel] | None = None,
+        reasoning: str | None = None,
+        verbosity: str | None = None,
+    ) -> Any:
+        if not model.startswith("gpt-6"):
+            return await super()._create_completion(
+                model,
+                messages,
+                temperature,
+                max_tokens,
+                response_model,
+                reasoning,
+                verbosity,
+            )
+        return await self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_completion_tokens=max_tokens,
+            response_format={"type": "json_object"},
+            extra_body={"prompt_cache_options": {"mode": "explicit"}},
+        )
 
 
 def _openai_provider_clients() -> tuple[
@@ -161,15 +236,15 @@ def _openai_provider_clients() -> tuple[
     )
     shared = AsyncOpenAI(http_client=http_client)
     llm_config = LLMConfig(
-        model=_PROVIDER_MEDIUM_MODEL,
-        small_model=_PROVIDER_SMALL_MODEL,
+        model=LLM_MEDIUM_MODEL,
+        small_model=LLM_SMALL_MODEL,
     )
     return (
         shared,
-        OpenAIClient(config=llm_config, client=shared, reasoning="none"),
+        _Gpt6OpenAIClient(config=llm_config, client=shared, reasoning="none"),
         OpenAIEmbedder(client=shared),
         OpenAIRerankerClient(
-            config=LLMConfig(model=_PROVIDER_SMALL_MODEL),
+            config=LLMConfig(model=LLM_SMALL_MODEL),
             client=shared,
         ),
     )
@@ -1019,9 +1094,9 @@ class GraphitiIndex:
             self
             if (
                 type(dimension) is int
-                and dimension == 1024
+                and dimension == EMBEDDING_DIMENSION
                 and type(model) is str
-                and model == "text-embedding-3-small"
+                and model == EMBEDDING_MODEL
             )
             else None
         )

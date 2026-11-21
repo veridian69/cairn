@@ -62,6 +62,11 @@ def _check(ctx: Context, *, output: Path | None = None) -> None:
             raise InstallError(
                 "garden-server backup requires backup_hook", "invalid_arguments"
             )
+        upgrade = ctx.state["garden"].get("upgrade")
+        if isinstance(upgrade, dict) and upgrade.get("phase") != "complete":
+            raise InstallError(
+                f"Garden upgrade is in progress; run garden-upgrade --name {ctx.name} again"
+            )
         return
     if ctx.mode not in {"native", "docker"}:
         raise InstallError(

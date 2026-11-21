@@ -317,14 +317,33 @@ func (s *Server) position(ctx context.Context, principal string) (transport.Posi
 	if err != nil {
 		return transport.Position{}, b, err
 	}
-	p, err := s.stream.Position(ctx)
+	p, err := s.probe(ctx)
 	if err != nil {
-		return p, b, failure("unavailable", "Garden stream unavailable")
+		// The cached socket may be silent rather than closed, so re-dial once from the URL file.
+		if err = s.ensure(ctx); err != nil {
+			return p, b, err
+		}
+		if p, err = s.probe(ctx); err != nil {
+			return p, b, failure("unavailable", "Garden stream unavailable")
+		}
 	}
 	if p.Created.UTC().Format(time.RFC3339Nano) != b.generation {
 		return p, b, failure("stream_reset", "Garden stream generation changed; operator recovery required")
 	}
 	return p, b, nil
+}
+
+// probe is one stream round trip bounded to 2 seconds, as in New and Reload. A failure drops
+// the cached connection so the next attempt re-dials; a silent socket never reports itself closed.
+func (s *Server) probe(ctx context.Context) (transport.Position, error) {
+	pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	p, err := s.stream.Position(pctx)
+	if err != nil {
+		s.stream.Close()
+		s.stream = nil
+	}
+	return p, err
 }
 func (s *Server) status(ctx context.Context, principal string) (StatusResult, error) {
 	s.mu.Lock()

@@ -2,7 +2,8 @@
 
 This plugin connects an OpenCode session to Garden. It starts `garden connect --harness opencode`
 from `PATH` as a child process, so the `garden` binary must be on `PATH`. It works only in a
-standalone OpenCode session.
+standalone OpenCode session. This plugin is the only supported OpenCode path: the HTTP
+`garden attend` adapter was removed, and a profile with `adapter: "opencode"` is refused.
 
 ## Install
 
@@ -88,5 +89,6 @@ Existing transcript IDs are not rewritten: in a mixed-era transcript, reverting 
 turn can truncate at an earlier hash ID and hide later native turns and corrected Garden messages.
 The plugin API exposes active context after compaction but cannot rewrite full transcript history,
 so automatic migration is not safe. An uncertain queued admission from the old plugin has no saved
-mapping and cannot safely migrate automatically. The legacy
-`garden attend` OpenCode adapter still uses its earlier IDs and retains the revert limitation.
+mapping and cannot safely migrate automatically. The removed
+`garden attend` OpenCode adapter used earlier IDs and had the same revert limitation; transcripts it
+wrote keep those IDs.

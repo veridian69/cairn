@@ -385,6 +385,61 @@ def test_a_traceback_or_nonzero_exit_counts_as_a_failing_run() -> None:
     assert not verify.FAILING.search("Exit code: 0\n1264 passed")
 
 
+def test_a_zero_count_is_neither_a_failing_nor_a_passing_run() -> None:
+    assert not verify.FAILING.search("0 failed, 10 passed")
+    assert not verify.PASSING.search("0 passed")
+    assert not verify.PASSING.search("0 passed, 1 skipped")
+    assert verify.PASSING.search("0 failed, 10 passed")
+    assert verify.PASSING.search("10 passed")
+    assert verify.FAILING.search("10 failed")
+
+
+def test_a_regression_test_that_fails_to_collect_is_not_a_regression_failure(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+    _commit(
+        src,
+        "t:t@t",
+        {"lib.py": "def f():\n    return 0\n\n\ndef g():\n    return 2\n",
+         "tests/__init__.py": ""},
+        "base",
+    )  # fmt: skip
+    base = subprocess.check_output(
+        ["git", "-C", str(src), "rev-parse", "HEAD"], text=True
+    ).strip()
+    # The failed approach lacks g, so the fix's regression test fails at import.
+    _commit(src, "Val:val@jclk.ch", {"lib.py": "def f():\n    return 1\n"}, "partial")
+    partial = subprocess.check_output(
+        ["git", "-C", str(src), "rev-parse", "HEAD"], text=True
+    ).strip()
+    _commit(src, "Spike:spike@jclk.ch", {
+        "lib.py": "def f():\n    return 2\n\n\ndef g():\n    return 2\n",
+        "tests/test_f.py": "from lib import f, g\n\n\ndef test_f():\n    assert f() == 2 and g() == 2\n"}, "fix")  # fmt: skip
+    subprocess.run(["git", "-C", str(src), "branch", "fix"], check=True)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(src), str(origin)], check=True)
+    venv = Path(sys.executable).parent.parent
+    result = verify.check_code(
+        origin, venv, "fix", partial, ["tests/test_f.py::test_f"], base
+    )
+    assert not result.passed
+    assert "regression_fails_on_failed=False" in result.detail
+    assert "regression_fails_on_base=True" in result.detail
+
+
+def test_a_turn_that_exited_nonzero_or_timed_out_is_not_clean() -> None:
+    def turn(exit_code: int | None) -> dict[str, Any]:
+        return {"prefix": "t", "actor": "spike",
+                "result": {"exit": exit_code, "timed_out": exit_code is None}}  # fmt: skip
+
+    skipped = {"prefix": "t5-spike-correction", "actor": "spike", "skipped": True}
+    assert verify.turns_exited_cleanly([turn(0), skipped, turn(0)])
+    assert not verify.turns_exited_cleanly([turn(0), turn(1)])
+    assert not verify.turns_exited_cleanly([turn(None)])
+
+
 def test_every_added_test_is_a_regression_test(tmp_path: Path) -> None:
     src = tmp_path / "src"
     subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)

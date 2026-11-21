@@ -205,6 +205,22 @@ def test_each_console_gets_distinct_sessions_and_cleans_profiles(
     assert all(a.auth_file.exists() for a in configured.values())
 
 
+def test_console_session_profiles_keep_the_access_service_token_files(
+    tmp_path: Path,
+) -> None:
+    configured = actors(tmp_path)
+    for actor in configured.values():
+        value = json.loads(actor.profile_path.read_text())
+        value["access_client_id_file"] = "access-id"
+        value["access_client_secret_file"] = str(tmp_path / "access-secret")
+        actor.profile_path.write_text(json.dumps(value))
+    with session_actors(configured) as session:
+        for actor in session.values():
+            loaded = load_profile(actor.profile_path)
+            assert loaded.access_client_id_file == tmp_path / "access-id"
+            assert loaded.access_client_secret_file == tmp_path / "access-secret"
+
+
 def write_config(tmp_path: Path, configured: dict[str, ChatActor]) -> Path:
     data: dict[str, object] = {"schema": "cairn.chat/v1"}
     for name, actor in configured.items():

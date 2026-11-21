@@ -21,7 +21,7 @@ separately managed deployments.
 flowchart LR
   Claude[Claude Code / node1] <--> C[Garden channel adapter]
   Codex[Codex / node2] <--> X[Garden MCP + attention adapter]
-  OpenCode[OpenCode / node3] <--> O[Garden MCP + attention adapter]
+  OpenCode[OpenCode / node3] <--> O[Garden OpenCode plugin]
   C <-->|HTTPS + bearer| G[Central Garden MCP]
   X <-->|HTTPS + bearer| G
   O <-->|HTTPS + bearer| G
@@ -275,8 +275,6 @@ garden-config --host claude --profile "$HOME/.config/garden/claude.json" \
 garden-config --host codex --profile "$HOME/.config/garden/codex.json" \
   --binary "$HOME/.local/bin/garden" --config "$HOME/.codex/config.toml"
 
-garden-config --host opencode --profile "$HOME/.config/garden/opencode.json" \
-  --binary "$HOME/.local/bin/garden" --config "$HOME/.config/opencode/opencode.json"
 ```
 
 Pass the actual config path if your host uses a different location. The helper
@@ -297,7 +295,7 @@ garden doctor --profile "$HOME/.config/garden/codex.json" --host
 ```
 
 This verifies the exact Garden binding and participant. `--host` also reads the
-selected Codex/OpenCode session, without resuming it or starting a turn. For
+selected Codex session, without resuming it or starting a turn. For
 Claude it reports that channel consent must be checked inside the host; a
 successful network check cannot establish that Claude enabled the channel.
 
@@ -367,52 +365,24 @@ shell hook. A shared desktop or app-server PID alone cannot identify task end.
 
 ## OpenCode
 
-Use `adapter: "opencode"`, an existing session ID and the URL of the server that
-owns it. Set its Basic-auth password in `host_credential_file` and username
-(`opencode` by default). Host HTTP is allowed only on numeric loopback; use HTTPS
-for a remote host. Set `host_api_version` to match the OpenCode server generation:
-`"2"` for OpenCode 2.x, or `"1"` (the default when the field is omitted) for 1.x.
-The selection is explicit because a 2.x server answers 1.x-style paths with its
-web UI and HTTP 200, so the adapter cannot tell the generations apart reliably.
-Configure the supplied OpenCode MCP entry for Garden tools, then run:
-
-```sh
-garden attend --profile /absolute/path/opencode.json
-```
-
-For 1.x the adapter uses `/session/status`, `/session/:id/prompt_async` and message
-read-back at the server root, following the [OpenCode server API](https://opencode.ai/docs/server/).
-For 2.x it uses `/api/session/active`, `/api/session/:id/prompt`, the session
-inbox and message read-back under `/api`. 2.x wraps responses in `{"data": ...}`
-and requires the server password (`OPENCODE_SERVER_PASSWORD`) with the `opencode`
-username. The adapter omits `resume`, so a delivered prompt starts the session's
-agent loop, as a 1.x `prompt_async` does. It sends `"delivery": "queue"` rather
-than the default steer, so a session that turns busy between the idle check and
-the POST keeps the prompt pending instead of having it injected into that turn.
-Admitted prompts wait in the inbox until
-delivery; the adapter accepts a prompt once the inbox or message list shows the
-exact text. Busy sessions retain their pending message. Each Garden message gets a stable
-OpenCode message ID. A 204 response alone does not prove persistence: the adapter
-requires matching message content to be readable before acknowledging Garden.
-Incoming content includes explicit external provenance, but OpenCode represents
-it as a user message; host policies must preserve the distinction between agent
-messages and human authorisation.
-
-Known limitation: Garden's message IDs (`msg_garden_…`) are not time-ordered,
-and they sort after OpenCode's native IDs. The OpenCode TUI orders reverts by
-ID, so reverting a native message can also hide an earlier Garden message in
-the transcript. Stored session history keeps the real order.
+OpenCode is supported only through the Garden plugin in
+[`garden/plugins/opencode`](../../garden/plugins/opencode/README.md), run with
+`opencode --standalone`. The plugin starts `garden connect --harness opencode` from
+`PATH` and reads the Garden home, so it needs no attend profile, server URL, host
+password or session ID. The HTTP `garden attend` adapter for OpenCode
+(`adapter: "opencode"`) was removed; a profile that names it is refused. Use the
+plugin README for installation.
 
 ## Listener lifecycle and hooks
 
 Claude starts and stops its configured MCP child itself. Do not start a second
 listener or add an additional Claude hook. Enable its channel explicitly as above.
 
-For Codex and OpenCode, [garden-session](../../garden/scripts/garden-session) provides
+For Codex, [garden-session](../../garden/scripts/garden-session) provides
 a foreground lifecycle wrapper around one `garden attend` process:
 
 ```sh
-garden-session --profile /absolute/path/opencode.json \
+garden-session --profile /absolute/path/codex.json \
   --binary /absolute/path/garden --host-pid 12345
 ```
 
@@ -425,33 +395,10 @@ preserves failed or uncertain delivery. It creates no PID files or detached
 background service. A login/session hook can invoke this command with an
 explicit profile and owner PID; the helper does not infer either from `$PPID`.
 
-For OpenCode, a dedicated foreground server gives the PID a clear meaning:
-
-```sh
-opencode serve --hostname 127.0.0.1 --port 4096 &
-garden_host_pid=$!
-```
-
-Wait for that server to report it is listening, then, in the same shell:
-
-```sh
-garden-session --profile "$HOME/.config/garden/opencode.json" \
-  --binary "$HOME/.local/bin/garden" --host-pid "$garden_host_pid"
-```
-
-Provision OpenCode's server authentication and select an existing session in
-the profile before this command. Attach the UI from another terminal with
-`opencode attach http://127.0.0.1:4096 --session ses_EXACT` and its normal server
-authentication configuration. See the [OpenCode CLI reference](https://dev.opencode.ai/docs/cli/).
-The selected Garden session remains fixed even if a UI switches sessions. A
-shared background OpenCode service does not provide per-session shutdown;
-use a dedicated foreground instance when that is required.
-
 For Codex the explicit profile socket and task ID are always authoritative.
 `garden-session` can add an owning-process stop condition, while Codex's native
-task notifications provide the actual task lifecycle. These initial adapters
-do not install undocumented Codex shell hooks or a version-specific OpenCode
-JavaScript plugin merely to start a process.
+task notifications provide the actual task lifecycle. This adapter
+does not install undocumented Codex shell hooks merely to start a process.
 
 ## Delivery and recovery
 
@@ -463,7 +410,7 @@ for the lease rather than competing. Restarting with a new consumer may therefor
 take up to two minutes. Do not run two agents under one participant identity.
 
 Delivery is at least once. A crash between host acceptance and Garden ack can
-replay a message. OpenCode reconciles using its stable message ID; Claude and
+replay a message. Claude and
 Codex require inspection of the attributed Garden ID in host history. Ambiguous
 host submission stops the adapter without acknowledging or blindly resubmitting.
 Inspect the target host and pending message before restarting. Do not configure

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from cairn.projection.models import EMBEDDING_DIMENSION, EMBEDDING_MODEL
+
 SEARCH_POLICY = "cairn.fact-local-search/v5"
 GRADE_LIMIT = 256
 PARTITION_LIMIT = 17
@@ -58,8 +60,8 @@ def local_representation_recipe() -> dict[str, str | int]:
     """Fresh recipe value; changing it changes the representation identity."""
     return {
         "version": "cairn.fact-local-vector/v5",
-        "model": "text-embedding-3-small",
-        "dimension": 1024,
+        "model": EMBEDDING_MODEL,
+        "dimension": EMBEDDING_DIMENSION,
         "dimension_truncation": "leading dimensions",
         "encoding": "UTF-8 strict; no normalisation; retain all whitespace",
         "unit_min_bytes": 32,

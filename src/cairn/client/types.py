@@ -133,6 +133,7 @@ class ConnectionStatus(StrEnum):
     UNREACHABLE = "unreachable"
     AUTHENTICATION_FAILED = "authentication_failed"
     AUTHORISATION_DENIED = "authorisation_denied"
+    UPSTREAM_ACCESS_DENIED = "upstream_access_denied"
     NO_AUTHORISED_OPERATIONS = "no_authorised_operations"
     INCOMPATIBLE = "incompatible"
     INSTANCE_MISMATCH = "instance_mismatch"

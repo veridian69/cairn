@@ -617,7 +617,7 @@ def test_lifecycle_refuses_inflight_upgrade(env: Env, operation: str) -> None:
     assert env.state_path.read_bytes() == before
 
 
-@pytest.mark.parametrize("mode", ["kubernetes", "garden-server"])
+@pytest.mark.parametrize("mode", ["kubernetes"])
 def test_unsupported_modes_refused_without_writes(env: Env, mode: str) -> None:
     with open_context(env.root, "demo") as ctx:
         ctx.state["mode"] = mode
