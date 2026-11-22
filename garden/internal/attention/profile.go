@@ -25,10 +25,6 @@ type Profile struct {
 	Participant         string           `json:"participant"`
 	Adapter             string           `json:"adapter"`
 	SessionID           string           `json:"session_id,omitempty"`
-	HostEndpoint        string           `json:"host_endpoint,omitempty"`
-	HostUsername        string           `json:"host_username,omitempty"`
-	HostAPIVersion      string           `json:"host_api_version,omitempty"`
-	HostCredentialFile  string           `json:"host_credential_file,omitempty"`
 	CodexSocket         string           `json:"codex_socket,omitempty"`
 	// CodexBinary is accepted so existing profiles still load, but it is ignored:
 	// Garden dials the control socket itself and runs no Codex binary.
@@ -40,20 +36,51 @@ func LoadProfile(path string) (Profile, error) {
 	if err != nil {
 		return Profile{}, errors.New("cannot read adapter profile")
 	}
-	return parseProfile(data, path)
+	return parseProfile(data, path, false)
+}
+
+// errOpenCodeAdapterRemoved refuses the retired OpenCode HTTP adapter. OpenCode is supported only
+// through the plugin, which needs no attend profile.
+var errOpenCodeAdapterRemoved = errors.New("the OpenCode HTTP adapter was removed; use the OpenCode plugin under opencode --standalone (garden/plugins/opencode/README.md)")
+
+// legacyProfile lets ImportLegacyHome read profiles written for the retired OpenCode adapter.
+// The host_* values are accepted and discarded: the identity moves to the home's opencode default,
+// which the plugin uses, and nothing contacts the old server.
+type legacyProfile struct {
+	*Profile
+	HostEndpoint       json.RawMessage `json:"host_endpoint,omitempty"`
+	HostUsername       json.RawMessage `json:"host_username,omitempty"`
+	HostAPIVersion     json.RawMessage `json:"host_api_version,omitempty"`
+	HostCredentialFile json.RawMessage `json:"host_credential_file,omitempty"`
 }
 
 // parseProfile validates profile bytes already read from path; relative paths resolve
-// against path's directory.
-func parseProfile(data []byte, path string) (Profile, error) {
+// against path's directory. Only a legacy home import (legacy true) accepts the retired
+// OpenCode adapter.
+func parseProfile(data []byte, path string, legacy bool) (Profile, error) {
+	// Checked before strict decoding, which would otherwise report a retired profile's host_* fields
+	// as invalid JSON rather than naming the removal.
+	var probe struct {
+		Adapter string `json:"adapter"`
+	}
+	_ = json.Unmarshal(data, &probe)
+	if probe.Adapter == "opencode" && !legacy {
+		return Profile{}, errOpenCodeAdapterRemoved
+	}
 	var p Profile
-	if err := strictJSON(data, &p); err != nil {
+	var target any = &p
+	names := []string{"garden_endpoint", "garden_tls_ca_file", "garden_tls_server_name", "credential_file", "instance_id", "scope", "classification", "participant", "adapter", "session_id", "codex_socket", "codex_binary"}
+	if legacy {
+		target = &legacyProfile{Profile: &p}
+		names = append(names, "host_endpoint", "host_username", "host_api_version", "host_credential_file")
+	}
+	if err := strictJSON(data, target); err != nil {
 		return p, errors.New("invalid adapter profile JSON")
 	}
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(data, &fields)
 	allowed := map[string]bool{}
-	for _, name := range []string{"garden_endpoint", "garden_tls_ca_file", "garden_tls_server_name", "credential_file", "instance_id", "scope", "classification", "participant", "adapter", "session_id", "host_endpoint", "host_username", "host_api_version", "host_credential_file", "codex_socket", "codex_binary"} {
+	for _, name := range names {
 		allowed[name] = true
 	}
 	for name := range fields {
@@ -61,15 +88,11 @@ func parseProfile(data []byte, path string) (Profile, error) {
 			return p, errors.New("unknown adapter profile field")
 		}
 	}
-	// An explicit null decodes to "" and would otherwise pass as omitted.
-	if raw, ok := fields["host_api_version"]; ok && string(bytes.TrimSpace(raw)) == "null" {
-		return p, errors.New("invalid adapter profile field")
-	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return p, errors.New("invalid profile location")
 	}
-	return validateProfile(p, base)
+	return validateProfile(p, base, legacy)
 }
 
 // validateBinding checks the pinned Garden endpoint, instance, scope and classification.
@@ -104,7 +127,7 @@ func validateBinding(p Profile) error {
 }
 
 // validateProfile checks one adapter profile and resolves its relative paths against base.
-func validateProfile(p Profile, base string) (Profile, error) {
+func validateProfile(p Profile, base string, legacy bool) (Profile, error) {
 	if err := validateBinding(p); err != nil {
 		return p, err
 	}
@@ -118,35 +141,18 @@ func validateProfile(p Profile, base string) (Profile, error) {
 			return p, errors.New("Codex requires a task ID and absolute control socket")
 		}
 	case "opencode":
-		if !safeSession(p.SessionID) {
-			return p, errors.New("OpenCode requires a session ID")
-		}
-		if _, err := endpoint(p.HostEndpoint); err != nil {
-			return p, err
-		}
-		if p.HostUsername == "" {
-			p.HostUsername = "opencode"
-		}
-		if p.HostAPIVersion == "" {
-			p.HostAPIVersion = "1"
-		}
-		if p.HostAPIVersion != "1" && p.HostAPIVersion != "2" {
-			return p, errors.New("OpenCode host API version must be 1 or 2")
+		// Only a legacy home import reaches this case. It keeps the identity and drops the retired host binding.
+		if !legacy {
+			return p, errOpenCodeAdapterRemoved
 		}
 	default:
-		return p, errors.New("adapter must be stdio, claude, codex or opencode")
-	}
-	if p.Adapter != "opencode" && p.HostAPIVersion != "" {
-		return p, errors.New("host API version applies only to OpenCode")
+		return p, errors.New("adapter must be stdio, claude or codex")
 	}
 	if !filepath.IsAbs(p.CredentialFile) {
 		p.CredentialFile = filepath.Join(base, p.CredentialFile)
 	}
 	if p.GardenTLSCAFile != "" && !filepath.IsAbs(p.GardenTLSCAFile) {
 		p.GardenTLSCAFile = filepath.Join(base, p.GardenTLSCAFile)
-	}
-	if p.HostCredentialFile != "" && !filepath.IsAbs(p.HostCredentialFile) {
-		p.HostCredentialFile = filepath.Join(base, p.HostCredentialFile)
 	}
 	return p, nil
 }

@@ -30,6 +30,7 @@ from cairn.session_identity import MEMORY_REMEMBER_NAMESPACE
 
 FIELDS = {
     "check": (set(), set()),
+    "browse": (set(), set()),
     "arrive": ({"query"}, {"budget", "history_fact_ids"}),
     "recall": ({"query"}, {"budget", "relevant_only"}),
     "recall-page": (
@@ -325,7 +326,7 @@ def evidence_window_input(document: dict[str, object]) -> Input:
 
 
 def parse(command: str, stream: BinaryIO) -> Input:
-    if command == "check":
+    if command in {"check", "browse"}:
         return Input()
     if command == "status":
         raw = "" if stream.isatty() else read_text(stream, limit=MAX_INPUT_BYTES)

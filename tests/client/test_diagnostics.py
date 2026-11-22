@@ -216,3 +216,51 @@ async def test_diagnostics_no_grants_is_authenticated_without_ready_claim() -> N
     assert result.status.value == "no_authorised_operations"
     assert result.principal_id == UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
     assert result.failure is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [401, 403])
+@pytest.mark.parametrize(
+    "content", [b"", b"<html>PRIVATE proxy page</html>", b'{"error":"PRIVATE"}', b"[]"]
+)
+async def test_refusal_without_a_cairn_envelope_is_an_upstream_denial(
+    status: int, content: bytes
+) -> None:
+    async with httpx.AsyncClient(
+        base_url="https://cairn.invalid",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(status, content=content)
+        ),
+    ) as http:
+        result = await client(http).diagnose()
+    assert result.status is ConnectionStatus.UPSTREAM_ACCESS_DENIED
+    assert result.failure is not None
+    assert result.failure.code == "upstream_access_denied"
+    assert result.failure.status_code == status
+    assert result.failure.retry == "never"
+    assert "PRIVATE" not in repr(result)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "status,content,expected",
+    [
+        # Envelope-shaped but unreadable: still Cairn's own refusal.
+        (401, b'{"failure":{"code":"invented"}}', "authentication_failed"),
+        (403, b'{"failure":{}}', "authorisation_denied"),
+        # Other statuses keep the generic fallback.
+        (502, b"<html>bad gateway</html>", "invalid_response"),
+    ],
+)
+async def test_upstream_denial_is_not_inferred_from_cairn_shaped_or_other_failures(
+    status: int, content: bytes, expected: str
+) -> None:
+    async with httpx.AsyncClient(
+        base_url="https://cairn.invalid",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(status, content=content)
+        ),
+    ) as http:
+        result = await client(http).diagnose()
+    assert result.status.value == expected
+    assert result.failure is not None and result.failure.code == "http_error"

@@ -49,7 +49,6 @@ from cairn.client.validation import (
     validate_recall_page,
     validate_remember_success,
 )
-from cairn.transports.v1.wire import FailureEnvelope
 
 if TYPE_CHECKING:
     from cairn.client.proposal_types import (
@@ -144,27 +143,6 @@ def _invalid_response(status_code: int | None = 200) -> FailureMetadata:
         retry="never",
         correlation_id=None,
         status_code=status_code,
-    )
-
-
-def _failure_metadata(response: httpx.Response) -> FailureMetadata:
-    try:
-        envelope = FailureEnvelope.model_validate(response.json())
-    except ValueError:
-        return FailureMetadata(
-            code="http_error",
-            message="Cairn rejected the memory request.",
-            retry="never",
-            correlation_id=None,
-            status_code=response.status_code,
-        )
-    failure = envelope.failure
-    return FailureMetadata(
-        code=failure.code,
-        message=failure.message,
-        retry=failure.retry,
-        correlation_id=failure.correlation_id,
-        status_code=response.status_code,
     )
 
 
@@ -1097,7 +1075,7 @@ class MemoryClient:
         except ValueError:
             raise RememberFailure("remember", _invalid_response()) from None
         if response.status_code != 200:
-            raise RememberFailure("remember", _failure_metadata(response))
+            raise RememberFailure("remember", safe_failure(response))
         try:
             envelope = validate_remember_success(
                 _document(response),

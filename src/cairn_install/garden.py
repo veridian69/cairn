@@ -891,21 +891,22 @@ def profiles(ctx: Context) -> None:
             home["garden_tls_ca_file"] = "tls/ca.crt"
             profile["garden_tls_ca_file"] = "ca.crt"
         _publish_profile_json(ctx, directory / "garden.json", home)
+        if adapter == "opencode":
+            # OpenCode is supported only through its plugin, which reads garden.json. No attend
+            # or connect profile is generated: the HTTP adapter was removed.
+            _publish_profile_file(
+                ctx, directory / "README.md", _plugin_readme(name, adapter)
+            )
+            exports[name] = str(directory)
+            continue
         if adapter == "codex":
             profile.update(
                 session_id="REPLACE_WITH_EXISTING_TASK_ID",
                 codex_socket="/REPLACE/WITH/EXISTING/CODEX/CONTROL.sock",
             )
-        elif adapter == "opencode":
-            profile.update(
-                session_id="REPLACE_WITH_EXISTING_SESSION_ID",
-                host_endpoint="http://127.0.0.1:4096",
-                host_username="opencode",
-                host_api_version="REPLACE_WITH_1_OR_2",
-                host_credential_file="REPLACE_WITH_HOST_PASSWORD_FILE",
-            )
-        filename = adapter + ".profile.example.json"
-        _publish_profile_json(ctx, directory / filename, profile)
+        _publish_profile_json(
+            ctx, directory / (adapter + ".profile.example.json"), profile
+        )
         command = "/REPLACE/WITH/INSTALLED/garden"
         arguments = ["connect", "--profile", "/REPLACE/WITH/BUNDLE/profile.json"]
         if adapter == "codex":
@@ -919,42 +920,21 @@ def profiles(ctx: Context) -> None:
                 + "\n",
             )
         else:
-            mcp: dict[str, Any]
-            if adapter == "claude":
-                mcp = {
-                    "mcpServers": {"garden": {"command": command, "args": arguments}}
-                }
-            else:
-                mcp = {
-                    "mcp": {
-                        "garden": {
-                            "type": "local",
-                            "command": [command, *arguments],
-                            "enabled": True,
-                        }
-                    }
-                }
-            _publish_profile_json(ctx, directory / (adapter + ".mcp.example.json"), mcp)
+            mcp: dict[str, Any] = {
+                "mcpServers": {"garden": {"command": command, "args": arguments}}
+            }
+            _publish_profile_json(ctx, directory / "claude.mcp.example.json", mcp)
         if adapter == "claude":
             setup = (
                 "Copy claude.profile.example.json to profile.json; it needs no edits. "
                 "In claude.mcp.example.json, replace the REPLACE paths with the installed "
                 "garden binary and this bundle's profile.json. "
             )
-        elif adapter == "codex":
+        else:
             setup = (
                 "Copy codex.profile.example.json to profile.json and replace its REPLACE "
                 "task and control-socket values. In codex.mcp.example.toml, replace the "
                 "REPLACE paths with the installed garden binary and this bundle's profile.json. "
-            )
-        else:
-            setup = (
-                "Copy opencode.profile.example.json to profile.json and replace its REPLACE "
-                'host-session values. Set host_api_version to "2" for an OpenCode 2.x server '
-                'or "1" for 1.x; Garden cannot tell them apart. In opencode.mcp.example.json, '
-                "replace the REPLACE paths "
-                "with the installed garden binary and this bundle's profile.json. Explicitly configure "
-                "the local server endpoint and protected password file. "
             )
         _publish_profile_file(
             ctx,
@@ -976,7 +956,7 @@ def profiles(ctx: Context) -> None:
             "binding, then "
             "`garden connect --profile /absolute/path/profile.json` for the MCP stdio bridge. "
             "Configure the agent's MCP command to this garden connect invocation; no bearer belongs in argv.\n\n"
-            "For Claude use garden connect as its MCP server. For Codex/OpenCode run "
+            "For Claude use garden connect as its MCP server. For Codex run "
             "`garden attend --profile /absolute/path/profile.json` alongside the MCP bridge. "
             "Only one attention consumer may own this participant. The profile pins the deployment "
             "identity and scope; tokens remain subject to Cairn revocation and expiry.\n\n"

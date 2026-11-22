@@ -16,6 +16,7 @@ from graphiti_core.driver.driver import GraphDriver
 from graphiti_core.embedder.openai import OpenAIEmbedder
 
 from cairn.projection.adapter import CoverageAudit, ProjectedFactState
+from cairn.projection.models import EMBEDDING_MODEL
 
 CHUNK_BYTES = 2048
 BATCH_BYTES = 16384
@@ -101,7 +102,7 @@ class FactRepresentation:
         self.model = str(embedder.config.embedding_model)
         self.dimension = embedder.config.embedding_dim
         if (
-            self.model != "text-embedding-3-small"
+            self.model != EMBEDDING_MODEL
             or type(self.dimension) is not int
             or not 1 <= self.dimension <= 1536
         ):

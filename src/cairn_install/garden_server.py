@@ -320,6 +320,9 @@ def _installed(ctx: Context, *, allow_missing: bool = False) -> None:
         **server["installed"],
     }.items():
         _check_path(Path(path))
+        if path in server.get("replacements", {}):
+            # A journalled release change owns this path until it converges.
+            continue
         actual = sudo.digest(ctx, path)
         if actual != expected and not (
             actual is None and (allow_missing or path not in server["installed"])
@@ -377,6 +380,39 @@ def _system_tool(name: str) -> str:
     return str(path)
 
 
+def record_tools(ctx: Context) -> None:
+    """Resolve the policy executables; extend an S11 record once with the S12 tools."""
+    server = _require(ctx)
+    tools = {name: _system_tool(name) for name in sudo.TOOLS}
+    recorded = server.setdefault("tools", tools)
+    if recorded == {name: tools[name] for name in sudo.LEGACY_TOOLS}:
+        server["tools"] = recorded = tools
+    if recorded != tools:
+        raise InstallError("Recorded sudo executable paths changed")
+    ctx.save()
+
+
+def write_snippet(ctx: Context) -> None:
+    """Write the policy for the recorded releases; the operator installs it."""
+    path = (ctx.directory / "garden-server.sudoers").absolute()
+    text = sudo.snippet(ctx)
+    if path.exists() or path.is_symlink():
+        observed = hashlib.sha256(read_owned(path)).hexdigest()
+        if observed != hashlib.sha256(text.encode()).hexdigest():
+            # The snippet is derived output: replace it only while unchanged.
+            key = str(path)
+            recorded = ctx.state["owned_files"].get(key) or ctx.state.get(
+                "file_intents", {}
+            ).get(key)
+            if observed != recorded:
+                raise InstallError(f"Owned file changed; preserve and inspect: {path}")
+            path.unlink()
+            ctx.state["owned_files"].pop(key, None)
+            ctx.state.get("file_intents", {}).pop(key, None)
+            ctx.save()
+    ctx.write_file(path, text)
+
+
 def _refuse_runbook_backup() -> None:
     """Refuse a manual copy at the retired path; it would sit beside ours."""
     try:
@@ -400,10 +436,7 @@ def preflight(ctx: Context) -> None:
     server = _require(ctx)
     if os.geteuid() == 0 or platform.system() != "Linux":
         raise InstallError("garden-server requires a non-root Linux installer user")
-    tools = {name: _system_tool(name) for name in sudo.TOOLS}
-    if server.setdefault("tools", tools) != tools:
-        raise InstallError("Recorded sudo executable paths changed")
-    ctx.save()
+    record_tools(ctx)
     sudo.run(ctx, "probe")
     garden.require_unexpired(ctx.state["garden"]["options"])
     if ctx.state["garden"]["options"]["scope"]["realm"] != garden.garden_realm(ctx):
@@ -433,15 +466,17 @@ def preflight(ctx: Context) -> None:
             if actual is not None and recorded.get(path) != actual:
                 raise InstallError(f"Refusing to adopt existing server file: {path}")
     _installed(ctx)
-    ctx.write_file(ctx.directory / "garden-server.sudoers", sudo.snippet(ctx))
+    write_snippet(ctx)
 
 
 def _stage_hashes(ctx: Context) -> dict[str, str]:
+    # Once staged, releases may add or drop rows that the stage never held.
+    paths = ctx.state["server"].get("staged") or sudo.files(ctx)
     return {
         path: hashlib.sha256(
             read_owned(sudo.stage_root(ctx) / path.lstrip("/"), sudo.BINARY_LIMIT)
         ).hexdigest()
-        for path in sudo.files(ctx)
+        for path in paths
     }
 
 
@@ -461,52 +496,7 @@ def prepare(ctx: Context) -> None:
     # publications. Rebuild an incomplete, installer-owned stage on retry.
     shutil.rmtree(root)
     secure_directory(root, private=True)
-    build = ctx.root / "server-build"
-    secure_directory(build, private=True)
-    binary = build / "garden"
-    ctx.command(
-        [
-            "go",
-            "build",
-            "-trimpath",
-            "-mod=readonly",
-            "-ldflags",
-            f"-s -w -X github.com/veridian69/cairn/garden/cmd.version={garden.source_version(ctx.source)}",
-            "-o",
-            str(binary),
-            ".",
-        ],
-        cwd=ctx.source / "garden",
-        env={
-            "CGO_ENABLED": "0",
-            "GOCACHE": str(build / "cache"),
-            "GOMODCACHE": str(build / "mod"),
-            "GOFLAGS": "-modcacherw",
-            "XDG_CONFIG_HOME": str(build / "config"),
-        },
-        timeout=900,
-    )
-    ctx.command(
-        [
-            str(ctx.source / "garden/scripts/install-server"),
-            "--root",
-            str(root),
-            "--binary",
-            str(binary),
-        ],
-        cwd=ctx.source,
-        timeout=900,
-    )
-    for unit in sudo.UNITS:
-        source = read_owned(ctx.source / "garden/deploy" / unit).decode()
-        if unit == "garden-daemon.service" and (
-            "Type=notify\n" not in source or "NotifyAccess=main\n" not in source
-        ):
-            raise InstallError("Garden daemon unit must support sd_notify")
-        text = source.replace("User=garden\n", f"User={server['account']}\n").replace(
-            "Group=garden\n", f"Group={server['account']}\n"
-        )
-        atomic_write(root / "etc/systemd/system" / unit, text.encode(), 0o644)
+    build_release(ctx, ctx.source, root)
     config = garden.gateway_config(
         ctx,
         data_dir="/var/lib/garden/.garden/data",
@@ -542,9 +532,63 @@ def prepare(ctx: Context) -> None:
         )
     if server["backup_hook"]:
         _prepare_hook(ctx)
+    # Pin every byte before granting any root-side installation intent.
+    server["staged"] = _stage_hashes(ctx)
+    ctx.save()
+
+
+def build_release(ctx: Context, source: Path, root: Path) -> None:
+    """Build source's binary and stage its release files, units included, at root."""
+    account = _require(ctx)["account"]
+    build = ctx.root / "server-build"
+    secure_directory(build, private=True)
+    binary = build / "garden"
+    ctx.command(
+        [
+            "go",
+            "build",
+            "-trimpath",
+            "-mod=readonly",
+            "-ldflags",
+            f"-s -w -X github.com/veridian69/cairn/garden/cmd.version={garden.source_version(source)}",
+            "-o",
+            str(binary),
+            ".",
+        ],
+        cwd=source / "garden",
+        env={
+            "CGO_ENABLED": "0",
+            "GOCACHE": str(build / "cache"),
+            "GOMODCACHE": str(build / "mod"),
+            "GOFLAGS": "-modcacherw",
+            "XDG_CONFIG_HOME": str(build / "config"),
+        },
+        timeout=900,
+    )
+    ctx.command(
+        [
+            str(source / "garden/scripts/install-server"),
+            "--root",
+            str(root),
+            "--binary",
+            str(binary),
+        ],
+        cwd=source,
+        timeout=900,
+    )
+    for unit in sudo.UNITS:
+        text = read_owned(source / "garden/deploy" / unit).decode()
+        if unit == "garden-daemon.service" and (
+            "Type=notify\n" not in text or "NotifyAccess=main\n" not in text
+        ):
+            raise InstallError("Garden daemon unit must support sd_notify")
+        text = text.replace("User=garden\n", f"User={account}\n").replace(
+            "Group=garden\n", f"Group={account}\n"
+        )
+        atomic_write(root / "etc/systemd/system" / unit, text.encode(), 0o644)
     # install-server owns these manifest entries. Re-pin transformed units so
     # a manual install-server upgrade sees the actual installed unit bytes.
-    manifest_path = root / "usr/local/share/garden/install-manifest.json"
+    manifest_path = root / sudo.MANIFEST.lstrip("/")
     manifest = garden._document(read_owned(manifest_path))
     for unit in sudo.UNITS:
         relative = "etc/systemd/system/" + unit
@@ -556,9 +600,6 @@ def prepare(ctx: Context) -> None:
         (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
         0o644,
     )
-    # Pin every byte before granting any root-side installation intent.
-    server["staged"] = _stage_hashes(ctx)
-    ctx.save()
 
 
 def _prepare_hook(ctx: Context) -> None:
@@ -842,7 +883,15 @@ def server_install(ctx: Context) -> None:
     for path in sudo.directories(ctx):
         if path not in hook_dirs:
             _directory(ctx, "dir_sys", [path], path=path)
-    _publish(ctx, [path for path in sudo.files(ctx) if path not in _hook_paths(ctx)])
+    staged = ctx.state["server"]["staged"]
+    _publish(
+        ctx,
+        [
+            path
+            for path in sudo.files(ctx)
+            if path in staged and path not in _hook_paths(ctx)
+        ],
+    )
     sudo.run(ctx, "reload")
 
 
@@ -916,7 +965,10 @@ def run(ctx: Context) -> dict[str, Any]:
 
 
 def status(ctx: Context) -> dict[str, Any]:
+    from .workflow import upgrade_status
+
     server = _require(ctx)
+    upgrade = upgrade_status(ctx.state["garden"])
     return {
         "name": ctx.name,
         "mode": ctx.mode,
@@ -933,8 +985,12 @@ def status(ctx: Context) -> dict[str, Any]:
         "garden": {
             "enabled": ctx.state["garden"].get("remove", {}).get("phase") != "complete",
             "origin": "server",
-            "data_policy": "Removal keeps /var/lib/garden; --delete-data is refused.",
+            "data_policy": (
+                "Removal keeps /var/lib/garden, including data.pre-restore, and the "
+                "upgrade cold copies; --delete-data is refused."
+            ),
             "remove_phase": ctx.state["garden"].get("remove", {}).get("phase"),
+            **upgrade,
         },
         "server": {
             "cairn": server["cairn"],
@@ -942,6 +998,11 @@ def status(ctx: Context) -> dict[str, Any]:
             "installed": dict(server["installed"]),
             "digest_check": "not_checked" if server["installed"] else "not_installed",
             "backup_hook": server["backup_hook"],
+            "upgrade_flag": server.get("upgrade_flag", "clear"),
+            "releases": {
+                key: release["version"]
+                for key, release in server.get("releases", {}).items()
+            },
         },
         "note": "Recorded result; status does not probe unit activity or installed file digests.",
     }

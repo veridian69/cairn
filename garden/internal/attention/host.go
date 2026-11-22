@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -69,25 +67,6 @@ func endpoint(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-func httpClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DisableCompression = true
-	return &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
 func safeSession(id string) bool {
 	return id != "" && len(id) <= 128 && !strings.ContainsAny(id, "/\\?#% \t\n\r")
-}
-
-func rejectedStatus(code int, submitted bool) error {
-	if code == http.StatusUnauthorized || code == http.StatusForbidden || code == http.StatusNotFound || code == http.StatusBadRequest {
-		return ErrRejected
-	}
-	if submitted {
-		return ErrUncertain
-	}
-	if code == http.StatusRequestTimeout || code == http.StatusTooEarly || code == http.StatusTooManyRequests || code >= 500 && code <= 599 {
-		return fmt.Errorf("%w (HTTP %d)", ErrUnavailable, code)
-	}
-	return ErrRejected
 }

@@ -403,12 +403,10 @@ def test_enrol_is_idempotent_private_and_exactly_scoped(
             for f in files
             if ".profile." in f.name
         )
-        opencode = json.loads(
-            (
-                ctx.root / "garden/profiles/helper/opencode.profile.example.json"
-            ).read_text()
-        )
-        assert opencode["host_api_version"] == "REPLACE_WITH_1_OR_2"
+        # The OpenCode HTTP adapter was removed: its bundle carries the plugin README and home only.
+        helper = ctx.root / "garden/profiles/helper"
+        assert not list(helper.glob("opencode.*.example.json"))
+        assert (helper / "garden.json").exists()
 
 
 @pytest.mark.parametrize("problem", ["revoked", "no_grants", "bad_scope"])
@@ -924,16 +922,22 @@ def test_bundle_readme_leads_with_plugin_and_keeps_legacy_examples(
         readme = readmes[name]
         assert "garden home add-identity" in readme
         assert "Install the plugin" in readme
-        assert "Legacy MCP profile" in readme
-        assert readme.index("Install the plugin") < readme.index("Legacy MCP profiles")
         assert "`garden/scripts/install-user`" in readme
         # Only a fresh home is initialised; an existing one's CA is never overwritten.
         assert "Initialise only a home directory that does not exist yet" in readme
         assert "If `~/.garden/garden.json` does not exist" not in readme
         assert "If `~/.garden` already exists, leave it unchanged" in readme
-        assert f"`garden-config --host {adapter} --profile" in readme
         assert ("codex plugin marketplace add" in readme) == (adapter == "codex")
         assert ("garden.ts" in readme) == (adapter == "opencode")
+        if adapter == "opencode":
+            assert "Legacy MCP profile" not in readme
+            assert "garden attend" not in readme
+        else:
+            assert "Legacy MCP profile" in readme
+            assert readme.index("Install the plugin") < readme.index(
+                "Legacy MCP profiles"
+            )
+            assert f"`garden-config --host {adapter} --profile" in readme
         bundle = Path(ctx.state["garden"]["profiles"][name])
         home = json.loads((bundle / "garden.json").read_text())
         assert home["defaults"] == {adapter: name}

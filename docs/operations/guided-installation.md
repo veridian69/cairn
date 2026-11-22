@@ -584,8 +584,11 @@ the snapshot in place. Removal waits up to 300 seconds for Garden's runtime
 lease; if snapshot maintenance holds it throughout, the hook exits 75 and the
 journal says the lease stayed busy, apart from a failed removal.
 `garden-backup` uses `sudo -n systemctl start garden-backup.service` and requires
-this hook. `garden-upgrade` is refused for garden-server in v0.8.0; upgrade a
-server Garden by hand until a later release adds it.
+this hook. `garden-upgrade --name X --source NEW` upgrades an installer-made
+server Garden; this is experimental, tested against fakes only. See the
+[managed Garden guide](managed-garden.md#upgrade-a-garden-server-installation).
+Hand-built installations are not adopted and stay on the hand
+procedure below.
 While `/etc/garden/upgrade-in-progress` exists the hook exits 1 without stopping
 Garden, so its failure alert fires instead. A hook that started earlier is not
 stopped by the flag, so a hand upgrade keeps this order: create the flag as

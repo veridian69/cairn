@@ -54,7 +54,7 @@ EXCUSED = {
         for section, index in (
             ("Add Garden to an existing installation", 1),
             ("Upgrade Garden", 1),
-            ("Upgrade Garden", 2),
+            ("Upgrade a garden-server installation", 1),
             ("Back up Garden", 1),
             ("Remove Garden only", 1),
         )

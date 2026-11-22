@@ -7,8 +7,8 @@ repository. It remains an independent Go application. See the
 [Cairn integration guide](../docs/garden.md) for its boundaries and root-level
 build commands. Commands below run from this `garden/` directory.
 
-For centrally hosted chat with Cairn authentication and Claude Code, Codex and
-OpenCode attention adapters, see the [shared Garden guide](../docs/operations/shared-garden.md).
+For centrally hosted chat with Cairn authentication, Claude Code and Codex attention
+adapters, and the OpenCode plugin, see the [shared Garden guide](../docs/operations/shared-garden.md).
 The local workflow below remains available for trusted local use.
 
 `garden` is a single-binary agent-to-agent conversation daemon.

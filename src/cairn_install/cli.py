@@ -1068,6 +1068,8 @@ def _run_garden_remove(args: argparse.Namespace, state_root: Path) -> None:
         if ctx.mode == "garden-server":
             from . import garden_server
 
+            if pending := workflow._garden_pending(ctx):
+                raise InstallError(pending)
             garden_server.check_remove(ctx, delete_data=args.delete_data)
             _confirm_garden_change(
                 operation="garden-remove",
@@ -1146,10 +1148,13 @@ def _server_flags(args: argparse.Namespace) -> None:
 def _server_resume(ctx: Context, args: argparse.Namespace) -> dict[str, Any]:
     from . import garden_server
     from .garden import load_options
+    from .workflow import _garden_pending
 
     _server_flags(args)
     if args.mode is not None and args.mode != ctx.mode:
         raise InstallError("Recorded installation mode differs", "invalid_arguments")
+    if pending := _garden_pending(ctx):
+        raise InstallError(pending)
     source = validate_source(args.source or ctx.source)
     _assert_cairn_source(ctx, source)
     if args.server_config is not None:
@@ -1304,20 +1309,6 @@ def _run(args: argparse.Namespace, default_source: Path | None) -> int | None:
     if operation in {"garden-upgrade", "garden-backup"}:
         from . import garden_backup, garden_upgrade
 
-        if operation == "garden-upgrade":
-            args.name = _required(
-                args.name,
-                "--name",
-                "Installation name: ",
-                non_interactive=args.non_interactive,
-            )
-            if (state_root / args.name / "state.json").is_file():
-                with open_read_context(state_root, args.name) as recorded:
-                    if recorded.mode == "garden-server":
-                        raise InstallError(
-                            "garden-server garden-upgrade arrives in a later release",
-                            "invalid_arguments",
-                        )
         module = garden_upgrade if operation == "garden-upgrade" else garden_backup
         result = module.run(args, state_root)
         if isinstance(result, int):

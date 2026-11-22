@@ -159,7 +159,7 @@ func connectCodex(ctx context.Context, cmd *cobra.Command) error {
 
 func newAttendCommand() *cobra.Command {
 	var profile string
-	command := &cobra.Command{Use: "attend", Short: "Deliver addressed Garden messages to an existing agent session", PersistentPreRunE: func(*cobra.Command, []string) error { return nil }}
+	command := &cobra.Command{Use: "attend", Short: "Deliver addressed Garden messages to an existing Codex thread", PersistentPreRunE: func(*cobra.Command, []string) error { return nil }}
 	command.Flags().StringVar(&profile, "profile", "", "Explicit Garden adapter profile")
 	_ = command.MarkFlagRequired("profile")
 	command.RunE = func(cmd *cobra.Command, args []string) error {
@@ -167,8 +167,8 @@ func newAttendCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if p.Adapter != "codex" && p.Adapter != "opencode" {
-			return errors.New("attend requires a codex or opencode profile")
+		if p.Adapter != "codex" {
+			return errors.New("attend requires a codex profile")
 		}
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -177,28 +177,12 @@ func newAttendCommand() *cobra.Command {
 			return err
 		}
 		defer remote.Close()
-		var host attention.Host
-		if p.Adapter == "codex" {
-			client, err := attention.NewCodex(ctx, p.CodexSocket, p.SessionID)
-			if err != nil {
-				return err
-			}
-			defer client.Close()
-			host = client
-		} else {
-			password := ""
-			if p.HostCredentialFile != "" {
-				password, err = attention.ReadCredential(p.HostCredentialFile)
-				if err != nil {
-					return err
-				}
-			}
-			host, err = attention.NewOpenCode(p.HostEndpoint, p.SessionID, p.HostUsername, password, p.HostAPIVersion)
-			if err != nil {
-				return err
-			}
+		client, err := attention.NewCodex(ctx, p.CodexSocket, p.SessionID)
+		if err != nil {
+			return err
 		}
-		runner := attention.Runner{Inbox: remote, Host: host, ConsumerID: uuid.NewString()}
+		defer client.Close()
+		runner := attention.Runner{Inbox: remote, Host: client, ConsumerID: uuid.NewString()}
 		return runner.Run(ctx)
 	}
 	return command

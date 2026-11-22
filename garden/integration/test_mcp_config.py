@@ -245,27 +245,26 @@ class MCPConfigTests(unittest.TestCase):
                 self.assertFalse(self.config.exists())
                 self.data = original
 
-    def test_host_api_version_is_omitted_or_explicit_for_opencode_only(self):
-        opencode = {
+    def test_retired_opencode_adapter_and_host_fields_are_refused_for_every_host(self):
+        retired = {
             "adapter": "opencode",
             "session_id": "ses_target",
             "host_endpoint": "http://127.0.0.1:4096",
+            "host_api_version": "2",
         }
-        for delta, success in (
-            ({"host_api_version": "2"}, True),
-            ({"host_api_version": "1"}, True),
-            ({"host_api_version": "3"}, False),
-            ({"host_api_version": None}, False),
-            ({"host_api_version": 2}, False),
-        ):
-            with self.subTest(delta=delta):
+        for host in ("claude", "codex", "opencode"):
+            with self.subTest(host=host, profile="retired adapter"):
                 original = self.data.copy()
-                self.data.update(opencode, **delta)
+                self.data.update(retired)
                 self.save_profile()
-                self.run_helper("opencode", "--dry-run", success=success)
+                result = self.run_helper(host, success=False)
+                self.assertIn("OpenCode HTTP adapter was removed", result.stderr)
                 self.assertFalse(self.config.exists())
                 self.data = original
-        for delta in ({"host_api_version": None}, {"host_api_version": "2"}):
+        for delta in (
+            {"host_api_version": "2"},
+            {"host_endpoint": "http://127.0.0.1:4096"},
+        ):
             with self.subTest(stdio=delta):
                 original = self.data.copy()
                 self.data.update(delta)
@@ -274,26 +273,19 @@ class MCPConfigTests(unittest.TestCase):
                 self.data = original
 
     def test_invalid_endpoint_ports_do_not_create_configuration(self):
-        for field in ("garden_endpoint", "host_endpoint"):
-            for port in ("invalid", "65536"):
-                with self.subTest(field=field, port=port):
-                    self.data.update(
-                        {
-                            "adapter": "opencode",
-                            "session_id": "ses_target",
-                            "garden_endpoint": "https://garden.example.invalid/mcp",
-                            "host_endpoint": "http://127.0.0.1:4096",
-                        }
-                    )
-                    self.data[field] = "https://example.invalid:" + port + "/mcp"
-                    self.save_profile()
-                    self.run_helper("opencode", success=False)
-                    self.assertFalse(self.config.exists())
-                    self.assertFalse(self.owner().exists())
-                    self.assertFalse(self.backup().exists())
+        for port in ("invalid", "65536"):
+            with self.subTest(port=port):
+                self.data["garden_endpoint"] = (
+                    "https://example.invalid:" + port + "/mcp"
+                )
+                self.save_profile()
+                self.run_helper("opencode", success=False)
+                self.assertFalse(self.config.exists())
+                self.assertFalse(self.owner().exists())
+                self.assertFalse(self.backup().exists())
 
     def test_host_session_identifier_byte_limit_matches_runtime(self):
-        for host in ("codex", "opencode"):
+        for host in ("codex",):
             for session, valid in (
                 ("a" * 128, True),
                 ("a" * 129, False),
@@ -306,7 +298,6 @@ class MCPConfigTests(unittest.TestCase):
                             "adapter": host,
                             "session_id": session,
                             "codex_socket": "/run/user/1000/codex.sock",
-                            "host_endpoint": "http://127.0.0.1:4096",
                         }
                     )
                     self.save_profile()

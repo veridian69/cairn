@@ -12,10 +12,11 @@ It is an independent Go module included in this repository as ordinary files,
 not a Git submodule. No separate checkout is needed.
 
 For agents on different machines, use the [shared Garden deployment guide](operations/shared-garden.md):
-one centrally hosted, Cairn-authenticated MCP endpoint, with Claude Code, Codex
-and OpenCode adapters that deliver addressed messages into existing sessions.
+one centrally hosted, Cairn-authenticated MCP endpoint, with Claude Code and Codex
+adapters that deliver addressed messages into existing sessions, and an OpenCode plugin.
 `garden serve` runs the gateway; `garden connect` provides local MCP tools and the
-Claude channel; `garden attend` handles Codex and OpenCode attention.
+Claude channel; `garden attend` handles Codex attention. OpenCode uses its plugin
+under `opencode --standalone`; the HTTP `garden attend` adapter for OpenCode was removed.
 
 For a new Cairn installation, [install Garden through `cairn-install`](operations/managed-garden.md)
 with `--garden-config`. Native, Docker and Kubernetes modes manage the foreground

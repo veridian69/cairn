@@ -70,7 +70,13 @@ Rules:
   prefix and its descendants. Either principal type may hold it through an
   explicit grant; no role or principal type implies it. It never exposes fact
   bodies, query text, credential material, suspected secret text or raw model
-  output.
+  output in readable form. Ingest events do carry unkeyed SHA-256 digests over
+  the command (`command_digest`, which covers the fact bodies) and over evidence
+  payloads (`evidence_digest`), so a holder can confirm a guessed body or
+  payload by hashing it; short or predictable content is practical to confirm.
+  Grant `audit-read` only to principals already trusted to read the content at
+  that prefix. (Accepted by Operator on 8 November 2026, #239; keyed digests for new
+  events remain the remedy should `audit-read` be delegated more widely.)
 - Workload grants require `expires_at`; human grants may omit it but remain
   revocable. Grant expiry is checked on every request and fails closed.
   Credential expiry may be earlier but never extends the grant. Expired and
@@ -117,7 +123,8 @@ Rules:
 - v0.1 has no general cross-scope fact query. No principal may query
   descendants or siblings. Privileged workflows make separately authorised
   retrieval calls at each requested scope. Administrative audit access does
-  not reveal fact bodies and requires `audit-read`.
+  not reveal fact bodies in readable form (but see the digest caveat above) and
+  requires `audit-read`.
 - Agent role belongs to principal policy or fact provenance, not scope
   ancestry.
 - Classification is an access label checked against the principal's clearance;

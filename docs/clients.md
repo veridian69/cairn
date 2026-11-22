@@ -156,7 +156,7 @@ The three reads reject `Idempotency-Key`:
 | Route | Required authority | Purpose |
 | --- | --- | --- |
 | `POST /v1/retrieve` | `retrieve` covering the requested scope | Return reconciled facts within a byte budget. |
-| `POST /v1/read-audit-events` | `audit-read` covering the requested prefix | Return metadata-only events; it is a POST so scopes never enter URLs. |
+| `POST /v1/read-audit-events` | `audit-read` covering the requested prefix | Return metadata-only events; it is a POST so scopes never enter URLs. Ingest events carry unkeyed content digests that can confirm a guessed fact body, so grant `audit-read` only to principals trusted to read that content. |
 | `GET /v1/instance` | authenticated credential | Return instance and contract identity. |
 
 The OpenAPI artefact is authoritative for every field and response. Mutation

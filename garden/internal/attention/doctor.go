@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
 )
 
 // DoctorReport contains connection results without credentials or chat content.
@@ -32,8 +30,6 @@ func Doctor(ctx context.Context, p Profile, checkHost bool) (DoctorReport, error
 	switch p.Adapter {
 	case "codex":
 		err = checkCodexSocket(ctx, p.CodexSocket, p.SessionID)
-	case "opencode":
-		err = checkOpenCode(ctx, p)
 	case "claude":
 		result.Host = "channel_requires_host_consent"
 		return result, nil
@@ -48,55 +44,6 @@ func Doctor(ctx context.Context, p Profile, checkHost bool) (DoctorReport, error
 	}
 	result.Host = "selected_session_readable"
 	return result, nil
-}
-
-func checkOpenCode(ctx context.Context, p Profile) error {
-	password := ""
-	if p.HostCredentialFile != "" {
-		var err error
-		password, err = ReadCredential(p.HostCredentialFile)
-		if err != nil {
-			return err
-		}
-	}
-	host, err := NewOpenCode(p.HostEndpoint, p.SessionID, p.HostUsername, password, p.HostAPIVersion)
-	if err != nil {
-		return err
-	}
-	defer host.http.CloseIdleConnections()
-	sessionPath := "/session/" + p.SessionID
-	if host.api == "2" {
-		sessionPath = "/api" + sessionPath
-	}
-	resp, err := host.request(ctx, http.MethodGet, sessionPath, nil)
-	if err != nil {
-		return ErrUnavailable
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return rejectedStatus(resp.StatusCode, false)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 128*1024+1))
-	if err != nil || len(data) > 128*1024 {
-		return ErrRejected
-	}
-	var session struct {
-		ID   string `json:"id"`
-		Data struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(data, &session) != nil {
-		return ErrRejected
-	}
-	if host.api == "2" {
-		// 2.x wraps the session in {"data": ...}, so only the envelope's ID counts.
-		session.ID = session.Data.ID
-	}
-	if session.ID != p.SessionID {
-		return ErrRejected
-	}
-	return nil
 }
 
 func checkCodexSocket(ctx context.Context, socket, thread string) error {

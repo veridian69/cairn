@@ -23,6 +23,7 @@ from cairn.client.memory import MemoryClient
 from cairn.client.profiles import (
     MemoryProfile,
     ProfileError,
+    load_access_headers,
     load_credential,
     load_profile,
 )
@@ -178,7 +179,10 @@ async def serve(
     token = load_credential(profile)
     async with httpx.AsyncClient(
         base_url=profile.endpoint,
-        headers={"Authorization": f"Bearer {token}"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            **load_access_headers(profile),
+        },
         timeout=httpx.Timeout(10),
         trust_env=False,
         follow_redirects=False,

@@ -78,7 +78,7 @@ Every participant receives its own workload principal, credential and expiring
 grant in the new Cairn. The grant covers only the complete configured scope and
 classification. Preserve any required job/run scope segments. Participants share
 one Garden room; addressed messages route attention, they are not private rooms.
-An OpenCode participant name denotes an adapter configuration, not a model-family
+An OpenCode participant name denotes that participant's OpenCode plugin identity, not a model-family
 identity: choose the real participant name for the agent running there.
 
 The expiry is intentional. Resume checks existing credentials and permissions;
@@ -335,9 +335,9 @@ named installation state directory. Docker and Kubernetes installations run
 Garden in a container; install the adapter binary separately on the machine
 where you run the verification command, including the installation host if
 you choose to verify there. Host-local
-paths need to refer to that machine. Codex and OpenCode additionally require the
-actual local thread/socket or authenticated session details; generated examples
-do not guess them. Use `garden-config --host claude|codex|opencode --profile ...
+paths need to refer to that machine. Codex additionally requires the
+actual local thread/socket details; generated examples do not guess them.
+OpenCode gets no profile: its plugin reads the Garden home. Use `garden-config --host claude|codex --profile ...
 --binary ... --config ...` to merge the completed profile into the host's MCP
 configuration. See [shared Garden and attention adapters](shared-garden.md) for
 the exact host launch, hook and `garden-session` lifecycle procedures.
@@ -362,8 +362,9 @@ chmod 600 profile.json
 garden doctor --profile "$PWD/profile.json"
 ```
 
-For Codex or OpenCode, copy the corresponding generated profile example and
-complete the local host details as directed by that bundle's README.
+For Codex, copy the generated profile example and complete the local thread
+and socket details as directed by that bundle's README. An OpenCode bundle has
+no profile; follow its README to install the plugin.
 `garden doctor --profile /absolute/path/profile.json` verifies the authenticated
 Garden binding. Add `--host` only when testing the local attention attachment;
 that form requires a live local agent host. An `agent host rejected delivery`
@@ -408,6 +409,31 @@ generation. It needs free space of twice the data size and refuses data over
 8 GiB. A downgrade is refused, the same release is a no-op, and the same version
 with different Garden sources is announced as a rebuild. The previous release
 and the last two cold copies are kept.
+
+#### Upgrade a garden-server installation
+
+> **Experimental.** Upgrading a garden-server installation has been tested
+> against fakes only; it has not yet been run on a real host. Take your own
+> backup of `/var/lib/garden` and `/etc/garden` first, and be ready to finish or
+> roll back by hand. Until a real-host rehearsal is recorded, the hand procedure
+> remains the reference.
+
+The same commands work for `--mode garden-server`. Before Garden stops, the
+installer rewrites `garden-server.sudoers` and asks `sudo -n -l` about every
+command it will run; if any is not granted it refuses, and you install the new
+snippet with `visudo` and run the command again. The release files (binaries,
+deploy files, the install manifest and both units) move together; `garden.json`,
+TLS files, `config.yaml`, the requires drop-in and the backup hook are kept.
+During the change `/etc/garden/upgrade-in-progress` exists, so the backup hook
+exits 1 and its alert fires instead of touching Garden; the upgrade refuses
+while `garden-backup.service` is running. Both units are disabled while Garden
+is stopped, so a reboot mid-change leaves Garden down rather than half
+upgraded; run the command again to finish. The cold copy is taken and restored
+by the Garden account itself (`sudo -u garden tar`), never by root, and lands
+under `instance/garden-upgrades/` as for other modes. `--restore-data` moves the
+current data to `/var/lib/garden/.garden/data.pre-restore`; a second restore is
+refused until you move that away. A hook installed before v0.8.0 lacks the flag
+check and is refused: upgrade that Garden by hand.
 
 To go back to the previous release:
 

@@ -86,9 +86,9 @@ def main():
     if profile.stat().st_size > 32768:
         raise ValueError("profile is oversized")
     data = json.loads(profile.read_text())
-    if not isinstance(data, dict) or data.get("adapter") not in ("codex", "opencode"):
+    if not isinstance(data, dict) or data.get("adapter") != "codex":
         raise ValueError(
-            "garden-session requires codex or opencode; Claude owns its MCP channel lifecycle"
+            "garden-session requires a codex profile; Claude owns its MCP channel lifecycle and OpenCode uses its plugin"
         )
     if args.host_pid <= 1 or args.host_pid == os.getpid():
         raise ValueError("an explicit existing host PID is required")

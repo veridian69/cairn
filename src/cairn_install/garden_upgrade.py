@@ -48,13 +48,13 @@ def _mode(ctx: Context) -> None:
         raise InstallError(
             "Kubernetes garden-upgrade arrives in a later release", "invalid_arguments"
         )
-    if ctx.mode == "garden-server":
+    if (
+        ctx.mode not in {"native", "docker", "garden-server"}
+        or platform.system() != "Linux"
+    ):
         raise InstallError(
-            "garden-server garden-upgrade arrives in a later release",
-            "invalid_arguments",
+            "Garden upgrade supports native, docker and garden-server on Linux"
         )
-    if ctx.mode not in {"native", "docker"} or platform.system() != "Linux":
-        raise InstallError("Garden upgrade supports native and docker on Linux")
 
 
 def _preconditions(ctx: Context) -> dict[str, Any]:
@@ -115,6 +115,11 @@ def _current_artefact(ctx: Context) -> dict[str, str]:
         if expected != observed or stat.S_IMODE(binary.stat().st_mode) != 0o755:
             raise InstallError("Owned Garden binary changed")
         return {"binary_sha256": observed}
+    if ctx.mode == "garden-server":
+        from .garden_server_upgrade import release_artefact
+
+        # validate_ownership proves these recorded digests root-side.
+        return release_artefact(ctx.state["server"]["installed"])
     receipt = ctx.state["resources"].get("docker", {}).get("garden_image", {})
     image, identifier = receipt.get("reference"), receipt.get("id")
     if (
@@ -183,6 +188,12 @@ def _check_space(ctx: Context, adapter: workflow.GardenAdapter) -> None:
     if ctx.mode == "docker":
         # Only garden_copy can measure the volume. Its backend must check
         # capacity before creating the archive; the engine never probes Docker.
+        return
+    if ctx.mode == "garden-server":
+        from .garden_server_upgrade import ServerGarden
+
+        # Only the Garden account can read its data; it also checks the policy.
+        cast(ServerGarden, adapter).garden_preflight()
         return
     size, archive = _cold_copy_size(ctx.root / "garden" / "data")
     if archive > _COLD_COPY_LIMIT:
@@ -482,6 +493,10 @@ def _finish(
         keep.append(record["previous"]["artefact"])
     adapter.garden_prune(keep=keep)
     _prune_copies(ctx, history)
+    # garden-server clears its upgrade-window flag; other modes hold none.
+    closed = getattr(adapter, "garden_upgrade_closed", None)
+    if closed is not None:
+        closed()
     ctx.state["status"] = "verified"
     ctx.state.pop("last_error", None)
     # Publish the terminal journal with all bookkeeping, never before it.

@@ -26,7 +26,12 @@ from cairn.client.cli_input import (
     preparation_size,
 )
 from cairn.client.command_io import CommandInputError
-from cairn.client.profiles import ProfileError, load_credential, load_profile
+from cairn.client.profiles import (
+    ProfileError,
+    load_access_headers,
+    load_credential,
+    load_profile,
+)
 from cairn.client.rendering import CommandOutputError, render_result
 from cairn.client.session_validation import require_preparation_binding
 from cairn.client.types import ConnectionStatus
@@ -47,6 +52,7 @@ _QUERY = (
 _TURN = '"turn_id":"11111111-1111-4111-8111-111111111111"'
 _HELP = {
     "check": "No stdin read. Check explicit expected instance and current grants; ready is not a write permission guarantee.",
+    "browse": "Interactive terminal browser; no stdin JSON. Requires a terminal on stdin and stdout, else exit 2 (terminal_required). Lists current facts at the profile scope and its ancestors newest first (recall-page, relevant_only false); / searches, f filters candidate/validated/all on fetched pages, Enter opens history, e opens source evidence. p promotes a candidate at the exact profile scope only when check reports ingest and promote: it records a proposal, then accepts it with the fact's own source evidence, after a required reason and explicit y. Facts without source evidence are refused. Exit 0 on quit; 3 if a promotion outcome is still unknown, with content-free recovery identities on stderr; 4 operational failure.",
     "arrive": _QUERY
     + '\nhistory_fact_ids: optional distinct UUIDv4 array, 0..8. Opens/replays the configured session and issues a fresh visit. Never acknowledges. Example: {"query":"current work","history_fact_ids":[]}',
     "recall": _QUERY
@@ -201,11 +207,15 @@ def failure_exit(
         "history",
         "suggest",
         "arrive",
+        "proposal-list",
+        "proposal-read",
     }:
         return 4 if uncertain else 2
     if error.operation == "turn-commit":
         return 3
-    if uncertain:
+    # A proxy's refusal of a read is a confirmed refusal. For a mutation it
+    # proves nothing: a proxy can forward the request and replace the receipt.
+    if uncertain or code == "upstream_access_denied":
         return (
             3
             if proposal_dispatched or error.operation in {"turn-prepare", "correct"}
@@ -231,7 +241,9 @@ async def execute(
     exit_code = 4
     recovery: str | None = None
     detail: tuple[tuple[str, str | int], ...] | None = None
+    http_status: int | None = None
     proposal_dispatched = False
+    browse_dispatched: set[str] = set()
 
     async def mark_proposal_dispatch(request: httpx.Request) -> None:
         nonlocal proposal_dispatched
@@ -242,12 +254,16 @@ async def execute(
             and request.url.path == f"/memory/v1/{command}"
         ):
             proposal_dispatched = True
+        if command == "browse":
+            browse_dispatched.add(request.url.path)
 
     try:
         if _help(argv, stdout):
             return 0
         args = parser().parse_args(argv)
         command, human = args.command, args.human
+        if command == "browse" and not (stdin.isatty() and stdout.isatty()):
+            raise CommandInputError("terminal_required")
         value = parse(command, stdin)
         profile = load_profile(Path(args.profile))
         if value.target_scope is not None and (
@@ -266,7 +282,10 @@ async def execute(
         token = load_credential(profile)
         async with httpx.AsyncClient(
             base_url=profile.endpoint,
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                **load_access_headers(profile),
+            },
             timeout=httpx.Timeout(10),
             trust_env=False,
             follow_redirects=False,
@@ -296,6 +315,39 @@ async def execute(
                 else None
             )
             result: object
+            if command == "browse":
+                from cairn.client.browse import BrowseController
+                from cairn.client.browse_terminal import (
+                    MemoryBrowseBackend,
+                    recovery_packet,
+                    run_terminal,
+                )
+
+                permissions = diagnostic.permissions
+                controller = BrowseController(
+                    MemoryBrowseBackend(client, browse_dispatched),
+                    scope=profile.scope,
+                    may_promote=permissions is not None
+                    and permissions.ingest
+                    and permissions.promote,
+                )
+                terminal_failed = False
+                try:
+                    await run_terminal(controller)
+                except RuntimeError:
+                    terminal_failed = True
+                packet = recovery_packet(controller)
+                if packet is not None:
+                    # An unknown promotion outcome stays exit 3 even if the
+                    # terminal or stderr failed afterwards.
+                    try:
+                        write(stderr, render_result(command, packet, human=human))
+                    except (CommandOutputError, OSError, ValueError):
+                        pass
+                    return 3
+                if terminal_failed:
+                    raise RuntimeError("terminal_failure")
+                return 0
             if command == "check":
                 result = diagnostic
             elif command == "recall":
@@ -492,6 +544,8 @@ async def execute(
             stage = error.last_confirmed_stage
         error_code = error.failure.code
         detail = error.failure.detail
+        if error_code == "upstream_access_denied":
+            http_status = error.failure.status_code
         exit_code = failure_exit(error, stage, proposal_dispatched=proposal_dispatched)
         if (
             command == "remember"
@@ -516,6 +570,9 @@ async def execute(
         # Operation-local detail (recall-page, evidence-window) is closed
         # server vocabulary.
         failure["detail"] = dict(detail)
+    if http_status is not None:
+        # The refusing proxy's status only; its response body is never kept.
+        failure["http_status"] = http_status
     packet = {"error": failure, "last_confirmed_stage": stage}
     if recovery is not None:
         packet["recovery"] = recovery

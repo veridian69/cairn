@@ -11,7 +11,8 @@ from typing import Any
 from .core import Context, InstallError, read_owned
 
 UNITS = ("garden-daemon.service", "garden-mcp.service")
-TOOLS = (
+# S11 records hold these; garden-upgrade extends a record with tar, du and mv once.
+LEGACY_TOOLS = (
     "sudo",
     "groupadd",
     "useradd",
@@ -21,12 +22,40 @@ TOOLS = (
     "systemctl",
     "rm",
 )
+TOOLS = (*LEGACY_TOOLS, "tar", "du", "mv")
 BINARY_LIMIT = 128 * 1024 * 1024
+COPY_LIMIT = 8 * 1024**3
 # /usr/local/sbin is a symlink to bin on Fedora 42+, which garden-server refuses.
 BACKUP_SCRIPT = "/usr/local/bin/garden-backup"
 DIGEST_SENTINEL = (
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  /dev/null"
 )
+# The backup hook exits 1 while this exists (v0.8.0+). /etc/garden is root-owned.
+FLAG = "/etc/garden/upgrade-in-progress"
+# Data commands run as the Garden account, never as root: that account owns
+# every ancestor below /var/lib/garden, so root must not traverse them.
+DATA = "/var/lib/garden/.garden"
+RESTORE = DATA + "/upgrade-restore"
+DATA_PATHS = (DATA + "/data", DATA + "/data.pre-restore", RESTORE + "/data")
+DEPLOY = "/usr/local/share/garden/deploy/"
+MANIFEST = "/usr/local/share/garden/install-manifest.json"
+RELEASE_FIXED = frozenset(
+    {
+        "/usr/local/bin/garden",
+        "/usr/local/bin/garden-config",
+        "/usr/local/bin/garden-session",
+        MANIFEST,
+        *(f"/etc/systemd/system/{unit}" for unit in UNITS),
+    }
+)
+
+
+def release_path(path: str) -> bool:
+    """Files that move together across a release change; configuration never does."""
+    return path in RELEASE_FIXED or (
+        path.startswith(DEPLOY)
+        and re.fullmatch(r"[A-Za-z0-9_.-]+", path[len(DEPLOY) :]) is not None
+    )
 
 
 def _server(ctx: Context) -> dict[str, Any]:
@@ -50,16 +79,29 @@ def files(ctx: Context) -> dict[str, tuple[str, str, str]]:
         f"/usr/local/bin/{name}": ("root", "root", "0755")
         for name in ("garden", "garden-config", "garden-session")
     }
-    # Only actual regular deploy files from the binary's source are permitted.
-    for path in sorted((ctx.source / "garden" / "deploy").iterdir()):
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or not re.fullmatch(r"[A-Za-z0-9_.-]+", path.name)
-        ):
-            raise InstallError("Garden deploy contains an unsafe entry")
-        result[f"/usr/local/share/garden/deploy/{path.name}"] = ("root", "root", "0644")
-    result["/usr/local/share/garden/install-manifest.json"] = ("root", "root", "0644")
+    staged = server.get("staged")
+    names: list[str] = []
+    if staged is None:
+        # Only actual regular deploy files from the binary's source are permitted.
+        for path in sorted((ctx.source / "garden" / "deploy").iterdir()):
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+", path.name)
+            ):
+                raise InstallError("Garden deploy contains an unsafe entry")
+            names.append(DEPLOY + path.name)
+    else:
+        # Once staged, the recorded releases define the rows, not the source.
+        recorded = [*staged]
+        for release in server.get("releases", {}).values():
+            recorded += release["files"]
+        names = sorted({path for path in recorded if path.startswith(DEPLOY)})
+        if not all(release_path(path) for path in names):
+            raise InstallError("Recorded Garden deploy contains an unsafe entry")
+    for name in names:
+        result[name] = ("root", "root", "0644")
+    result[MANIFEST] = ("root", "root", "0644")
     for unit in UNITS:
         result[f"/etc/systemd/system/{unit}"] = ("root", "root", "0644")
     result.update(
@@ -144,9 +186,14 @@ def argv(ctx: Context, key: str, **params: Any) -> list[str]:
         "unit": {"action", "unit"},
         "backup": set(),
         "rm": {"path"},
+        "flag_set": set(),
+        "flag_clear": set(),
+        **{name: set() for name in _DATA_KEYS},
     }
     if key not in expected or set(params) != expected[key]:
         raise InstallError("Sudo command is outside the server allowlist")
+    if key in _DATA_KEYS:
+        return [tools["sudo"], "-n", "-u", account, *_data_command(tools, key)]
     if key == "probe":
         command = ["/usr/bin/true"]
     elif key == "group":
@@ -199,14 +246,15 @@ def argv(ctx: Context, key: str, **params: Any) -> list[str]:
             or not paths
             or len(set(paths)) != len(paths)
             or any(
-                not isinstance(path, str) or path not in files(ctx) for path in paths
+                not isinstance(path, str) or (path not in files(ctx) and path != FLAG)
+                for path in paths
             )
         ):
             raise InstallError("Sudo digest is outside the server allowlist")
         command = [tools["sha256sum"], "--", *paths, "/dev/null"]
     elif key == "stat":
         path = params["path"]
-        if not isinstance(path, str) or path not in files(ctx):
+        if not isinstance(path, str) or (path not in files(ctx) and path != FLAG):
             raise InstallError("Sudo stat is outside the server allowlist")
         command = [tools["stat"], "--format=%F", "--", path, "/dev/null"]
     elif key == "unit":
@@ -224,12 +272,78 @@ def argv(ctx: Context, key: str, **params: Any) -> list[str]:
                 "garden-server backup requires backup_hook", "invalid_arguments"
             )
         command = [tools["systemctl"], "start", "garden-backup.service"]
+    elif key == "flag_set":
+        command = [tools["install"], "-o", "root", "-g", "root", "-m", "0600"]
+        command += ["--", "/dev/null", FLAG]
+    elif key == "flag_clear":
+        command = [tools["rm"], "-f", "--", FLAG]
     else:
         path = params["path"]
         if not isinstance(path, str) or path not in files(ctx):
             raise InstallError("Sudo removal is outside the server allowlist")
         command = [tools["rm"], "-f", "--", path]
     return [tools["sudo"], "-n", *command]
+
+
+_DATA_KEYS = (
+    "data_size",
+    "data_take",
+    "data_probe",
+    "data_stage",
+    "data_extract",
+    "data_compare",
+    "data_aside",
+    "data_place",
+)
+
+
+def _data_command(tools: dict[str, str], key: str) -> list[str]:
+    """Fixed data argv run as the Garden account; archives stream through stdio."""
+    data, aside, restored = DATA_PATHS
+    return {
+        "data_size": [tools["du"], "--summarize", "--apparent-size"]
+        + ["--block-size=1", "--", data],
+        "data_take": [tools["tar"], "--create", "--file=-", f"--directory={DATA}"]
+        + ["--numeric-owner", "--one-file-system", "--", "data"],
+        "data_probe": [tools["stat"], "--format=%n", "--", *DATA_PATHS, "/dev/null"],
+        "data_stage": [tools["install"], "-d", "-m", "0700", "--", RESTORE],
+        "data_extract": [tools["tar"], "--extract", "--file=-"]
+        + [f"--directory={RESTORE}", "--same-permissions", "--overwrite"]
+        + ["--", "data"],
+        "data_compare": [tools["tar"], "--compare", "--file=-"]
+        + [f"--directory={RESTORE}", "--numeric-owner", "--", "data"],
+        "data_aside": [tools["mv"], "--no-target-directory", "--", data, aside],
+        "data_place": [tools["mv"], "--no-target-directory", "--", restored, data],
+    }[key]
+
+
+def data_present(ctx: Context) -> set[str]:
+    """Which of the fixed data paths exist, as the Garden account sees them."""
+    lines = run(ctx, "data_probe").removesuffix("\n").split("\n")
+    if lines[-1] != "/dev/null" or not set(lines[:-1]) <= set(DATA_PATHS):
+        raise InstallError("Invalid Garden data probe response; refusing mutation")
+    return set(lines[:-1])
+
+
+def check_policy(ctx: Context) -> None:
+    """Ask sudo, before any downtime, whether every listed command is granted."""
+    sudo_path = _server(ctx)["tools"]["sudo"]
+    denied = 0
+    for command in policy_commands(ctx):
+        try:
+            ctx.command(
+                [sudo_path, "-n", "-l", *command[2:]],
+                cwd=ctx.directory,
+                env={"LC_ALL": "C"},
+            )
+        except InstallError:
+            denied += 1
+    if denied:
+        raise InstallError(
+            f"The sudo policy does not grant {denied} Garden server commands; install "
+            f"the updated {ctx.directory / 'garden-server.sudoers'}, then run "
+            "garden-upgrade again"
+        )
 
 
 def digest(ctx: Context, path: str) -> str | None:
@@ -274,10 +388,32 @@ def digest(ctx: Context, path: str) -> str | None:
     raise InstallError("Invalid sudo stat response; refusing mutation")
 
 
-def run(ctx: Context, key: str, **params: Any) -> str:
+def run(
+    ctx: Context,
+    key: str,
+    *,
+    stdin_path: Path | None = None,
+    stdout_path: Path | None = None,
+    **params: Any,
+) -> str:
     command = argv(ctx, key, **params)
     server = _server(ctx)
-    if key in {"file", "rm"}:
+    pending = (
+        server.get("replacements", {}).get(params["path"])
+        if key in {"file", "rm"}
+        else None
+    )
+    if pending is not None:
+        # GNU install unlinks before it copies, so an interrupted release change
+        # may leave this path absent or partial; the verified write repairs it.
+        staged = stage_root(ctx) / params["path"].lstrip("/")
+        if key == "file" and (
+            pending["new"] is None
+            or hashlib.sha256(read_owned(staged, BINARY_LIMIT)).hexdigest()
+            != pending["new"]
+        ):
+            raise InstallError(f"Staged file digests changed: {params['path']}")
+    elif key in {"file", "rm"}:
         path = params["path"]
         expected = server.get("installed", {}).get(path) or server.get(
             "install_intents", {}
@@ -298,6 +434,19 @@ def run(ctx: Context, key: str, **params: Any) -> str:
                 raise InstallError(
                     f"Refusing to overwrite unowned or changed file: {path}"
                 )
+    if key in _DATA_KEYS:
+        # The Garden account need not be able to enter the installer's directory.
+        return ctx.command(
+            command,
+            cwd=Path("/"),
+            env={"LC_ALL": "C"},
+            timeout=1800,
+            private=stdin_path is not None or stdout_path is not None,
+            stdin_path=stdin_path,
+            stdout_path=stdout_path,
+            stdout_limit=COPY_LIMIT,
+            allowed=(0, 1) if key == "data_probe" else (0,),
+        )
     return ctx.command(
         command,
         cwd=ctx.directory,
@@ -327,6 +476,10 @@ def policy_commands(ctx: Context) -> list[list[str]]:
     ]
     if ctx.state["server"]["backup_hook"]:
         commands.append(argv(ctx, "backup"))
+    # garden-upgrade: the window flag and the data commands (run as Garden).
+    commands += [argv(ctx, "flag_set"), argv(ctx, "flag_clear")]
+    commands += [argv(ctx, "digest", paths=[FLAG]), argv(ctx, "stat", path=FLAG)]
+    commands += [argv(ctx, key) for key in _DATA_KEYS]
     return commands
 
 
@@ -346,9 +499,12 @@ def snippet(ctx: Context) -> str:
         "# The installer user controls staged files installed as root, including systemd units.",
         "# Review and install separately; this installer never installs sudoers.",
     ]
-    lines += [
-        f"{_escape(user)} ALL=(root) NOPASSWD: "
-        + " ".join(_escape(arg) for arg in command[2:])
-        for command in policy_commands(ctx)
-    ]
+    for command in policy_commands(ctx):
+        runas, args = (
+            (command[3], command[4:]) if command[2] == "-u" else ("root", command[2:])
+        )
+        lines.append(
+            f"{_escape(user)} ALL=({_escape(runas)}) NOPASSWD: "
+            + " ".join(_escape(arg) for arg in args)
+        )
     return "\n".join(lines) + "\n"

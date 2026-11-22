@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,9 @@ def shell(body: str, work: Path) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", source + "\n" + body],
         cwd=ROOT,
-        env={**os.environ, "SIM_WORK": str(work)},
+        # The check snippets import the installer, so run them with the interpreter
+        # running the tests rather than whatever python3 is first on PATH.
+        env={**os.environ, "SIM_WORK": str(work), "TEST_PYTHON": sys.executable},
         text=True,
         capture_output=True,
         timeout=20,
@@ -110,7 +113,7 @@ def test_second_source_changes_version_and_garden_fingerprint(tmp_path: Path) ->
         r"""
 run_dir=$SIM_WORK
 garden_operations_source
-python3 - "$garden_source_b" <<'CHECK'
+"$TEST_PYTHON" - "$garden_source_b" <<'CHECK'
 import sys
 import tomllib
 from pathlib import Path
