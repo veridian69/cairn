@@ -23,6 +23,25 @@ prompt through its module global ``prompt_library`` at call time, passes
 path, and builds the context keys ``existing_edges``,
 ``edge_invalidation_candidates`` and ``new_edge``.
 
+A contradiction ends a stored fact, so no path here reports one on a single
+judgement (#272). Whatever answered an item, combined call or single call,
+its ``contradicted_facts`` are kept only where one further call agrees: the
+combined prompt for that item alone, on the medium model. The call is made
+only for an item that declared a contradiction. Duplicates are not confirmed.
+
+Measured on 23 November 2026 with ``scripts/evaluate_edge_dedup.py`` on
+``edge-dedup-unrelated-v1.json`` (20 items whose candidates are unrelated
+facts, restatements and six real contradictions), ten repeats: wrong
+retirements were 7 without confirmation and 2 with it on the combined path,
+and 9 and 0 on the single path; real contradictions missed were 6 and 4 of
+60, and 0 and 0. The two figures of a pair come from separate runs. The
+library's single prompt on the medium model was tried as the confirming call
+first. With it wrong retirements were fewer as well, but it does not reliably
+see a changed number, role or schedule: on ``edge-dedup-v1.json``, three
+repeats, the confirmed runs missed 5 of 12 real contradictions and the
+unconfirmed runs none, against 1 of 12 with the prompt used here. A pin
+change that edits the combined prompt needs this measured again.
+
 ``install_edge_batching`` mutates a process global: it rebinds
 ``edge_operations.prompt_library`` to a proxy. Any test calling it with
 ``batch_size >= 2`` must restore that global afterwards, as the autouse
@@ -176,6 +195,12 @@ def _cancel_task(task: asyncio.Task[Any], _: asyncio.Future[Any]) -> None:
     task.cancel()
 
 
+def _still_wanted(waiter: asyncio.Future[Any] | None) -> None:
+    """Stop before a provider call whose waiter has already gone."""
+    if waiter is not None and waiter.done():
+        raise asyncio.CancelledError
+
+
 async def _single_resolve(
     original_call: Any, context: dict[str, Any], max_tokens: int | None
 ) -> dict[str, Any]:
@@ -215,8 +240,16 @@ class EdgeBatcher:
         linger_seconds: float,
         max_facts: int,
         logger: SafeLogger | None = None,
+        confirm_contradictions: bool = True,
+        combined_call: Any = None,
     ) -> None:
         self._original_call = original_call
+        # The call for several items in one answer. It may differ from
+        # ``original_call`` only in provider settings; an item asked on its
+        # own, and a confirmation, always go through ``original_call``.
+        self._combined_call = combined_call or original_call
+        # Off only for measurement: the evaluator compares both.
+        self._confirm_contradictions = confirm_contradictions
         self._batch_size = batch_size
         self._linger_seconds = linger_seconds
         self._max_facts = max_facts
@@ -242,7 +275,7 @@ class EdgeBatcher:
         if self._loop is None:
             self._loop = loop
         if loop is not self._loop:
-            return await _single_resolve(self._original_call, context, max_tokens)
+            return await self._single_confirmed(context, max_tokens)
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending.append((context, future, max_tokens))
         pending_facts = sum(self._candidate_count(c) for c, _, _ in self._pending)
@@ -293,15 +326,20 @@ class EdgeBatcher:
         # (edge_operations.py:986-995), so today this always folds to None.
         budgets = [tokens for _, _, tokens in batch if tokens is not None]
         max_tokens = max(budgets) if budgets else None
+        if len(batch) == 1:
+            # Through the same waiter-aware path as every other single
+            # call, so a cancelled waiter cancels its calls.
+            await self._resolve_singly(
+                [
+                    (
+                        batch[0][1],
+                        self._single_confirmed(contexts[0], max_tokens, batch[0][1]),
+                    )
+                ]
+            )
+            return
         try:
-            if len(batch) == 1:
-                result = await _single_resolve(
-                    self._original_call, contexts[0], max_tokens
-                )
-                if not batch[0][1].done():
-                    batch[0][1].set_result(result)
-                return
-            response = await self._original_call(
+            response = await self._combined_call(
                 _batch_messages(contexts),
                 response_model=EdgeDuplicateBatch,
                 max_tokens=max_tokens,
@@ -331,7 +369,8 @@ class EdgeBatcher:
             "edge_batch_combined size=%d pending=%d", len(batch), len(self._pending)
         )
         answers = _trusted_answers(parsed, len(batch))
-        unanswered = []
+        # Each entry is a waiter and the call that will answer it.
+        singly: list[tuple[asyncio.Future[dict[str, Any]], Any]] = []
         for index, item in enumerate(batch):
             resolution = answers.get(index)
             if resolution is None:
@@ -349,37 +388,109 @@ class EdgeBatcher:
                         size=len(batch),
                         answered=len(parsed.resolutions),
                     )
-                unanswered.append(item)
-                continue
-            future = item[1]
-            if not future.done():
-                future.set_result(
-                    {
-                        "duplicate_facts": resolution.duplicate_facts,
-                        "contradicted_facts": resolution.contradicted_facts,
-                    }
+                singly.append(
+                    (item[1], self._single_confirmed(item[0], item[2], item[1]))
                 )
-        if unanswered:
-            await self._resolve_singly(unanswered)
+                continue
+            answer = {
+                "duplicate_facts": resolution.duplicate_facts,
+                "contradicted_facts": resolution.contradicted_facts,
+            }
+            if self._confirm_contradictions and resolution.contradicted_facts:
+                singly.append(
+                    (item[1], self._confirmed(item[0], answer, item[2], item[1]))
+                )
+            elif not item[1].done():
+                item[1].set_result(answer)
+        if singly:
+            await self._resolve_singly(singly)
+
+    async def _single_confirmed(
+        self,
+        context: dict[str, Any],
+        max_tokens: int | None,
+        waiter: asyncio.Future[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """The un-batched question graphiti would have asked, on the small
+        model, with any contradiction it declares confirmed."""
+        _still_wanted(waiter)
+        answer = await _single_resolve(self._original_call, context, max_tokens)
+        return await self._confirmed(context, answer, max_tokens, waiter)
+
+    async def _confirmed(
+        self,
+        context: dict[str, Any],
+        answer: dict[str, Any],
+        max_tokens: int | None,
+        waiter: asyncio.Future[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """``answer`` with only the contradictions a second judgement shares.
+
+        No call is made for an answer that declares none. A confirming call
+        that fails fails the item, as any resolve_edge call would. One whose
+        answer cannot be trusted to be about this item agrees with nothing.
+
+        ``waiter`` is the future this answer is for, when there is one. Its
+        cancellation cancels this task through a scheduled callback, which
+        can run after this task's next step, so each call here first checks
+        the waiter itself.
+        """
+        declared = answer.get("contradicted_facts") or []
+        if not self._confirm_contradictions or not declared:
+            return answer
+        _still_wanted(waiter)
+        response = await self._original_call(
+            _batch_messages([context]),
+            response_model=EdgeDuplicateBatch,
+            max_tokens=max_tokens,
+            model_size=ModelSize.medium,
+            group_id=None,
+            prompt_name="dedupe_edges.resolve_edge_batch",
+        )
+        second = _trusted_answers(EdgeDuplicateBatch(**response), 1).get(0)
+        if second is None and self._logger is not None:
+            # No judgement to agree with, so nothing is retired; the same
+            # content-free witness as for an item a combined answer left out.
+            self._logger.emit(
+                LogEvent.EDGE_BATCH_ITEM_MISSING,
+                transport=None,
+                level=logging.WARNING,
+                item=0,
+                size=1,
+                answered=len(response.get("resolutions") or []),
+            )
+        agreed = set(second.contradicted_facts) if second is not None else set()
+        kept = [idx for idx in declared if idx in agreed]
+        # Content-free witness of how often the second judgement disagrees.
+        _LOGGER.debug(
+            "edge_contradiction_confirmation declared=%d kept=%d",
+            len(declared),
+            len(kept),
+        )
+        return {**answer, "contradicted_facts": kept}
 
     async def _resolve_singly(
         self,
-        items: list[tuple[dict[str, Any], asyncio.Future[dict[str, Any]], int | None]],
+        entries: list[tuple[asyncio.Future[dict[str, Any]], Any]],
     ) -> None:
-        """Ask each item the un-batched question graphiti would have asked.
+        """Answer each waiter with its own call.
 
-        The combined answer left these items out, so each one gets its own
-        small-model call. A failed call fails only its own waiter, as it
-        would without batching; answered items are already settled.
+        These are the items the combined answer left out, each asked the
+        un-batched question, and the items whose contradictions need
+        confirming. A failed call fails only its own waiter, as it would
+        without batching; the other items are already settled.
         """
         # A waiter cancelled while the combined call was out (a timeout or
         # shutdown in GraphitiIndex._call) needs no answer, so no call.
-        live = [item for item in items if not item[1].done()]
+        live = []
+        for future, call in entries:
+            if future.done():
+                call.close()
+            else:
+                live.append((future, call))
         tasks = []
-        for context, future, tokens in live:
-            task = asyncio.ensure_future(
-                _single_resolve(self._original_call, context, tokens)
-            )
+        for future, call in live:
+            task = asyncio.ensure_future(call)
             # The same holds once the call is out: cancel it with its
             # waiter, leaving the other items' calls running.
             future.add_done_callback(functools.partial(_cancel_task, task))
@@ -389,13 +500,13 @@ class EdgeBatcher:
         except BaseException as error:
             # Only this task's own cancellation reaches here; gather has
             # already cancelled the single calls. Unblock their waiters.
-            for _, future, _ in live:
+            for future, _ in live:
                 if not future.done():
                     future.set_exception(error)
             if not isinstance(error, Exception):
                 raise
             return
-        for (_, future, _), result in zip(live, results, strict=True):
+        for (future, _), result in zip(live, results, strict=True):
             if future.done():
                 continue
             if isinstance(result, asyncio.CancelledError):
@@ -454,9 +565,14 @@ def install_edge_batching(
     linger_ms: int,
     max_facts: int,
     logger: SafeLogger | None = None,
-) -> EdgeBatcher | None:
-    if batch_size <= 1:
-        return None
+    combined_call: Any = None,
+) -> EdgeBatcher:
+    """Route graphiti's resolve_edge calls through one ``EdgeBatcher``.
+
+    A batch size of 1 combines nothing, and is installed all the same: each
+    item is then asked on its own, as graphiti would have asked it, and a
+    contradiction it declares is confirmed like any other.
+    """
     # A second install on an already-wrapped client would otherwise capture
     # the first routed() as its "original", chaining wrappers rather than
     # sharing one batcher. The tag set on the wrapper below lets a repeat
@@ -477,6 +593,7 @@ def install_edge_batching(
         linger_seconds=linger_ms / 1000,
         max_facts=max_facts,
         logger=logger,
+        combined_call=combined_call,
     )
 
     warned_context_missing = False

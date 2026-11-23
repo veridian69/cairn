@@ -26,6 +26,55 @@ def test_shipped_corpus_is_valid_and_mixed(evaluator: Any) -> None:
     assert 0 < sum(bool(item["duplicates"]) for item in items) < len(items)
 
 
+@pytest.mark.parametrize(
+    "name,count",
+    [("edge-dedup-spare-v1.json", 12), ("edge-dedup-unrelated-v1.json", 20)],
+)
+def test_other_shipped_corpora_are_valid(evaluator: Any, name: str, count: int) -> None:
+    items, _ = evaluator.load_corpus(evaluator.CORPUS.with_name(name))
+    assert len({item["id"] for item in items}) == len(items) == count
+    assert all(item["contradicted"] is not None for item in items)
+    assert 0 < sum(bool(item["contradicted"]) for item in items) < len(items)
+
+
+def test_unrelated_corpus_offers_candidates_only_for_invalidation(
+    evaluator: Any,
+) -> None:
+    """#272: every label there is about retiring a fact, never a duplicate,
+    and each real contradiction sits among candidates that must survive."""
+    items, _ = evaluator.load_corpus(
+        evaluator.CORPUS.with_name("edge-dedup-unrelated-v1.json")
+    )
+    for item in items:
+        assert item["duplicates"] == []
+        assert len(item["invalidation"]) >= 4
+        assert all(idx >= len(item["existing"]) for idx in item["contradicted"])
+        assert len(item["contradicted"]) <= 1
+
+
+def test_score_counts_false_and_missed_contradictions(evaluator: Any) -> None:
+    item = {
+        "id": "x",
+        "existing": [],
+        "invalidation": ["a", "b", "c"],
+        "duplicates": [],
+        "contradicted": [1],
+    }
+    result = evaluator.score(item, {"duplicate_facts": [], "contradicted_facts": [0]})
+    assert (result["false_contradictions"], result["missed_contradictions"]) == (1, 1)
+    exact = evaluator.score(item, {"duplicate_facts": [], "contradicted_facts": [1]})
+    assert (exact["false_contradictions"], exact["missed_contradictions"]) == (0, 0)
+    summary = evaluator.summarise([[result, exact], [exact, exact]])
+    assert summary["false_contradictions_per_repeat"] == [1, 0]
+    assert summary["missed_contradictions_per_repeat"] == [1, 0]
+    unscored = evaluator.score(
+        {**item, "contradicted": None},
+        {"duplicate_facts": [], "contradicted_facts": [0]},
+    )
+    assert unscored["false_contradictions"] is None
+    assert evaluator.summarise([[unscored]])["false_contradictions_per_repeat"] == [0]
+
+
 def test_context_indexes_continuously(evaluator: Any) -> None:
     built = evaluator.context(
         {"existing": ["a", "b"], "invalidation": ["c"], "new": "d"}

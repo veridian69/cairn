@@ -2,9 +2,12 @@
 
 Drives Cairn's own provider client and ``EdgeBatcher`` against the live
 provider: the single call Graphiti issues (small model) and the combined call
-the batcher issues (medium model). ``--compare-batch-model`` repeats the
-combined call on another model, for a before-and-after comparison. No Docker,
-graph or catalogue is used. A designated test-provider key is mandatory.
+the batcher issues (medium model), each as shipped, with a declared
+contradiction confirmed by a second call, and without that confirmation.
+``--compare-batch-model`` repeats the shipped combined call on another model,
+for a before-and-after comparison. ``--combined-reasoning`` gives the combined
+call another reasoning effort than the shipped one, for the same purpose. No Docker, graph or catalogue is used. A
+designated test-provider key is mandatory.
 
 Exit 0 means the measurement completed, whatever it found; 2 means it did not.
 """
@@ -75,6 +78,7 @@ def score(item: dict[str, Any], answer: dict[str, Any]) -> dict[str, Any]:
     usable = {idx for idx in returned if 0 <= idx < existing}
     expected = set(item["duplicates"])
     contradicted = item["contradicted"]
+    declared = set(answer.get("contradicted_facts") or [])
     return {
         "id": item["id"],
         "duplicates_correct": usable == expected,
@@ -83,9 +87,16 @@ def score(item: dict[str, Any], answer: dict[str, Any]) -> dict[str, Any]:
         "out_of_range": len(returned - usable),
         "contradictions_correct": None
         if contradicted is None
-        else set(answer.get("contradicted_facts") or []) == set(contradicted),
+        else declared == set(contradicted),
+        # A false contradiction ends a stored fact that still holds.
+        "false_contradictions": None
+        if contradicted is None
+        else len(declared - set(contradicted)),
+        "missed_contradictions": None
+        if contradicted is None
+        else len(set(contradicted) - declared),
         "duplicate_facts": sorted(returned),
-        "contradicted_facts": sorted(answer.get("contradicted_facts") or []),
+        "contradicted_facts": sorted(declared),
     }
 
 
@@ -102,11 +113,20 @@ def summarise(runs: list[list[dict[str, Any]]]) -> dict[str, Any]:
         "out_of_range": sum(r["out_of_range"] for r in results),
         "contradictions_correct": sum(r["contradictions_correct"] for r in scored),
         "contradictions_scored": len(scored),
+        "false_contradictions_per_repeat": [
+            sum(r["false_contradictions"] or 0 for r in run) for run in runs
+        ],
+        "missed_contradictions_per_repeat": [
+            sum(r["missed_contradictions"] or 0 for r in run) for run in runs
+        ],
     }
 
 
 async def measure(
-    items: list[dict[str, Any]], repeats: int, compare_models: list[str]
+    items: list[dict[str, Any]],
+    repeats: int,
+    compare_models: list[str],
+    combined_reasoning: str | None = None,
 ) -> dict[str, Any]:
     # Imported here: the provider key must be in the environment first.
     from graphiti_core.llm_client.config import LLMConfig
@@ -114,7 +134,12 @@ async def measure(
 
     from cairn.projection import graphiti as adapter
     from cairn.projection import graphiti_edge_batch as seam
-    from cairn.projection.models import LLM_MEDIUM_MODEL, LLM_SMALL_MODEL
+    from cairn.projection.models import (
+        LLM_COMBINED_EDGE_REASONING,
+        LLM_MEDIUM_MODEL,
+        LLM_REASONING,
+        LLM_SMALL_MODEL,
+    )
     from cairn.runtime.config import GraphitiConfig
 
     # The shipped defaults, read without building a whole configuration.
@@ -128,10 +153,22 @@ async def measure(
         clients[model] = OpenAIClient(
             config=LLMConfig(model=model, small_model=LLM_SMALL_MODEL),
             client=shared,
-            reasoning="none",
+            reasoning=LLM_REASONING,
         )
+    # The combined call has its own effort, so its own client per model.
+    effort = combined_reasoning or LLM_COMBINED_EDGE_REASONING
+    combined = {
+        model: OpenAIClient(
+            config=LLMConfig(model=model, small_model=LLM_SMALL_MODEL),
+            client=shared,
+            reasoning=effort,
+        )
+        for model in clients
+    }
 
     single_arm = f"single:{LLM_SMALL_MODEL}"
+    bare_single_arm = f"single-unconfirmed:{LLM_SMALL_MODEL}"
+    bare_batch_arm = f"batch-unconfirmed:{LLM_MEDIUM_MODEL}"
     calls: dict[str, dict[str, int]] = {}
 
     def counted(client: Any, arm: str) -> Any:
@@ -152,15 +189,34 @@ async def measure(
 
         return call
 
-    async def batched(model: str, order: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        batcher = seam.EdgeBatcher(
-            counted(clients[model], f"batch:{model}"),
+    def batcher(model: str, arm: str, *, confirm: bool) -> Any:
+        return seam.EdgeBatcher(
+            counted(clients[model], arm),
             batch_size=size,
             linger_seconds=linger_ms / 1000,
             max_facts=max_facts,
+            confirm_contradictions=confirm,
+            combined_call=counted(combined[model], arm),
         )
+
+    async def batched(
+        model: str, arm: str, order: list[dict[str, Any]], *, confirm: bool
+    ) -> list[dict[str, Any]]:
+        shared_batcher = batcher(model, arm, confirm=confirm)
         answers = await asyncio.gather(
-            *(batcher.submit(context(item), None) for item in order)
+            *(shared_batcher.submit(context(item), None) for item in order)
+        )
+        return [
+            score(item, answer) for item, answer in zip(order, answers, strict=True)
+        ]
+
+    async def singly(
+        arm: str, order: list[dict[str, Any]], *, confirm: bool
+    ) -> list[dict[str, Any]]:
+        # The path the batcher takes for an item on its own.
+        resolver = batcher(LLM_MEDIUM_MODEL, arm, confirm=confirm)
+        answers = await asyncio.gather(
+            *(resolver._single_confirmed(context(item), None) for item in order)
         )
         return [
             score(item, answer) for item, answer in zip(order, answers, strict=True)
@@ -168,29 +224,26 @@ async def measure(
 
     arms: dict[str, list[list[dict[str, Any]]]] = {
         single_arm: [],
+        bare_single_arm: [],
         **{f"batch:{model}": [] for model in clients},
+        bare_batch_arm: [],
     }
     try:
         for repeat in range(repeats):
             # Batch composition changes what the model sees beside each item.
             order = list(items)
             random.Random(repeat).shuffle(order)
-            singles = await asyncio.gather(
-                *(
-                    seam._single_resolve(
-                        counted(shipped, single_arm), context(item), None
-                    )
-                    for item in order
-                )
-            )
-            arms[single_arm].append(
-                [
-                    score(item, answer)
-                    for item, answer in zip(order, singles, strict=True)
-                ]
+            arms[single_arm].append(await singly(single_arm, order, confirm=True))
+            arms[bare_single_arm].append(
+                await singly(bare_single_arm, order, confirm=False)
             )
             for model in clients:
-                arms[f"batch:{model}"].append(await batched(model, order))
+                arms[f"batch:{model}"].append(
+                    await batched(model, f"batch:{model}", order, confirm=True)
+                )
+            arms[bare_batch_arm].append(
+                await batched(LLM_MEDIUM_MODEL, bare_batch_arm, order, confirm=False)
+            )
     finally:
         await shared.close()
     return {
@@ -198,6 +251,7 @@ async def measure(
             "size": size,
             "linger_ms": linger_ms,
             "max_facts": max_facts,
+            "combined_reasoning": effort,
         },
         "arms": {
             name: {
@@ -217,6 +271,10 @@ def main() -> int:
     parser.add_argument("--corpus", type=Path, default=CORPUS)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--compare-batch-model", action="append", default=[])
+    parser.add_argument(
+        "--combined-reasoning",
+        help="reasoning effort of the combined call; the shipped one if absent",
+    )
     args = parser.parse_args()
     try:
         items, digest = load_corpus(args.corpus)
@@ -232,7 +290,14 @@ def main() -> int:
     # text can quote request content. Nothing here needs their logs.
     logging.disable(logging.CRITICAL)
     try:
-        measured = asyncio.run(measure(items, args.repeats, args.compare_batch_model))
+        measured = asyncio.run(
+            measure(
+                items,
+                args.repeats,
+                args.compare_batch_model,
+                args.combined_reasoning,
+            )
+        )
     except Exception as error:
         # The type only: provider errors can quote request content.
         print(f"edge_dedup_evaluation_failed: {type(error).__name__}", file=sys.stderr)

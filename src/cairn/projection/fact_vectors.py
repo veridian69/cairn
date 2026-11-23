@@ -44,6 +44,10 @@ def policy_metadata(representation: "FactRepresentation") -> dict[str, Any]:
 
 
 class FactVectorError(Exception):
+    # #281: set by the search that was refused while a projection overlapped
+    # it. It selects the log event and nothing else.
+    in_flight = False
+
     def __init__(self, code: str = "fact_vector_invalid") -> None:
         self.code = code
         super().__init__(code)

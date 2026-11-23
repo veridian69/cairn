@@ -1,0 +1,298 @@
+{
+  "schema": "cairn.edge-dedup-corpus.v1",
+  "note": "Synthetic. Invalidation candidates as a search over a whole partition offers them: facts about other projects, people and tickets that share words with the new fact, restatements and elaborations of it, and now and then a fact it really ends. Only the last may be retired. idx is continuous: existing facts first, then invalidation candidates.",
+  "items": [
+    {
+      "id": "unrelated-error-vs-review-finding",
+      "existing": [],
+      "invalidation": [
+        "The Borealis review found an unhandled timeout in the export job",
+        "The Borealis export job runs nightly at 02:00",
+        "Lena Vogt reviewed the Borealis export job",
+        "The Cinder dashboard shows queue depth per region",
+        "The Atlas scheduler retries failed jobs three times"
+      ],
+      "new": "The Atlas notifier logs an error when a webhook returns status 500",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "unrelated-same-file-other-project",
+      "existing": [],
+      "invalidation": [
+        "The Borealis repository has an uncommitted README.md",
+        "The Borealis repository has two open pull requests",
+        "The Dune repository was archived in March",
+        "Atlas uses a monorepo layout",
+        "The Atlas changelog was last edited by Ivo Marti"
+      ],
+      "new": "The Atlas README was updated and the change is not yet committed",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "unrelated-same-verb-other-host",
+      "existing": [
+        "The staging host runs the nightly import"
+      ],
+      "invalidation": [
+        "The reporting host was upgraded to version 4.2",
+        "The reporting host has 16 GB of memory",
+        "The build host is restarted every Sunday",
+        "Version 4.2 removed the legacy importer",
+        "The staging host is located in Zurich"
+      ],
+      "new": "The staging host was upgraded to version 5.0",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "unrelated-same-person-other-topic",
+      "existing": [],
+      "invalidation": [
+        "Nora Baumann owns the billing service",
+        "Nora Baumann presented the roadmap in June",
+        "The billing service is written in Go",
+        "Felix Roth maintains the invoice templates",
+        "Nora Baumann works from the Basel office"
+      ],
+      "new": "Nora Baumann filed a bug about slow invoice downloads",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "unrelated-numbers-different-subjects",
+      "existing": [],
+      "invalidation": [
+        "The Cinder cluster has 12 nodes",
+        "The Atlas cluster uses 3 availability zones",
+        "The Dune archive holds 40 terabytes",
+        "The Cinder cluster was resized in May",
+        "Backups of the Cinder cluster are kept for 30 days"
+      ],
+      "new": "The Atlas cluster has 8 nodes",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "unrelated-status-other-ticket",
+      "existing": [
+        "Ticket 4411 is assigned to Jana Frei"
+      ],
+      "invalidation": [
+        "Ticket 4398 is closed",
+        "Ticket 4398 concerned the login page",
+        "Ticket 4420 is blocked on a vendor reply",
+        "Jana Frei closed ticket 4398",
+        "Ticket 4411 concerns the password reset mail"
+      ],
+      "new": "Ticket 4411 is open",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "unrelated-decision-other-meeting",
+      "existing": [],
+      "invalidation": [
+        "The platform team decided to keep the weekly release",
+        "The design team decided to drop the dark theme",
+        "The weekly release happens on Thursdays",
+        "The data team meets on Mondays",
+        "The platform team has seven members"
+      ],
+      "new": "The data team decided to adopt columnar storage",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "restated-setting-stays",
+      "existing": [],
+      "invalidation": [
+        "The Atlas cache mode is configured as auto",
+        "The Atlas cache size is 512 MB",
+        "The Borealis cache mode is manual",
+        "The Atlas cache is cleared at deployment",
+        "The cache mode was reviewed by Ivo Marti"
+      ],
+      "new": "The Atlas cache mode stays auto",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "restated-uncommitted-change",
+      "existing": [],
+      "invalidation": [
+        "The Atlas repository has an uncommitted change to config.yaml",
+        "The Atlas repository has a protected main branch",
+        "config.yaml sets the retry limit",
+        "The Borealis repository has no uncommitted changes"
+      ],
+      "new": "config.yaml in the Atlas repository was edited and not committed",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "restated-still-open",
+      "existing": [],
+      "invalidation": [
+        "The migration issue is open",
+        "The migration issue was filed by Lena Vogt",
+        "The rollback issue is closed",
+        "The migration is planned for the autumn"
+      ],
+      "new": "The migration issue remains open after the review",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "elaborated-with-detail",
+      "existing": [],
+      "invalidation": [
+        "The Cinder service is deployed on three hosts",
+        "The Cinder service listens on port 8443",
+        "The Dune service is deployed on one host",
+        "The Cinder hosts are patched monthly"
+      ],
+      "new": "The Cinder service is deployed on three hosts in two data centres",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "elaborated-progress-on-plan",
+      "existing": [],
+      "invalidation": [
+        "The team plans to replace the message broker",
+        "The message broker handles order events",
+        "The team plans to hire two engineers",
+        "The old broker is licensed until December"
+      ],
+      "new": "The team finished a prototype of the replacement message broker",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "restated-version-pinned",
+      "existing": [
+        "The client library is maintained by Felix Roth"
+      ],
+      "invalidation": [
+        "The client library is pinned to version 2.4.1",
+        "The server library is pinned to version 3.0.0",
+        "Version 2.4.1 fixed a memory leak",
+        "The client library is published weekly"
+      ],
+      "new": "The pin of the client library is still 2.4.1",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "later-event-same-entities",
+      "existing": [],
+      "invalidation": [
+        "The backup of the Atlas database completed on Monday",
+        "The backup of the Atlas database is stored off site",
+        "The backup of the Borealis database failed on Monday",
+        "Atlas database backups run daily"
+      ],
+      "new": "The backup of the Atlas database completed on Tuesday",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "real-setting-removed",
+      "existing": [],
+      "invalidation": [
+        "The Atlas cache mode is configured as auto",
+        "The Atlas cache size is 512 MB",
+        "The Borealis cache mode is manual",
+        "The Atlas cache is cleared at deployment",
+        "The Cinder cluster has 12 nodes"
+      ],
+      "new": "The Atlas cache mode setting was removed from the configuration",
+      "duplicates": [],
+      "contradicted": [
+        0
+      ]
+    },
+    {
+      "id": "real-count-changed",
+      "existing": [],
+      "invalidation": [
+        "The Dune archive holds 40 terabytes",
+        "The Atlas cluster has 8 nodes",
+        "The Cinder cluster has 12 nodes",
+        "The Atlas cluster uses 3 availability zones",
+        "The Atlas cluster was resized in May"
+      ],
+      "new": "The Atlas cluster now has 10 nodes after two were added",
+      "duplicates": [],
+      "contradicted": [
+        1
+      ]
+    },
+    {
+      "id": "real-ticket-closed",
+      "existing": [
+        "Ticket 4411 is assigned to Jana Frei"
+      ],
+      "invalidation": [
+        "Ticket 4398 is closed",
+        "Ticket 4420 is blocked on a vendor reply",
+        "Ticket 4411 is open",
+        "Ticket 4411 concerns the password reset mail"
+      ],
+      "new": "Ticket 4411 was closed as fixed",
+      "duplicates": [],
+      "contradicted": [
+        3
+      ]
+    },
+    {
+      "id": "real-owner-handed-over",
+      "existing": [],
+      "invalidation": [
+        "Felix Roth maintains the invoice templates",
+        "Nora Baumann owns the billing service",
+        "Nora Baumann works from the Basel office",
+        "The billing service is written in Go"
+      ],
+      "new": "Ownership of the billing service passed from Nora Baumann to Felix Roth",
+      "duplicates": [],
+      "contradicted": [
+        1
+      ]
+    },
+    {
+      "id": "real-pin-moved",
+      "existing": [],
+      "invalidation": [
+        "The server library is pinned to version 3.0.0",
+        "The client library is published weekly",
+        "The client library is pinned to version 2.4.1",
+        "Version 2.4.1 fixed a memory leak"
+      ],
+      "new": "The client library pin was moved from 2.4.1 to 2.5.0",
+      "duplicates": [],
+      "contradicted": [
+        2
+      ]
+    },
+    {
+      "id": "real-schedule-replaced",
+      "existing": [
+        "The platform team has seven members"
+      ],
+      "invalidation": [
+        "The data team meets on Mondays",
+        "The weekly release happens on Thursdays",
+        "The design team decided to drop the dark theme",
+        "The platform team decided to keep the weekly release"
+      ],
+      "new": "The weekly release was moved from Thursdays to Tuesdays",
+      "duplicates": [],
+      "contradicted": [
+        2
+      ]
+    }
+  ]
+}
