@@ -48,6 +48,14 @@ pointing operators to targeted repair or rebuild below. Read-side fingerprints a
 not independent authenticity proofs. Delivery and explicit rebuild bind derived
 records to immutable fact bodies.
 
+A fact being projected fails the same check for its whole partition until its
+projection completes, so a search made during a save, a bulk load or a rebuild
+is refused in the same way. That refusal is logged as
+`semantic_projection_in_flight` at information level and needs no action: it
+ends when the projection does. A real defect found while any projection runs
+is logged under this name until a search is refused with nothing in flight.
+Refusals after a start, before the index is verified, keep the warning.
+
 There is no automatic vector migration. Rebuild explicitly with the normal
 operator access and provider controls:
 

@@ -280,6 +280,43 @@ def test_small_model_request_is_reasoning_shaped(
     assert "max_tokens" not in body
 
 
+def test_the_combined_edge_call_asks_for_low_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # I-102: the one request that reasons. Same model, pool and shape.
+    requests: list[tuple[str, dict[str, Any]]] = []
+
+    async def serve(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        requests.append((request.url.path, body))
+        return _response(_parsed_response(body["model"]))
+
+    shared, llm_client, _embedder, _reranker = _clients_with_transport(
+        monkeypatch, serve
+    )
+    combined = graphiti_module._combined_edge_client(llm_client)
+
+    async def exercise() -> None:
+        try:
+            answer = await combined.generate_response(
+                [Message(role="user", content="return the accepted answer")],
+                _Answer,
+            )
+        finally:
+            await shared.close()
+        assert answer == {"answer": "accepted"}
+
+    asyncio.run(exercise())
+
+    [(path, body)] = requests
+    assert path == "/v1/responses"
+    assert body["model"] == "gpt-6-luna"
+    assert body["reasoning"] == {"effort": "low"}
+    assert body["text"]["verbosity"] == "low"
+    assert body["prompt_cache_options"] == {"mode": "explicit"}
+    assert "temperature" not in body
+
+
 def test_medium_model_request_is_gpt6_shaped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

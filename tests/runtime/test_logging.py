@@ -33,6 +33,25 @@ def test_semantic_rebuild_event_has_no_content_fields() -> None:
     assert payload == {"event": "semantic_rebuild_needed", "time": payload["time"]}
 
 
+def test_semantic_in_flight_event_has_no_content_fields() -> None:
+    """#281: the in-flight refusal carries as little as the rebuild signal."""
+    stream = StringIO()
+    configure_logging(stream).emit(
+        LogEvent.SEMANTIC_PROJECTION_IN_FLIGHT, transport=None
+    )
+    payload = json.loads(stream.getvalue())
+    assert payload == {
+        "event": "semantic_projection_in_flight",
+        "time": payload["time"],
+    }
+    with pytest.raises(TypeError):
+        configure_logging(StringIO()).emit(
+            LogEvent.SEMANTIC_PROJECTION_IN_FLIGHT,
+            transport=None,
+            operation=Operation.MEMORY_RECALL,
+        )
+
+
 @pytest.mark.parametrize(
     "fields",
     [

@@ -99,7 +99,9 @@ from cairn.projection.graphiti_extraction_policy import (
 from cairn.projection.models import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
+    LLM_COMBINED_EDGE_REASONING,
     LLM_MEDIUM_MODEL,
+    LLM_REASONING,
     LLM_SMALL_MODEL,
 )
 from cairn.projection.partition import derive_group_id
@@ -170,12 +172,26 @@ def _openai_provider_clients() -> tuple[
     )
     return (
         shared,
-        OpenAIClient(config=llm_config, client=shared, reasoning="none"),
+        OpenAIClient(config=llm_config, client=shared, reasoning=LLM_REASONING),
         OpenAIEmbedder(client=shared),
         OpenAIRerankerClient(
             config=LLMConfig(model=LLM_SMALL_MODEL),
             client=shared,
         ),
+    )
+
+
+def _combined_edge_client(llm_client: OpenAIClient) -> OpenAIClient:
+    """Cairn's models on ``llm_client``'s provider pool, at the combined call's effort.
+
+    The library's client fixes reasoning effort per client, not per call, so
+    the one call that needs another effort gets a client of its own. It
+    shares the provider client, which its owner closes.
+    """
+    return OpenAIClient(
+        config=LLMConfig(model=LLM_MEDIUM_MODEL, small_model=LLM_SMALL_MODEL),
+        client=llm_client.client,
+        reasoning=LLM_COMBINED_EDGE_REASONING,
     )
 
 
@@ -891,6 +907,7 @@ def _construct_graphiti(
         linger_ms=edge_batch_linger_ms,
         max_facts=edge_batch_max_facts,
         logger=safe_logger,
+        combined_call=_combined_edge_client(llm_client).generate_response,
     )
     # None disables cache I/O, not validation. The wrapper must exist before
     # Graphiti stores the embedder in its clients bundle.
@@ -1121,8 +1138,22 @@ class GraphitiIndex:
 
     # --- The IndexAdapter operations ------------------------------------
 
+    @contextmanager
+    def _projecting(self) -> Iterator[None]:
+        """#281: count projections in flight and begun, for the search
+        refusal's log event only. They decide nothing about coverage."""
+        with _IN_FLIGHT_LOCK:
+            self._in_flight = getattr(self, "_in_flight", 0) + 1
+            self._projections_begun = getattr(self, "_projections_begun", 0) + 1
+        try:
+            yield
+        finally:
+            with _IN_FLIGHT_LOCK:
+                self._in_flight -= 1
+
     def project(self, state: ProjectedFactState) -> FactProjected | ProjectionFailed:
-        return self._call(self._project(state))
+        with self._projecting():
+            return self._call(self._project(state))
 
     def project_many(
         self, states: tuple[ProjectedFactState, ...]
@@ -1130,9 +1161,10 @@ class GraphitiIndex:
         if not states:
             return ()
         timeout = min(_BULK_TIMEOUT_SECONDS, len(states) * _CALL_TIMEOUT_SECONDS)
-        return self._call(
-            self._project_many(states), timeout=timeout, contain_tasks=True
-        )
+        with self._projecting():
+            return self._call(
+                self._project_many(states), timeout=timeout, contain_tasks=True
+            )
 
     def search(
         self, query: str, limit: int, partition_keys: tuple[str, ...]
@@ -1445,9 +1477,33 @@ class GraphitiIndex:
             # audit has run, or while it found more than the cap, nothing
             # here proves the partitions complete. Same refusal, same event.
             raise FactVectorError("fact_vector_rebuild_required")
-        with ExitStack() as driver_leases:
-            return await self._search_with_leased_drivers(
-                query, limit, partition_keys, grades, driver_leases
+        # #281 (I-101): an episode being projected fails the coverage gates
+        # for its whole partition until its marker is written. The refusal
+        # is the same; only the event differs, so a save in progress does
+        # not read as a call for repair. Decided here, where the refusal
+        # happens, and over the whole search: a projection that ends before
+        # the refusal reaches the caller, or begins and ends inside the
+        # search, still overlapped it. The counters cannot tell which
+        # partition is in flight, so a real defect found during a projection
+        # is reported as in flight until a refusal that none overlapped. The
+        # unverified refusal above (I-99) and a projection's own failure
+        # keep the warning.
+        before = self._projection_activity()
+        try:
+            with ExitStack() as driver_leases:
+                return await self._search_with_leased_drivers(
+                    query, limit, partition_keys, grades, driver_leases
+                )
+        except FactVectorError as error:
+            running, begun = self._projection_activity()
+            error.in_flight = bool(before[0] or running or begun != before[1])
+            raise
+
+    def _projection_activity(self) -> tuple[int, int]:
+        with _IN_FLIGHT_LOCK:
+            return (
+                getattr(self, "_in_flight", 0),
+                getattr(self, "_projections_begun", 0),
             )
 
     @contextmanager
@@ -1739,10 +1795,14 @@ class GraphitiIndex:
                 self._work_failure = error.code
             logger = getattr(self, "_safe_logger", None)
             if error.code == "fact_vector_rebuild_required" and logger is not None:
+                # #281 (I-101): the refused search says whether a projection
+                # overlapped it; any other raiser leaves the flag unset.
                 logger.emit(
-                    LogEvent.SEMANTIC_REBUILD_NEEDED,
+                    LogEvent.SEMANTIC_PROJECTION_IN_FLIGHT
+                    if error.in_flight
+                    else LogEvent.SEMANTIC_REBUILD_NEEDED,
                     transport=None,
-                    level=logging.WARNING,
+                    level=logging.INFO if error.in_flight else logging.WARNING,
                 )
             raise GraphitiIndexError(error.code) from None
         except Exception as error:
@@ -1788,6 +1848,7 @@ class GraphitiIndex:
 # so the invariant does not rest on the library continuing to ignore the
 # ``source_description`` it is handed on its update path.
 _PROJECTION_PENDING = "cairn.fact.projecting"
+_IN_FLIGHT_LOCK = threading.Lock()
 _PROJECTION_DONE = "cairn.fact.projected"
 
 

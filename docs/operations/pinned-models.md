@@ -22,6 +22,14 @@ deployment files do not set `EMBEDDING_DIM`; a process that sets it to
 another value keeps v1 and loses v5. See
 [semantic-fact-search.md](semantic-fact-search.md).
 
+Reasoning effort is pinned beside the models, for the same reason.
+`LLM_REASONING` is `none` and applies to every call except one:
+`LLM_COMBINED_EDGE_REASONING` is `low`, for the batched edge-dedup call, which
+judges up to ten unrelated items in one answer and misjudged contradictions
+with reasoning off. Change either only with a run of
+`scripts/evaluate_edge_dedup.py`; its `--combined-reasoning` option measures
+another effort for that call.
+
 Source: the [OpenAI deprecations page](https://developers.openai.com/api/docs/deprecations).
 "None announced" means the model is absent from that page. It is not a
 guarantee: OpenAI gives at least six months' notice for generally available
@@ -48,5 +56,5 @@ models. The API also reports `shutdown_date` per model on
 ## History
 
 - 21 Nov 2026: `gpt-5.4-nano` (shutdown 1 April 2027, announced 1 Oct 2026)
-  replaced by `gpt-6-luna` in v0.11.1.
+  replaced by `gpt-6-luna` in v0.11.2.
 - 10 Oct 2026: `gpt-4.1-nano` (shutdown 23 Oct 2026) replaced by `gpt-5.6-luna`.

@@ -7,6 +7,7 @@ because CI never constructs the real adapter (P-39)."""
 import asyncio
 import json
 import threading
+from collections.abc import Callable
 from contextvars import Context
 from datetime import UTC, datetime
 from io import StringIO
@@ -71,6 +72,144 @@ def test_vector_failure_emits_only_closed_rebuild_signal(
             "event": "semantic_rebuild_needed",
             "time": records[0]["time"],
         }
+
+
+def _refused_search(
+    during: Callable[[Any], None], *, in_flight: int = 0, verified: bool = True
+) -> list[str]:
+    """One nonblank search through the real ``_call`` and ``_search``, refused
+    by a stubbed coverage gate after ``during`` has run; the events logged."""
+    from cairn.projection.fact_vectors import FactVectorError
+
+    stream = StringIO()
+    adapter = cast(Any, GraphitiIndex.__new__(GraphitiIndex))
+    adapter._safe_logger = configure_logging(stream)
+    adapter._close_requested = threading.Event()
+    adapter._containment_breached = threading.Event()
+    adapter._search_bound = asyncio.Semaphore(2)
+    adapter._in_flight = in_flight
+    adapter.set_coverage_verified(verified)
+
+    async def refuse(*_: object) -> tuple[()]:
+        during(adapter)
+        raise FactVectorError("fact_vector_rebuild_required")
+
+    adapter._search_with_leased_drivers = refuse
+    adapter._loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=adapter._loop.run_forever)
+    thread.start()
+    try:
+        with pytest.raises(GraphitiIndexError, match="fact_vector_rebuild_required"):
+            adapter._call(adapter._search("plain query", 1, ("acme\n[]",)))
+    finally:
+        adapter._loop.call_soon_threadsafe(adapter._loop.stop)
+        thread.join()
+        adapter._loop.close()
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert all(set(record) == {"event", "time"} for record in records)
+    return [record["event"] for record in records]
+
+
+def _nothing(adapter: Any) -> None:
+    pass
+
+
+def _projection_ends(adapter: Any) -> None:
+    adapter._in_flight = 0
+
+
+def _projection_begins_and_ends(adapter: Any) -> None:
+    with adapter._projecting():
+        pass
+
+
+def test_search_refused_during_a_projection_logs_in_flight_not_rebuild() -> None:
+    """#281: the refusal is unchanged; the event no longer asks for a
+    rebuild while a save is simply being projected."""
+    assert _refused_search(_nothing, in_flight=1) == ["semantic_projection_in_flight"]
+
+
+def test_projection_ending_before_the_refusal_is_logged_still_counts() -> None:
+    """The gate saw the episode in flight; the projection finished before
+    the refusal reached the request thread that logs it."""
+    assert _refused_search(_projection_ends, in_flight=1) == [
+        "semantic_projection_in_flight"
+    ]
+
+
+def test_projection_beginning_and_ending_inside_the_search_counts() -> None:
+    assert _refused_search(_projection_begins_and_ends) == [
+        "semantic_projection_in_flight"
+    ]
+
+
+def test_refusal_with_no_projection_overlapping_keeps_the_rebuild_warning() -> None:
+    assert _refused_search(_nothing) == ["semantic_rebuild_needed"]
+
+
+def test_unverified_index_keeps_the_rebuild_warning_during_a_projection() -> None:
+    """I-99: the unverified refusal is not a projection's doing."""
+    assert _refused_search(_nothing, in_flight=1, verified=False) == [
+        "semantic_rebuild_needed"
+    ]
+
+
+def test_a_projections_own_vector_failure_keeps_the_rebuild_warning() -> None:
+    from cairn.projection.fact_vectors import FactVectorError
+
+    stream = StringIO()
+    adapter = cast(Any, GraphitiIndex.__new__(GraphitiIndex))
+    adapter._safe_logger = configure_logging(stream)
+    adapter._close_requested = threading.Event()
+    adapter._containment_breached = threading.Event()
+    adapter._loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=adapter._loop.run_forever)
+    thread.start()
+
+    async def fail() -> None:
+        raise FactVectorError("fact_vector_rebuild_required")
+
+    adapter._project = lambda state: fail()
+    try:
+        with pytest.raises(GraphitiIndexError, match="fact_vector_rebuild_required"):
+            adapter.project(object())
+    finally:
+        adapter._loop.call_soon_threadsafe(adapter._loop.stop)
+        thread.join()
+        adapter._loop.close()
+    assert [json.loads(line)["event"] for line in stream.getvalue().splitlines()] == [
+        "semantic_rebuild_needed"
+    ]
+    assert adapter._in_flight == 0
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_projection_counts_itself_in_flight_only_while_it_runs(fails: bool) -> None:
+    adapter = cast(Any, GraphitiIndex.__new__(GraphitiIndex))
+    seen: list[int] = []
+
+    def call(coroutine: Any, **_: object) -> tuple[()]:
+        coroutine.close()
+        seen.append(adapter._in_flight)
+        if fails:
+            raise GraphitiIndexError("graphiti_unavailable")
+        return ()
+
+    adapter._call = call
+    adapter._project = lambda state: asyncio.sleep(0)
+    adapter._project_many = lambda states: asyncio.sleep(0)
+    runs: tuple[Callable[[], object], ...] = (
+        lambda: adapter.project(object()),
+        lambda: adapter.project_many((object(),)),
+    )
+    for run in runs:
+        if fails:
+            with pytest.raises(GraphitiIndexError):
+                run()
+        else:
+            run()
+    assert seen == [1, 1]
+    assert adapter._in_flight == 0
 
 
 def test_index_event_loop_is_uvloop() -> None:
@@ -198,6 +337,7 @@ def test_graphiti_construction_installs_edge_batching(
         linger_ms: int,
         max_facts: int,
         logger: SafeLogger | None,
+        combined_call: Any,
     ) -> None:
         installed.update(
             client=llm_client,
@@ -205,6 +345,7 @@ def test_graphiti_construction_installs_edge_batching(
             linger_ms=linger_ms,
             max_facts=max_facts,
             logger=logger,
+            combined_call=combined_call,
         )
         return None
 
@@ -226,6 +367,18 @@ def test_graphiti_construction_installs_edge_batching(
         assert installed["linger_ms"] == 75
         assert installed["max_facts"] == 80
         assert installed["logger"] is safe_logger
+        # The combined call alone reasons (I-102): a second client on the
+        # same models and provider pool, and the first one left as it was.
+        combined = cast(Any, installed["combined_call"]).__self__
+        assert combined is not llm_client
+        assert combined.reasoning == "low"
+        assert llm_client.reasoning == "none"
+        assert combined.client is shared
+        assert (combined.model, combined.small_model) == (
+            llm_client.model,
+            llm_client.small_model,
+        )
+        assert installed["combined_call"] == combined.generate_response
     finally:
         asyncio.run(shared.close())
 
@@ -245,6 +398,7 @@ def test_graphiti_construction_passes_an_edge_batch_size_of_one_through(
         linger_ms: int,
         max_facts: int,
         logger: SafeLogger | None,
+        combined_call: object,
     ) -> None:
         installed.update(
             batch_size=batch_size,
