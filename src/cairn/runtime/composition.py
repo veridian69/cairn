@@ -615,6 +615,19 @@ def build_application(
         redoc_url=None,
         openapi_url=None,
         lifespan=lifespan,
+        # FastAPI's native OpenTelemetry support is on by default: it reports
+        # request paths and query strings to whichever provider the process
+        # has configured, and FASTAPI_OTEL_AUTO_CONFIGURE=true makes it build
+        # OTLP exporters from OTEL_* variables at startup. Cairn is private
+        # and self-hosted, so composition closes that path, as it does for
+        # graphiti-core's telemetry, even when an ambient environment or a
+        # co-installed SDK asks to enable it.
+        telemetry={
+            "tracing": False,
+            "metrics": False,
+            "logs": False,
+            "auto_configure": False,
+        },
     )
     application.add_middleware(
         FoundationMiddleware,

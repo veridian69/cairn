@@ -19,7 +19,6 @@ import threading
 import time
 from collections.abc import Callable, Coroutine
 from concurrent.futures import CancelledError, Future
-from contextvars import Context
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -40,6 +39,10 @@ from cairn.projection.graphiti import (
     _PROJECTION_PENDING,
     GraphitiIndex,
     GraphitiIndexError,
+)
+from cairn.projection.graphiti_extraction_policy import (
+    ENTITY_TYPES,
+    EXTRACTION_INSTRUCTIONS,
 )
 from cairn.projection.partition import derive_group_id
 
@@ -253,6 +256,7 @@ class FakeGraphiti:
         self._edges = edges
         self.add_calls: list[dict[str, object]] = []
         self.bulk_calls: list[tuple[str, ...]] = []
+        self.bulk_policy: list[tuple[object, str | None]] = []
         self.omit_from_results: set[str] = set()
         self.search_configs: list[SearchConfig] = []
         self.search_group_ids: list[list[str]] = []
@@ -277,8 +281,17 @@ class FakeGraphiti:
         existing.entity_edges = ["edge-a", "edge-b"]
 
     async def add_episode_bulk(
-        self, bulk_episodes: list[object], group_id: str | None = None
+        self,
+        bulk_episodes: list[object],
+        group_id: str | None = None,
+        entity_types: object = None,
+        custom_extraction_instructions: str | None = None,
+        use_combined_extraction: bool = True,
     ) -> SimpleNamespace:
+        # graphiti-core 0.31.2's default is combined extraction; the adapter
+        # must pin the separate path.
+        assert use_combined_extraction is False
+        self.bulk_policy.append((entity_types, custom_extraction_instructions))
         self.bulk_calls.append(
             tuple(str(getattr(episode, "uuid")) for episode in bulk_episodes)  # noqa: B009
         )
@@ -1543,12 +1556,12 @@ def test_a_queued_wrapper_does_not_touch_abandoned_work(
     def gate_first_task(
         loop: asyncio.AbstractEventLoop,
         coroutine: Coroutine[Any, Any, Any],
-        context: Context | None = None,
+        **keywords: Any,
     ) -> asyncio.Task[Any]:
         if not wrapper_created.is_set():
             loop.call_soon(block_before_first_step)
             wrapper_created.set()
-        return adapter._scoped_task_factory(loop, coroutine, context)
+        return adapter._scoped_task_factory(loop, coroutine, **keywords)
 
     adapter._loop.set_task_factory(gate_first_task)
     adapter._thread = threading.Thread(target=adapter._loop.run_forever, daemon=True)
@@ -1818,3 +1831,25 @@ def test_the_search_config_selects_episode_bm25_and_the_edge_layer() -> None:
     config = graphiti.search_configs[0]
     assert config.episode_config is not None
     assert config.edge_config is not None
+
+
+def test_both_projection_paths_pass_the_extraction_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without entity types and instructions the library's stock prompt
+    extracts fewer than two entities from most one-sentence memories, and
+    such a memory leaves no fact in the graph."""
+    store = FakeStore()
+    store.install(monkeypatch)
+    graphiti = FakeGraphiti(store)
+    adapter = index(graphiti, FakeDriver())
+
+    asyncio.run(adapter._project(fact()))
+    asyncio.run(adapter._project_many((fact(OTHER_IDENTITY),)))
+
+    assert graphiti.add_calls[0]["entity_types"] is ENTITY_TYPES
+    assert (
+        graphiti.add_calls[0]["custom_extraction_instructions"]
+        is EXTRACTION_INSTRUCTIONS
+    )
+    assert graphiti.bulk_policy == [(ENTITY_TYPES, EXTRACTION_INSTRUCTIONS)]

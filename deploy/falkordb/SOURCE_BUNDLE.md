@@ -1,6 +1,6 @@
 # Historical FalkorDB corresponding-source bundle
 
-The current local source recipe targets FalkorDB 4.20.7 and Redis 8.10.2.
+The current local source recipe targets FalkorDB 4.20.7 and Redis 8.10.3.
 It does not distribute a database image or source bundle. `source-release.json`
 retains the historical archive inventory explicitly as `historical_only`.
 The generator's fixed module, commit epoch and Debian inventory describe the

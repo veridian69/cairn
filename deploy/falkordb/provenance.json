@@ -6,10 +6,10 @@
   "upstream_source": "https://github.com/FalkorDB/FalkorDB/tree/v4.20.7",
   "patched_commit": null,
   "module_source_image": null,
-  "module_sha256": "003643d732f14e52fac6f7a3835cd8ebbe69292eeec4a20fedd73db316915337",
-  "redis_version": "8.10.2",
-  "redis_source": "https://download.redis.io/releases/redis-8.10.2.tar.gz",
-  "redis_source_sha256": "b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3",
+  "module_sha256": "db39e18ba80454d39c9b15edaa359af56d71fe634146d9b42504c6ee23c3f1de",
+  "redis_version": "8.10.3",
+  "redis_source": "https://download.redis.io/releases/redis-8.10.3.tar.gz",
+  "redis_source_sha256": "edde778f6bdee7581e42fc139ca9e07e2822212092f7501f99989656e3629d02",
   "redis_hash_source": "https://github.com/redis/redis-hashes/blob/master/README",
   "redis_base": null,
   "ubuntu_base": "ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4",
@@ -72,14 +72,14 @@
       "commit": "e626a72bc2321cd320e953a0ccf1584cad60f363"
     }
   ],
-  "image_index": "sha256:f009b3770a9899516951059b199d0d2bd7b670c953cef42f139419b76ac60751",
-  "platform_manifest": "sha256:46261ec24bdb13fcf810d4786ed21bc57581de5926f876b29049d5bf7f81cff0",
-  "image_config": "sha256:de562f072fef53abe6ae01646120f363f41b4392106a58e5645fe798e1d75765",
+  "image_index": "sha256:387143cc7ee300bed90cafafd3e45824f8874c4320d4ee18d008a2fa68c76834",
+  "platform_manifest": "sha256:052193cd6ce5273766dfed2594b4b8d856276c8584dc191ca5d04668f38a5c55",
+  "image_config": "sha256:8982a88827bca03a1eaddf45bab364631af8e3ead88065b0927643ca3b2c3f49",
   "module_recompiled": true,
   "scanner": {
     "version": "0.70.0",
-    "database_updated_at": "2026-10-14T13:10:32Z",
-    "date": "2026-10-15",
+    "database_updated_at": "2026-11-22T07:05:02Z",
+    "date": "2026-11-22",
     "scope": "os-pkgs (ubuntu 24.04); Redis and the FalkorDB module are compiled from source and invisible to the scanner",
     "high": 0,
     "critical": 0,
@@ -87,5 +87,5 @@
   },
   "build_source_state": "built_and_accepted",
   "build_recipe": "Dockerfile.source compiles the upstream module and the Redis core, without its bundled modules, from verified source; no Cairn patch is applied to the upstream checkout.",
-  "attestation_scope": "Built 15 October 2026 by deploy/falkordb/build.sh from the pins above; accepted by scan, graph synthetic acceptance and volume rehearsals from 4.20.0 and 4.20.4 to 4.20.7. The exported archive is local, not published."
+  "attestation_scope": "Built 22 November 2026 by deploy/falkordb/build.sh from the pins above; accepted by scan, graph synthetic acceptance and volume rehearsals to and from the 15 October 2026 build (FalkorDB 4.20.7 on Redis 8.10.2). The exported archive is local, not published."
 }

@@ -14,8 +14,8 @@ fi
 recipe_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 falkor_commit=2811bc690c37558b345c0f8491c05424729e6953
 cpu_features_commit=438a66e41807cd73e0c403966041b358f5eafc68
-redis_version=8.10.2
-redis_sha=b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3
+redis_version=8.10.3
+redis_sha=edde778f6bdee7581e42fc139ca9e07e2822212092f7501f99989656e3629d02
 output_image=cairn-local/falkordb-server:rebuild
 for command in docker git curl sha256sum mktemp; do
   command -v "$command" >/dev/null || { printf 'required command missing: %s\n' "$command" >&2; exit 1; }

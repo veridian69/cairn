@@ -1,13 +1,13 @@
 """Pinned Graphiti bulk-extraction caching seam (P-90 seam 1).
 
-Graphiti 0.30.2's ``extract_nodes_and_edges_bulk`` issues one provider
-call per episode with no cache of its own: reprojecting the same
+Graphiti 0.31.2's ``extract_nodes_and_edges_bulk`` issues its provider
+calls per episode with no cache of its own: reprojecting the same
 episode content re-extracts nodes and edges from scratch every time.
 This module caches the library's own extraction output per episode in
 the catalogue, keyed off the extraction inputs that vary independently
 of the episode's content, including a call to ``_get_model_for_size`` —
 a private method of the pinned library's ``LLMClient``
-(``openai_base_client.py:111``); the compatibility guard below is what
+(``openai_base_client.py:112``); the compatibility guard below is what
 licenses calling it. Delete this seam when the pinned dependency caches
 extraction itself.
 
@@ -21,15 +21,17 @@ distinct facts with byte-identical bodies would otherwise collide on the
 same key; ``cached_extract_nodes_and_edges_bulk`` excludes that by
 verifying the stored row's ``fact_id`` on read, not by the key itself.
 
-Three further prompt inputs are unkeyed and, unlike the two above, are
+Cairn passes ``entity_types`` (``graphiti_extraction_policy``), and the
+pinned library feeds each type's ``__doc__`` into the extraction prompt,
+so ``_types_fingerprint`` covers the docstring as well as the field names.
+
+Two further prompt inputs are unkeyed and, unlike the two above, are
 known gaps rather than settled choices. They do not share a rationale.
-Two are inert only while Cairn calls ``add_episode_bulk`` without
-``entity_types`` or ``edge_types``, both of which the library then
-defaults to ``None``: ``_types_fingerprint`` covers entity-type field
-names only, while the pinned library feeds each type's ``__doc__`` into
-the extraction prompt, and ``edge_types`` reaches the edge prompt as
-``fact_type_description`` but is neither key material nor a bypass
-trigger. The third is **not** inert — the previous-episode window (the
+One is inert only while Cairn calls ``add_episode_bulk`` without
+``edge_types``, which the library then defaults to ``None``:
+``edge_types`` reaches the edge prompt as ``fact_type_description`` but
+is neither key material nor a bypass trigger. The other is **not**
+inert — the previous-episode window (the
 three most recent same-partition episodes, read live from the graph)
 enters both prompts and is not key material, so a hit can serve
 extraction produced under a different window. It varies through failure
@@ -37,8 +39,9 @@ reordering, ``valid_at`` ties and chunk composition; the effect is
 semantic drift on already nondeterministic model output rather than a
 broken invariant, and it cannot arise under the default
 ``chunk_size`` of 1, which never reaches the bulk path. Configuring
-custom types, or keying the window, needs these closed first — see
-migration 0007's comment and the P-90 remediation handoff.
+edge types, or keying the window, needs these closed first — see the
+P-90 remediation handoff. Migration 0007's comment predates the
+entity-type fingerprint above and still lists it as a gap.
 
 Seam 1's pinned shapes: the key (``extraction_cache_key``) is a sha256
 of canonical JSON over ``episode_sha``, ``graphiti_core``, ``llm_model``,
@@ -99,12 +102,15 @@ from graphiti_core.prompts.extract_edges import EdgeTimestamps
 from graphiti_core.utils.bulk_utils import extract_nodes_and_edges_bulk
 from graphiti_core.utils.datetime_utils import ensure_utc
 from graphiti_core.utils.maintenance import edge_operations
+from graphiti_core.utils.maintenance.temporal_edge_utils import (
+    normalize_future_temporal_bounds,
+)
 from pydantic import BaseModel
 
 from cairn.runtime.logging import CacheKind, CacheReason, LogEvent, SafeLogger
 
 _GRAPHITI_CORE_VERSION = version("graphiti-core")
-_GRAPHITI_EXTRACTION_CACHE_COMPATIBILITY_VERSION = "0.30.2"
+_GRAPHITI_EXTRACTION_CACHE_COMPATIBILITY_VERSION = "0.31.2"
 
 
 def _require_graphiti_extraction_cache_compatibility() -> None:
@@ -158,7 +164,12 @@ class _CacheStore(Protocol):
 def _types_fingerprint(types: dict[str, type[BaseModel]] | None) -> str:
     if types is None:
         return "null"
-    material = {name: sorted(model.model_fields) for name, model in types.items()}
+    # The library puts each type's docstring into the extraction prompt, so
+    # the docstring is key material alongside the field names.
+    material = {
+        name: {"doc": model.__doc__ or "", "fields": sorted(model.model_fields)}
+        for name, model in types.items()
+    }
     canonical = json.dumps(
         material, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
@@ -251,6 +262,7 @@ async def cached_extract_nodes_and_edges_bulk(
             entity_types=entity_types,
             excluded_entity_types=excluded_entity_types,
             custom_extraction_instructions=custom_extraction_instructions,
+            use_combined_extraction=False,
         )
     keys = [
         extraction_cache_key(
@@ -289,6 +301,7 @@ async def cached_extract_nodes_and_edges_bulk(
             entity_types=entity_types,
             excluded_entity_types=excluded_entity_types,
             custom_extraction_instructions=custom_extraction_instructions,
+            use_combined_extraction=False,
         )
         rows: list[tuple[str, str, str]] = []
         for position, index in enumerate(misses):
@@ -392,13 +405,21 @@ def install_edge_timestamp_caching(
         llm_client: Any,
         edge: EntityEdge,
         episode: EpisodicNode | None,
+        *,
+        clients: GraphitiClients | None = None,
     ) -> None:
         installed: tuple[_CacheStore, SafeLogger | None] | None = getattr(
             llm_client, _TIMESTAMP_STORE_ATTRIBUTE, None
         )
-        if installed is None:
-            # A client no installation touched: pure upstream behaviour.
-            await original(llm_client, edge, episode)
+        if installed is None or clients is not None or episode is None:
+            # A client no installation touched, a prompt-routed call
+            # (upstream passes ``clients`` only then, and Cairn configures no
+            # routing), or a call with no episode to own the cache row:
+            # pure upstream behaviour, uncached.
+            if clients is None:
+                await original(llm_client, edge, episode)
+            else:
+                await original(llm_client, edge, episode, clients=clients)
             return
         store, logger = installed
         # Replicates the original's own guards before any cache work: an
@@ -406,9 +427,10 @@ def install_edge_timestamp_caching(
         # reference time, must behave exactly as the uncached original.
         if edge.valid_at is not None or edge.invalid_at is not None:
             return
-        if episode is None or episode.valid_at is None:
+        reference_time = ensure_utc(edge.reference_time or episode.valid_at)
+        if reference_time is None:
             return
-        key = timestamps_cache_key(edge.fact, episode.valid_at, llm_client)
+        key = timestamps_cache_key(edge.fact, reference_time, llm_client)
         payload = await asyncio.to_thread(store.get, key, kind=CacheKind.TIMESTAMPS)
         if payload is not None:
             parsed = _timestamps_from_payload(payload)
@@ -417,7 +439,7 @@ def install_edge_timestamp_caching(
                 return
             _emit_miss(logger, CacheKind.TIMESTAMPS, CacheReason.PAYLOAD_INVALID)
         await _extract_and_cache_timestamps(
-            store, llm_client, edge, episode, key, logger
+            store, llm_client, edge, episode, reference_time, key, logger
         )
 
     wrapper: Any = cached_extract_edge_timestamps
@@ -430,32 +452,37 @@ async def _extract_and_cache_timestamps(
     llm_client: Any,
     edge: EntityEdge,
     episode: EpisodicNode,
+    reference_time: datetime,
     key: str,
     logger: SafeLogger | None,
 ) -> None:
     """The pinned library's own timestamp call, owned here (R2).
 
-    Graphiti 0.30.2's ``_extract_edge_timestamps`` swallows provider,
+    Graphiti 0.31.2's ``_extract_edge_timestamps`` swallows provider,
     validation and parsing failures, leaving both fields null — a state
     indistinguishable from a valid "no timestamp" answer. Owning the call
-    (guards, prompt, response model, model size and UTC normalisation
-    matched to the upstream exactly) is what lets the seam cache only a
-    completed extraction: a valid both-null answer is cacheable, any
-    failure is logged safely and never cached, so the next call retries.
-    The edge itself ends up exactly as the uncached upstream leaves it.
-    No exception text, edge identifier, fact or timestamp reaches a log.
+    (guards, prompt, response model, model size, UTC normalisation and the
+    future-tense bound normalisation matched to the upstream exactly) is
+    what lets the seam cache only a completed extraction: a valid both-null
+    answer is cacheable, any failure is logged safely and never cached, so
+    the next call retries. The edge itself ends up exactly as the uncached
+    upstream leaves it. No exception text, edge identifier, fact or
+    timestamp reaches a log.
+
+    ``reference_time`` is upstream's: the edge's own reference time, else
+    the episode's ``valid_at``, in UTC. It is the prompt input, the key
+    material and the bound the normalisation clamps to.
     """
-    assert episode.valid_at is not None  # guarded by the caller
     context = {
         "fact": edge.fact,
-        "reference_time": episode.valid_at.isoformat(),
+        "reference_time": reference_time.isoformat(),
     }
     try:
         llm_response = await llm_client.generate_response(
             prompt_library.extract_edges.extract_timestamps(context),
             response_model=EdgeTimestamps,
-            model_size=ModelSize.small,
             prompt_name="extract_edges.extract_timestamps",
+            model_size=ModelSize.small,
         )
         timestamps = EdgeTimestamps(**llm_response)
     except Exception:
@@ -476,6 +503,11 @@ async def _extract_and_cache_timestamps(
             )
         except ValueError:
             completed = False
+    # Upstream's ``apply_extracted_timestamps`` without its debug line, which
+    # would put the unparseable provider string on the library's logger.
+    edge.valid_at, edge.invalid_at = normalize_future_temporal_bounds(
+        edge.fact, reference_time, edge.valid_at, edge.invalid_at
+    )
     if not completed:
         _emit_miss(logger, CacheKind.TIMESTAMPS, CacheReason.TIMESTAMP_PARSE_FAILED)
         return
@@ -519,7 +551,7 @@ def embedding_cache_key(model: str, dim: int, text: str) -> str:
 def _cacheable_text(
     input_data: str | list[str] | Iterable[int] | Iterable[Iterable[int]],
 ) -> str | None:
-    # The only shapes projection uses (nodes.py:509, edges.py:291 in the
+    # The only shapes projection uses (nodes.py:509, edges.py:296 in the
     # pinned graphiti_core); token iterables are search/library-internal
     # shapes this seam doesn't key for, so they bypass to the inner
     # embedder unchanged.

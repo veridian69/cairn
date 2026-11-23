@@ -634,9 +634,11 @@ def test_an_unstatable_member_is_a_digest_mismatch(
     def refusing_fstat(fd: int) -> os.stat_result:
         raise OSError("injected fstat failure")
 
-    monkeypatch.setattr(os, "fstat", refusing_fstat)
-    with pytest.raises(RestoreError) as refusal:
-        restore_module._stage_member(bundle, data, member)
+    # Scoped: pytest's output capture calls os.fstat when the test returns.
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fstat", refusing_fstat)
+        with pytest.raises(RestoreError) as refusal:
+            restore_module._stage_member(bundle, data, member)
 
     assert (refusal.value.code, refusal.value.member) == (
         "digest_mismatch",

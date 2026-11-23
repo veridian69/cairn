@@ -106,6 +106,45 @@ def test_same_statement_reports_empty_and_missing_coverage(owned_db: int) -> Non
     asyncio.run(run())
 
 
+def test_a_bare_underscore_in_a_search_phrase_does_not_fail_the_search(
+    owned_db: int,
+) -> None:
+    """graphiti-core's own phrase for this text is a RediSearch syntax error."""
+    from graphiti_core.driver.falkordb.fulltext import build_falkor_fulltext_query
+    from graphiti_core.search.search_filters import SearchFilters
+    from graphiti_core.search.search_utils import (
+        edge_fulltext_search,
+        episode_fulltext_search,
+        node_fulltext_search,
+    )
+    from redis.exceptions import ResponseError
+
+    from cairn.projection.graphiti import BoundedFalkorDriver
+
+    text = "child agents named <tier>__<semantic>_<model>"
+
+    async def run() -> None:
+        driver = BoundedFalkorDriver(
+            host="127.0.0.1", port=owned_db, database=GROUP, concurrency_limit=2
+        )
+        try:
+            await driver.wait_ready()
+            with pytest.raises(ResponseError, match="Syntax error"):
+                await driver.execute_query(
+                    "CALL db.idx.fulltext.queryNodes('Entity', $query) "
+                    "YIELD node RETURN count(*)",
+                    query=build_falkor_fulltext_query(text, [GROUP]),
+                )
+            filters = SearchFilters()
+            assert await edge_fulltext_search(driver, text, filters, [GROUP], 5) == []
+            assert await node_fulltext_search(driver, text, filters, [GROUP], 5) == []
+            await episode_fulltext_search(driver, text, filters, [GROUP], 5)
+        finally:
+            await driver.close()
+
+    asyncio.run(run())
+
+
 @pytest.fixture
 def adapter(owned_db: int, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 
@@ -129,7 +168,9 @@ def adapter(owned_db: int, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
         async def add_episode(self, **kwargs: Any) -> None:
             self.extractions += 1
 
-        async def add_episode_bulk(self, raw: Any, group_id: str) -> Any:
+        async def add_episode_bulk(
+            self, raw: Any, group_id: str, use_combined_extraction: bool, **_: Any
+        ) -> Any:
             self.extractions += len(raw)
             return SimpleNamespace(
                 episodes=[]

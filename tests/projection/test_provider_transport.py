@@ -283,8 +283,10 @@ def test_small_model_request_is_reasoning_shaped(
 def test_medium_model_request_is_gpt6_shaped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # graphiti-core 0.30.2 treats gpt-6 as a non-reasoning model: it sends
-    # temperature and no effort, and the provider then reasons at medium.
+    # graphiti-core 0.30.2 treated gpt-6 as a non-reasoning model (it sent
+    # temperature and no effort, and the provider then reasoned at medium),
+    # so Cairn carried its own client subclass. From 0.31.2 the library's
+    # client sends this shape itself; this is the request Cairn relies on.
     requests: list[tuple[str, dict[str, Any]]] = []
 
     async def serve(request: httpx2.Request) -> httpx2.Response:

@@ -77,10 +77,11 @@ def test_existing_portable_catalogue_reopens_without_owner_assumption(
         status = real_fstat(file_descriptor)
         return SimpleNamespace(st_mode=status.st_mode, st_uid=status.st_uid + 1)
 
-    monkeypatch.setattr(os, "fstat", report_replacement_owner)
-
-    with _open_write_connection(tmp_path, create=False) as connection:
-        assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+    # Scoped: pytest's output capture calls os.fstat when the test returns.
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fstat", report_replacement_owner)
+        with _open_write_connection(tmp_path, create=False) as connection:
+            assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
 
 def test_writer_rejects_catalogue_symlink(tmp_path: Path) -> None:
