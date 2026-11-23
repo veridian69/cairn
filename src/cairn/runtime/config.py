@@ -157,6 +157,13 @@ class DeliveryConfig(BaseModel):
     # fetched per pass, so the effective chunk there is ``min(chunk_size,
     # limit)`` regardless of this bound; ``rebuild_index`` has no such
     # ceiling and honours ``chunk_size`` in full.
+    #
+    # Issue #275: 500 stays the permitted maximum so existing configurations
+    # load, but 200 is the recommended value. The library holds every edge
+    # and entity of a chunk, with its embedding, for the whole call, so peak
+    # memory grows with the chunk: measured at about 31 graph edges per
+    # fact, the process peaked about 370 MiB above its resting size at 200
+    # and about 860 MiB above it at 500. Throughput gains little beyond 100.
     chunk_size: int = Field(default=1, ge=1, le=500)
     # #204 (I-99): the most facts the startup repair re-projects without an
     # operator. Above it the pass enqueues nothing and logs

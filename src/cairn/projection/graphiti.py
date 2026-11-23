@@ -32,6 +32,7 @@ from concurrent.futures import Future
 from contextlib import ExitStack, contextmanager
 from contextvars import Context, ContextVar
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum
 from importlib.metadata import version
 from typing import Any, cast
@@ -496,10 +497,77 @@ class _BoundedFalkorDriverSession(FalkorDriverSession):
         self._init_owner = owner
 
     async def run(self, query: str | list, **kwargs: Any) -> Any:  # type: ignore[type-arg]
-        self._init_owner.admit()
-        async with self._query_bound:
+        """Send ``query``, splitting an oversized ``UNWIND`` list (issue #275).
+
+        A query that opens with ``UNWIND $<name> AS`` and whose ``<name>``
+        parameter holds more than ``_BULK_WRITE_ROWS`` rows goes out as one
+        query per consecutive slice, in order, other parameters unchanged.
+        Each slice takes the bound on its own, so other queries can
+        interleave and the bound holds per query sent. Upstream ``run``
+        discards results and returns None, which is what makes slicing safe.
+
+        A failing slice propagates at once and later slices are not sent.
+        Nothing is lost by that: the FalkorDB session is not transactional
+        (upstream ``execute_write`` just awaits the function, so a failure
+        mid-chunk already left earlier queries applied), and projection is
+        resumable by design."""
+        sends: list[tuple[str | list[Any], dict[str, Any]]] = []
+        if isinstance(query, list):
+            pending: list[Any] = []
+            for pair in query:
+                cypher, params = pair
+                slices = _bulk_write_slices(str(cypher), params)
+                if slices is None:
+                    pending.append(pair)
+                    continue
+                if pending:
+                    sends.append((pending, {}))
+                    pending = []
+                sends.extend(([(cypher, sliced)], {}) for sliced in slices)
+            if not sends:
+                sends.append((query, {}))
+            elif pending:
+                sends.append((pending, {}))
+        else:
+            slices = _bulk_write_slices(query, kwargs)
+            if slices is None:
+                sends.append((query, kwargs))
+            else:
+                sends.extend((query, sliced) for sliced in slices)
+        for send, params in sends:
             self._init_owner.admit()
-            return await super().run(query, **kwargs)
+            async with self._query_bound:
+                self._init_owner.admit()
+                await super().run(send, **params)
+        return None
+
+
+# graphiti-core 0.31.2 saves a bulk chunk's episodes, episodic edges and entity
+# edges with one ``UNWIND`` query each (entity nodes already go one per
+# query, so they are never split), and the FalkorDB client inlines parameters as Cypher text: 500 memories
+# (about 15,500 edges, each with a 1024-float embedding) made one query of
+# about 190 MB, which FalkorDB peaked about 950 MiB above rest to parse and
+# was OOM-killed in production. Slicing the list into 200-row queries cut
+# FalkorDB's peak from about 980 MiB to about 340 MiB with an identical
+# resulting graph (issue #275).
+_BULK_WRITE_ROWS = 200
+_BULK_WRITE_UNWIND = re.compile(r"\s*UNWIND\s+\$(\w+)\s+AS\s")
+
+
+def _bulk_write_slices(cypher: str, params: Any) -> list[dict[str, Any]] | None:
+    """The parameter sets to send ``cypher`` with, one per slice of its
+    ``UNWIND`` list, or None when the query is not an oversized bulk write."""
+    match = _BULK_WRITE_UNWIND.match(cypher)
+    if match is None or not isinstance(params, dict):
+        return None
+    name = match.group(1)
+    rows = params.get(name)
+    if not isinstance(rows, list) or len(rows) <= _BULK_WRITE_ROWS:
+        return None
+    return [
+        {**params, name: rows[start : start + _BULK_WRITE_ROWS]}
+        for start in range(0, len(rows), _BULK_WRITE_ROWS)
+    ]
 
 
 class BoundedFalkorDriver(FalkorDriver):
@@ -666,6 +734,27 @@ class BoundedFalkorDriver(FalkorDriver):
             init_owner=self._init_owner,
             owns_client=False,
         )
+
+
+def _graph_time(state: ProjectedFactState) -> datetime:
+    """The time the graph is told a fact holds from.
+
+    Graphiti settles a contradiction by date: the fact with the earlier
+    ``valid_at`` is the one ended. Given only ``recorded_at``, a memory
+    that describes an earlier state but was recorded later (an import, a
+    late save) ended the newer, true fact. So a ``valid_from`` earlier than
+    ``recorded_at`` is used instead. A later one is not: the text was
+    written at ``recorded_at``, and that is the time its relative
+    expressions ("last week") are resolved against. ``created_at`` stays
+    ``recorded_at`` on both paths.
+
+    This corrects the graph's own dates only. Recall does not read a graph
+    fact's end date (I-100, 23 November 2026): what hides a superseded
+    memory is the catalogue, never the graph.
+    """
+    if state.valid_from is not None and state.valid_from < state.recorded_at:
+        return state.valid_from
+    return state.recorded_at
 
 
 class _CairnGraphiti(Graphiti):
@@ -1197,14 +1286,14 @@ class GraphitiIndex:
             content=state.body,
             source_description=_PROJECTION_PENDING,
             created_at=state.recorded_at,
-            valid_at=state.recorded_at,
+            valid_at=_graph_time(state),
         )
         await episode.save(driver)
         await self._graphiti.add_episode(
             name=identity,
             episode_body=state.body,
             source_description=_PROJECTION_PENDING,
-            reference_time=state.recorded_at,
+            reference_time=_graph_time(state),
             source=EpisodeType.text,
             group_id=group_id,
             uuid=identity,
@@ -1260,7 +1349,7 @@ class GraphitiIndex:
                     content=state.body,
                     source_description=_PROJECTION_PENDING,
                     created_at=state.recorded_at,
-                    valid_at=state.recorded_at,
+                    valid_at=_graph_time(state),
                 )
                 await episode.save(driver)
             raw = [
@@ -1270,7 +1359,7 @@ class GraphitiIndex:
                     content=state.body,
                     source_description=_PROJECTION_PENDING,
                     source=EpisodeType.text,
-                    reference_time=state.recorded_at,
+                    reference_time=_graph_time(state),
                 )
                 for _, state in pending
             ]

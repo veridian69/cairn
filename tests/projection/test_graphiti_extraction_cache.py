@@ -149,6 +149,9 @@ class _FakeLLMClient(LLMClient):
         return self._responses.pop(0)
 
 
+_RECORDED = datetime(2026, 8, 10, 12, 0, 0, tzinfo=UTC)
+
+
 def _episode(name: str = "ep", content: str | None = None) -> EpisodicNode:
     return EpisodicNode(
         name=name,
@@ -159,7 +162,10 @@ def _episode(name: str = "ep", content: str | None = None) -> EpisodicNode:
         # name-addressed, so distinct episodes need distinct content by
         # default or they collide on the same cache key.
         content=content if content is not None else f"content for {name}",
-        valid_at=datetime.now(UTC),
+        # As the adapter saves a fact that is not backdated: both times are
+        # its ``recorded_at``.
+        valid_at=_RECORDED,
+        created_at=_RECORDED,
     )
 
 
@@ -251,6 +257,25 @@ def test_the_key_is_the_accepted_material() -> None:
         )
         == expected
     )
+
+
+def test_a_backdated_facts_valid_time_is_key_material() -> None:
+    """Cached extraction carries dates resolved against its reference time,
+    so a fact the adapter backdates must not be served a row made under
+    ``recorded_at``. Every other fact keeps the accepted key."""
+    plain = _episode(content="hello world")
+    backdated = _episode(content="hello world")
+    backdated.valid_at = _RECORDED - timedelta(days=2)
+    earlier = _episode(content="hello world")
+    earlier.valid_at = _RECORDED - timedelta(days=3)
+
+    def key(episode: EpisodicNode) -> str:
+        return seam.extraction_cache_key(
+            episode, _FakeLLMClient(), None, None, {}, None
+        )
+
+    assert key(plain) == key(_episode(content="hello world"))
+    assert len({key(plain), key(backdated), key(earlier)}) == 3
 
 
 @pytest.mark.anyio
