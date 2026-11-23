@@ -41,7 +41,7 @@ RUN apt-get update \
         util-linux \
         zlib1g \
     && rm -rf /var/lib/apt/lists/*
-ARG VERSION=v0.11.0
+ARG VERSION=v0.11.1
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/veridian69/cairn" \
       org.opencontainers.image.documentation="https://github.com/veridian69/cairn" \

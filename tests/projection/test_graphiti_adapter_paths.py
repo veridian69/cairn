@@ -19,8 +19,8 @@ import threading
 import time
 from collections.abc import Callable, Coroutine
 from concurrent.futures import CancelledError, Future
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -173,6 +173,7 @@ class FakeStore:
     """
 
     def __init__(self) -> None:
+        self.saved_times: dict[str, tuple[object, object]] = {}
         self.episodes: dict[str, StoredEpisode] = {}
         self.writes: list[tuple[str, str]] = []
         self.lookup_failure: Exception | None = None
@@ -210,6 +211,11 @@ class FakeStore:
             return node
 
         async def save(self: SimpleNamespace, driver: object) -> None:
+            # The adapter's own pre-save, with the times it gave the episode.
+            store.saved_times.setdefault(
+                self.uuid,
+                (getattr(self, "created_at", None), getattr(self, "valid_at", None)),
+            )
             store.write(
                 self.uuid,
                 self.source_description,
@@ -257,6 +263,7 @@ class FakeGraphiti:
         self.add_calls: list[dict[str, object]] = []
         self.bulk_calls: list[tuple[str, ...]] = []
         self.bulk_policy: list[tuple[object, str | None]] = []
+        self.bulk_reference_times: list[tuple[object, ...]] = []
         self.omit_from_results: set[str] = set()
         self.search_configs: list[SearchConfig] = []
         self.search_group_ids: list[list[str]] = []
@@ -292,6 +299,9 @@ class FakeGraphiti:
         # must pin the separate path.
         assert use_combined_extraction is False
         self.bulk_policy.append((entity_types, custom_extraction_instructions))
+        self.bulk_reference_times.append(
+            tuple(getattr(episode, "reference_time") for episode in bulk_episodes)  # noqa: B009
+        )
         self.bulk_calls.append(
             tuple(str(getattr(episode, "uuid")) for episode in bulk_episodes)  # noqa: B009
         )
@@ -1853,3 +1863,96 @@ def test_both_projection_paths_pass_the_extraction_policy(
         is EXTRACTION_INSTRUCTIONS
     )
     assert graphiti.bulk_policy == [(ENTITY_TYPES, EXTRACTION_INSTRUCTIONS)]
+
+
+@pytest.mark.parametrize(
+    ("valid_from", "expected"),
+    [
+        (None, NOW),
+        (NOW - timedelta(days=2), NOW - timedelta(days=2)),
+        # Stated to hold from later: the text was still written at NOW.
+        (NOW + timedelta(days=2), NOW),
+    ],
+)
+def test_the_graph_is_given_a_backdated_facts_valid_time(
+    monkeypatch: pytest.MonkeyPatch, valid_from: datetime | None, expected: datetime
+) -> None:
+    """Graphiti ends the fact with the earlier ``valid_at``. Given only
+    ``recorded_at``, an older statement recorded later (an import) ended the
+    newer, true one."""
+    store = FakeStore()
+    store.install(monkeypatch)
+    graphiti = FakeGraphiti(store)
+    adapter = index(graphiti, FakeDriver())
+    single = replace(fact(), valid_from=valid_from)
+    bulk = replace(fact(OTHER_IDENTITY), valid_from=valid_from)
+
+    asyncio.run(adapter._project(single))
+    asyncio.run(adapter._project_many((bulk,)))
+
+    assert graphiti.add_calls[0]["reference_time"] == expected
+    assert graphiti.bulk_reference_times == [(expected,)]
+    assert store.saved_times == {
+        IDENTITY: (NOW, expected),
+        OTHER_IDENTITY: (NOW, expected),
+    }
+
+
+def test_the_pinned_library_ends_the_fact_with_the_earlier_valid_time() -> None:
+    """Why the valid time matters: the library decides which of two
+    contradicting facts ends by comparing their ``valid_at``, whichever
+    arrived last. An older statement arriving later ends itself, not the
+    newer fact, only if it carries its own earlier date."""
+    from graphiti_core.edges import EntityEdge
+    from graphiti_core.utils.maintenance.edge_operations import (
+        _apply_temporal_invalidation,
+    )
+
+    def edge(fact: str, valid_at: datetime) -> EntityEdge:
+        return EntityEdge(
+            source_node_uuid="a",
+            target_node_uuid="b",
+            name="STATE",
+            group_id="g",
+            fact=fact,
+            created_at=NOW,
+            valid_at=valid_at,
+        )
+
+    newer_truth = edge("the flag was removed", NOW)
+    older_arriving_later = edge("the flag was set", NOW - timedelta(days=2))
+    ended = _apply_temporal_invalidation(older_arriving_later, [newer_truth])
+    assert ended == []
+    assert newer_truth.invalid_at is None and newer_truth.expired_at is None
+    assert older_arriving_later.invalid_at == NOW
+
+    # Dated by arrival instead, as the adapter did before: the truth is ended.
+    newer_truth = edge("the flag was removed", NOW)
+    misdated = edge("the flag was set", NOW + timedelta(minutes=1))
+    assert _apply_temporal_invalidation(misdated, [newer_truth]) == [newer_truth]
+    assert newer_truth.invalid_at == NOW + timedelta(minutes=1)
+
+
+def test_recall_takes_the_memories_of_an_ended_graph_fact() -> None:
+    """I-100: a graph fact's end date is a model's judgement and never hides
+    a memory; the catalogue alone decides what is superseded."""
+
+    class EndedEdges(FakeGraphiti):
+        async def search_(
+            self,
+            query: str,
+            config: SearchConfig,
+            *,
+            group_ids: list[str],
+            driver: object,
+        ) -> object:
+            return SimpleNamespace(
+                episodes=[],
+                edges=[
+                    SimpleNamespace(episodes=[IDENTITY], invalid_at=NOW, expired_at=NOW)
+                ],
+            )
+
+    adapter = index(EndedEdges(FakeStore()), FakeDriver())
+
+    assert asyncio.run(adapter._search("q", 10, (PARTITION,))) == (UUID(IDENTITY),)

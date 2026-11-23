@@ -13,9 +13,10 @@ extraction itself.
 
 The key is content-scoped, not episode-scoped, and deliberately does
 not cover every input the extraction prompt consumes. ``reference_time``
-(the episode's ``valid_at``) enters the prompt but is not key material,
-because a fact's ``reference_time`` is stable and reproduces identically
-on rebuild. ``excluded_entity_types`` has no field in the accepted key,
+(the episode's ``valid_at``) enters the prompt and is key material only
+for a backdated fact, whose ``valid_at`` differs from its ``created_at``;
+otherwise it equals ``recorded_at``, which is stable and reproduces
+identically on rebuild. ``excluded_entity_types`` has no field in the accepted key,
 so it bypasses the cache entirely rather than being served blind. Two
 distinct facts with byte-identical bodies would otherwise collide on the
 same key; ``cached_extract_nodes_and_edges_bulk`` excludes that by
@@ -209,6 +210,14 @@ def extraction_cache_key(
         "edge_type_map": _edge_type_map_fingerprint(edge_type_map),
         "instructions": custom_extraction_instructions or "",
     }
+    # A backdated fact: the adapter gave the graph a ``valid_from`` earlier
+    # than ``recorded_at`` (``graphiti._graph_time``). Cached extraction
+    # carries dates resolved against the reference time it was made with, so
+    # that time is key material here. It is added only in this case, which
+    # leaves the key of every other fact, and every existing row, unchanged.
+    valid_at = ensure_utc(episode.valid_at)
+    if valid_at is not None and valid_at != ensure_utc(episode.created_at):
+        material["valid_at"] = valid_at.isoformat()
     canonical = json.dumps(
         material, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )

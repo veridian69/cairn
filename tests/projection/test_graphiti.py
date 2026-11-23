@@ -8,6 +8,7 @@ import asyncio
 import json
 import threading
 from contextvars import Context
+from datetime import UTC, datetime
 from io import StringIO
 from types import SimpleNamespace
 from typing import Any, cast
@@ -15,9 +16,12 @@ from uuid import UUID
 
 import pytest
 import uvloop
+from graphiti_core.edges import EntityEdge, EpisodicEdge
 from graphiti_core.embedder.openai import OpenAIEmbedder
+from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode
 from graphiti_core.search.search_filters import SearchFilters
 from graphiti_core.search.search_utils import edge_fulltext_search, fulltext_query
+from graphiti_core.utils.bulk_utils import add_nodes_and_edges_bulk_tx
 from openai import DEFAULT_TIMEOUT
 
 import cairn.projection.graphiti as graphiti_module
@@ -431,6 +435,195 @@ def test_a_bounded_driver_session_shares_the_same_bound() -> None:
 
     assert fake.calls == 6
     assert fake.peak <= 2
+
+
+# --- Issue #275: oversized bulk writes go out in slices ---
+
+
+class _RecordingFalkorDB:
+    """A fake connection that records each query with its parameters and,
+    optionally, fails the query at one position."""
+
+    def __init__(self, fail_at: int | None = None) -> None:
+        self.sent: list[tuple[str, dict[str, Any]]] = []
+        self.fail_at = fail_at
+        self.first_sent = asyncio.Event()
+
+    def select_graph(self, name: str) -> "_RecordingGraph":
+        return _RecordingGraph(self)
+
+
+class _RecordingGraph:
+    def __init__(self, owner: _RecordingFalkorDB) -> None:
+        self._owner = owner
+
+    async def query(self, cypher: str, params: dict[str, Any]) -> object:
+        if len(self._owner.sent) == self._owner.fail_at:
+            raise RuntimeError("slice refused")
+        self._owner.sent.append((cypher, params))
+        self._owner.first_sent.set()
+        await asyncio.sleep(0)
+        return SimpleNamespace(header=[], result_set=[])
+
+
+_UNWIND = "UNWIND $rows AS row MERGE (n:Thing {uuid: row.uuid})"
+
+
+def _rows(count: int) -> list[dict[str, int]]:
+    return [{"uuid": i} for i in range(count)]
+
+
+def _run_session(fake: _RecordingFalkorDB, query: Any, **kwargs: Any) -> None:
+    driver = BoundedFalkorDriver(falkor_db=fake, concurrency_limit=1)
+    asyncio.run(driver.session().run(query, **kwargs))
+
+
+def test_a_bulk_write_at_the_cap_goes_out_as_one_query() -> None:
+    fake = _RecordingFalkorDB()
+    rows = _rows(graphiti_module._BULK_WRITE_ROWS)
+
+    _run_session(fake, _UNWIND, rows=rows, group_id="g")
+
+    assert fake.sent == [(_UNWIND, {"rows": rows, "group_id": "g"})]
+
+
+def test_an_oversized_bulk_write_goes_out_in_ordered_slices() -> None:
+    """Every row is sent exactly once, in order, in slices no longer than
+    the cap, and every other parameter rides along unchanged."""
+    fake = _RecordingFalkorDB()
+    cap = graphiti_module._BULK_WRITE_ROWS
+    rows = _rows(2 * cap + 7)
+
+    _run_session(fake, "\n    " + _UNWIND, rows=rows, group_id="g")
+
+    assert [len(params["rows"]) for _, params in fake.sent] == [cap, cap, 7]
+    assert [row for _, params in fake.sent for row in params["rows"]] == rows
+    assert all(params["group_id"] == "g" for _, params in fake.sent)
+    assert all(cypher == "\n    " + _UNWIND for cypher, _ in fake.sent)
+
+
+def test_a_list_of_query_pairs_is_split_the_same_way() -> None:
+    """The entity-node save reaches ``run`` as (cypher, params) pairs; an
+    oversized pair is sliced in place and its neighbours keep their order."""
+    fake = _RecordingFalkorDB()
+    cap = graphiti_module._BULK_WRITE_ROWS
+    rows = _rows(cap + 1)
+
+    _run_session(
+        fake,
+        [
+            ("RETURN 1", {"a": 1}),
+            (_UNWIND, {"rows": rows, "group_id": "g"}),
+            ("RETURN 2", {"b": 2}),
+        ],
+    )
+
+    assert fake.sent == [
+        ("RETURN 1", {"a": 1}),
+        (_UNWIND, {"rows": rows[:cap], "group_id": "g"}),
+        (_UNWIND, {"rows": rows[cap:], "group_id": "g"}),
+        ("RETURN 2", {"b": 2}),
+    ]
+
+
+def test_a_query_that_does_not_open_with_unwind_is_not_split() -> None:
+    fake = _RecordingFalkorDB()
+    rows = _rows(graphiti_module._BULK_WRITE_ROWS + 1)
+    query = "MATCH (n) WITH n UNWIND $rows AS row RETURN row"
+
+    _run_session(fake, query, rows=rows)
+
+    assert fake.sent == [(query, {"rows": rows})]
+
+
+def test_each_slice_takes_the_bound_on_its_own() -> None:
+    """With a bound of 1, a query issued while a split write is under way
+    gets in between its slices, so the bound is released after each one."""
+    fake = _RecordingFalkorDB()
+    driver = BoundedFalkorDriver(falkor_db=fake, concurrency_limit=1)
+    rows = _rows(2 * graphiti_module._BULK_WRITE_ROWS)
+
+    async def issue() -> None:
+        async def other() -> None:
+            await fake.first_sent.wait()
+            await driver.execute_query("RETURN 1")
+
+        await asyncio.gather(driver.session().run(_UNWIND, rows=rows), other())
+
+    asyncio.run(issue())
+
+    assert [cypher for cypher, _ in fake.sent] == [_UNWIND, "RETURN 1", _UNWIND]
+    assert driver._query_bound._value == 1
+
+
+def test_a_failing_slice_stops_the_write_and_propagates() -> None:
+    fake = _RecordingFalkorDB(fail_at=1)
+    cap = graphiti_module._BULK_WRITE_ROWS
+    rows = _rows(3 * cap)
+    driver = BoundedFalkorDriver(falkor_db=fake, concurrency_limit=1)
+
+    with pytest.raises(RuntimeError, match="slice refused"):
+        asyncio.run(driver.session().run(_UNWIND, rows=rows))
+
+    assert [params["rows"] for _, params in fake.sent] == [rows[:cap]]
+    assert driver._query_bound._value == 1
+
+
+def test_the_pinned_graphiti_bulk_save_queries_are_splittable() -> None:
+    """The splitter only helps while graphiti-core's FalkorDB bulk save sends
+    episodes, episodic edges and entity edges as one ``UNWIND $<name> AS``
+    query each over its list parameter (entity nodes go one per query). An
+    upgrade that changes the shape, the parameter names or the dispatch path
+    must fail here rather than quietly restore the 190 MB query."""
+    fake = _RecordingFalkorDB()
+    driver = BoundedFalkorDriver(falkor_db=fake, concurrency_limit=1)
+    assert driver.graph_operations_interface is None
+    episode = EpisodicNode(
+        name="e",
+        group_id="g",
+        source=EpisodeType.message,
+        source_description="s",
+        content="c",
+        valid_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    source = EntityNode(name="a", group_id="g", name_embedding=[0.0])
+    target = EntityNode(name="b", group_id="g", name_embedding=[0.0])
+    mention = EpisodicEdge(
+        source_node_uuid=episode.uuid,
+        target_node_uuid=source.uuid,
+        group_id="g",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    relation = EntityEdge(
+        source_node_uuid=source.uuid,
+        target_node_uuid=target.uuid,
+        name="R",
+        fact="a relates to b",
+        group_id="g",
+        episodes=[episode.uuid],
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        fact_embedding=[0.0],
+    )
+
+    asyncio.run(
+        add_nodes_and_edges_bulk_tx(
+            driver.session(),
+            [episode],
+            [mention],
+            [source, target],
+            [relation],
+            cast(Any, None),
+            driver,
+        )
+    )
+
+    names = []
+    for cypher, params in fake.sent:
+        match = graphiti_module._BULK_WRITE_UNWIND.match(cypher)
+        assert match is not None, cypher
+        assert isinstance(params[match.group(1)], list)
+        names.append(match.group(1))
+    assert names == ["episodes", "nodes", "nodes", "episodic_edges", "entity_edges"]
 
 
 def test_the_pinned_graphiti_edge_search_uses_the_returned_relationship() -> None:
