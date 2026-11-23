@@ -17,6 +17,8 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CHECKER = REPOSITORY_ROOT / "scripts/check-runtime-currency"
 # GitHub API responses recorded on 17 October 2026, trimmed to the fields read.
+# The Redis 8.10.3 release and its redis-hashes line were added on 22 November
+# 2026, when the pin moved to it.
 FIXTURES = REPOSITORY_ROOT / "tests/fixtures/runtime_currency"
 REDIS_RELEASES = "repos_redis_redis_releases_per_page_100.json"
 
@@ -67,11 +69,11 @@ def test_v0_7_14_pins_are_behind_patch_with_redis_security_fixes(
     assert falkordb.startswith("falkordb v4.20.4: behind-patch; v4.20.7 available;")
 
 
-def test_issue_118_pins_are_current() -> None:
+def test_repository_pins_are_current() -> None:
     result = _check(REPOSITORY_ROOT / "deploy/falkordb/build.sh")
     assert result.returncode == 0, result.stderr
     redis, falkordb = result.stdout.splitlines()
-    assert redis == "redis 8.10.2: current"
+    assert redis == "redis 8.10.3: current"
     assert falkordb.startswith("falkordb v4.20.7: newer-line-available;")
     assert "newer lines (information only): v4.22.1, v6.0.2" in falkordb
 
@@ -97,7 +99,7 @@ def test_unhashed_security_release_is_still_reported(tmp_path: Path) -> None:
     releases.insert(
         0,
         {
-            "tag_name": "8.10.3",
+            "tag_name": "8.10.4",
             "draft": False,
             "prerelease": False,
             "body": "Upgrade urgency SECURITY: see notes.",
@@ -107,7 +109,7 @@ def test_unhashed_security_release_is_still_reported(tmp_path: Path) -> None:
     result = _check(REPOSITORY_ROOT / "deploy/falkordb/build.sh", fixtures)
     redis = result.stdout.splitlines()[0]
     assert redis == (
-        "redis 8.10.2: current; not yet in redis-hashes: 8.10.3; SECURITY in 8.10.3"
+        "redis 8.10.3: current; not yet in redis-hashes: 8.10.4; SECURITY in 8.10.4"
     )
 
 

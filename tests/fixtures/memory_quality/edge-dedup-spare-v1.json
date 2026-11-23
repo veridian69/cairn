@@ -1,0 +1,102 @@
+{
+  "schema": "cairn.edge-dedup-corpus.v1",
+  "note": "Synthetic. Role, ownership, responsibility, membership and assignment facts met by activity, progress and status notes about the same person and work, which must not retire them, and by explicit handovers, which must. idx is continuous: existing facts first, then invalidation candidates.",
+  "items": [
+    {
+      "id": "spare-lead-ships-milestone",
+      "existing": ["Mira Keller leads the Atlas migration project"],
+      "invalidation": [],
+      "new": "Mira Keller shipped the second milestone of the Atlas migration project",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "spare-owner-fixes-bugs",
+      "existing": ["Jonas Weber is the owner of the billing service"],
+      "invalidation": [],
+      "new": "Jonas Weber fixed three bugs in the billing service this week",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "spare-dri-reports-blocker",
+      "existing": ["Priya Nair is the DRI for the data-retention policy"],
+      "invalidation": [],
+      "new": "Priya Nair reported that the data-retention policy review is blocked on the legal team",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "spare-member-presents",
+      "existing": ["Tomas Brunner is a member of the platform team", "Tomas Brunner works from the Lugano office"],
+      "invalidation": [],
+      "new": "Tomas Brunner presented the platform team's quarterly update",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "spare-assignee-writes-document",
+      "existing": ["Elena Rossi is assigned to the onboarding redesign"],
+      "invalidation": ["Elena Rossi is responsible for the support rota"],
+      "new": "Elena Rossi wrote the design document for the onboarding redesign",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "spare-team-weekly-snapshot",
+      "existing": ["The search team is responsible for the indexing pipeline"],
+      "invalidation": [],
+      "new": "In the status update of 14 September, the search team reported progress on the indexing pipeline",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "spare-collaborator-joins",
+      "existing": ["Farid Haddad owns the release checklist"],
+      "invalidation": ["Farid Haddad maintains the build scripts"],
+      "new": "Lea Baumann helped Farid Haddad update the release checklist",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "spare-next-steps",
+      "existing": ["Oskar Lind is the project manager for the warehouse rollout"],
+      "invalidation": [],
+      "new": "Oskar Lind listed the next steps for the warehouse rollout after the pilot",
+      "duplicates": [],
+      "contradicted": []
+    },
+    {
+      "id": "retire-lead-handed-over",
+      "existing": ["Hanna Vogel leads the Orion rollout"],
+      "invalidation": [],
+      "new": "Hanna Vogel handed leadership of the Orion rollout to Luca Meier and no longer leads it",
+      "duplicates": [],
+      "contradicted": [0]
+    },
+    {
+      "id": "retire-ownership-transferred",
+      "existing": ["Stefan Graf plays in the company football team"],
+      "invalidation": ["Stefan Graf is the owner of the payments gateway"],
+      "new": "Stefan Graf is no longer the owner of the payments gateway, which Nora Lang now owns",
+      "duplicates": [],
+      "contradicted": [1]
+    },
+    {
+      "id": "retire-left-the-team",
+      "existing": ["Ines Marti is a member of the security team"],
+      "invalidation": [],
+      "new": "Ines Marti left the security team in October",
+      "duplicates": [],
+      "contradicted": [0]
+    },
+    {
+      "id": "retire-reassigned",
+      "existing": ["Paul Egger is assigned to the invoice export"],
+      "invalidation": [],
+      "new": "Paul Egger was taken off the invoice export and is no longer assigned to it",
+      "duplicates": [],
+      "contradicted": [0]
+    }
+  ]
+}

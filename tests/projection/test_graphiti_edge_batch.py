@@ -242,7 +242,7 @@ async def test_a_combined_call_ignores_items_that_asked_for_no_budget() -> None:
 
 @pytest.mark.anyio
 async def test_a_combined_call_stays_unbudgeted_when_no_item_asked() -> None:
-    # The path graphiti 0.30.2 actually takes: it never passes
+    # The path graphiti 0.31.2 actually takes: it never passes
     # max_tokens, so folding an empty set must yield None, not raise.
     provider = _FakeProvider([_two_empty_resolutions()])
     batcher = seam.EdgeBatcher(
@@ -909,6 +909,8 @@ async def test_graphiti_hands_the_rendered_messages_through_unsliced() -> None:
             response_model: type[BaseModel] | None = None,
             max_tokens: int = DEFAULT_MAX_TOKENS,
             model_size: ModelSize = ModelSize.medium,
+            *,
+            model: str | None = None,
         ) -> dict[str, Any]:
             raise AssertionError("the recorder answers before reaching the provider")
 
@@ -922,6 +924,7 @@ async def test_graphiti_hands_the_rendered_messages_through_unsliced() -> None:
             prompt_name: str | None = None,
             *,
             attribute_extraction: bool = False,
+            model: str | None = None,
         ) -> dict[str, Any]:
             received.append(messages)
             # Resolving to a duplicate returns an existing edge, which

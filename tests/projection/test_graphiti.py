@@ -7,6 +7,7 @@ because CI never constructs the real adapter (P-39)."""
 import asyncio
 import json
 import threading
+from contextvars import Context
 from io import StringIO
 from types import SimpleNamespace
 from typing import Any, cast
@@ -16,7 +17,7 @@ import pytest
 import uvloop
 from graphiti_core.embedder.openai import OpenAIEmbedder
 from graphiti_core.search.search_filters import SearchFilters
-from graphiti_core.search.search_utils import edge_fulltext_search
+from graphiti_core.search.search_utils import edge_fulltext_search, fulltext_query
 from openai import DEFAULT_TIMEOUT
 
 import cairn.projection.graphiti as graphiti_module
@@ -74,6 +75,62 @@ def test_index_event_loop_is_uvloop() -> None:
         assert isinstance(loop, uvloop.Loop)
     finally:
         loop.close()
+
+
+def test_task_factory_serves_the_real_index_loop() -> None:
+    """The loop chooses which create_task keywords a factory receives, and
+    uvloop 0.23 began passing ``eager_start``. A factory that refuses one
+    fails every task on the adapter's loop, so this runs on the real loop
+    class, not the stdlib loop the containment tests use."""
+    adapter = GraphitiIndex.__new__(GraphitiIndex)
+    adapter._loop = graphiti_module._new_index_loop()
+    adapter._scoped_tasks = {}
+    adapter._loop.set_task_factory(adapter._scoped_task_factory)
+    thread = threading.Thread(target=adapter._loop.run_forever, daemon=True)
+    thread.start()
+    try:
+
+        async def child() -> str:
+            return "child"
+
+        async def parent() -> tuple[str, str]:
+            task = asyncio.get_running_loop().create_task(child(), name="named")
+            return await task, task.get_name()
+
+        future = asyncio.run_coroutine_threadsafe(parent(), adapter._loop)
+        assert future.result(timeout=5.0) == ("child", "named")
+
+        async def eager_parent() -> None:
+            inner = object()
+
+            async def sets_its_own_scope() -> None:
+                graphiti_module._GRAPHITI_TASK_SCOPE.set(inner)
+
+            # An eager task runs its first step inside the constructor. The
+            # factory must file it under the scope its creator had (none
+            # here), never under one the task set for itself.
+            # Through the factory itself: loop.create_task takes eager_start
+            # only from Python 3.14, asyncio.Task from 3.12.
+            await adapter._scoped_task_factory(
+                asyncio.get_running_loop(),
+                sets_its_own_scope(),
+                context=Context(),
+                eager_start=True,
+            )
+            assert inner not in adapter._scoped_tasks
+
+        eager = asyncio.run_coroutine_threadsafe(eager_parent(), adapter._loop)
+        eager.result(timeout=5.0)
+        assert adapter._scoped_tasks == {}
+        # A keyword no released loop sends yet must reach the task untouched.
+        probe = child()
+        with pytest.raises(TypeError, match="not_a_task_keyword"):
+            adapter._scoped_task_factory(adapter._loop, probe, not_a_task_keyword=1)
+        probe.close()
+    finally:
+        adapter._loop.call_soon_threadsafe(adapter._loop.stop)
+        thread.join(timeout=5.0)
+        adapter._loop.close()
 
 
 def test_provider_roles_share_one_pool_that_survives_stage_gaps(
@@ -398,3 +455,44 @@ def test_the_pinned_graphiti_edge_search_uses_the_returned_relationship() -> Non
     assert "WHERE n:Entity AND m:Entity" in query
     assert "e.group_id IN $group_ids" in query
     assert "ORDER BY score DESC LIMIT $limit" in query
+
+
+@pytest.mark.parametrize(
+    ("text", "terms"),
+    [
+        (
+            "child agents named <tier>__<semantic>_<model>",
+            "child | agents | named | tier | semantic | model",
+        ),
+        ("alpha _ beta", "alpha | beta"),
+        ("snake_case _leading trailing_", "snake_case | _leading | trailing_"),
+    ],
+)
+def test_a_search_phrase_drops_words_made_only_of_underscores(
+    text: str, terms: str
+) -> None:
+    """RediSearch rejects a bare ``_`` term, and graphiti-core passes it on.
+
+    Reproduced on FalkorDB 22 November 2026: ``alpha _ beta`` fails the whole
+    fulltext query with a syntax error; the opt-in database test holds that.
+    """
+    driver = BoundedFalkorDriver(falkor_db=_CountingFalkorDB(), concurrency_limit=1)
+
+    assert driver.build_fulltext_query(text, ["g1"]) == f'(@group_id:"g1") ({terms})'
+
+
+def test_a_search_phrase_of_only_underscores_is_empty() -> None:
+    driver = BoundedFalkorDriver(falkor_db=_CountingFalkorDB(), concurrency_limit=1)
+
+    assert driver.build_fulltext_query("_ __", ["g1"]) == ""
+
+
+def test_every_graphiti_fulltext_search_builds_its_phrase_through_the_driver() -> None:
+    """The override is only a fix while upstream routes every search here."""
+    fake = _CountingFalkorDB()
+    driver = BoundedFalkorDriver(falkor_db=fake, concurrency_limit=1)
+
+    assert (
+        fulltext_query("alpha _ beta", ["g1"], driver)
+        == '(@group_id:"g1") (alpha | beta)'
+    )

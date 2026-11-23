@@ -91,6 +91,10 @@ from cairn.projection.graphiti_extraction_cache import (
     install_edge_timestamp_caching,
     search_embedding_passthrough,
 )
+from cairn.projection.graphiti_extraction_policy import (
+    ENTITY_TYPES,
+    EXTRACTION_INSTRUCTIONS,
+)
 from cairn.projection.models import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
@@ -130,7 +134,7 @@ _BULK_TIMEOUT_SECONDS = 1800.0
 _CALL_POLL_SECONDS = 1.0
 _BULK_INCOMPLETE = "bulk_incomplete"
 _GRAPHITI_CORE_VERSION = version("graphiti-core")
-_GRAPHITI_COMPATIBILITY_VERSION = "0.30.2"
+_GRAPHITI_COMPATIBILITY_VERSION = "0.31.2"
 _GRAPHITI_TASK_SCOPE: ContextVar[object | None] = ContextVar(
     "cairn_graphiti_task_scope", default=None
 )
@@ -138,82 +142,6 @@ _TASK_CLEANUP_WAIT_SECONDS = 5.0
 _PROVIDER_KEEPALIVE_EXPIRY: float | None = None
 _PROVIDER_MAX_CONNECTIONS = 1000
 _PROVIDER_MAX_KEEPALIVE_CONNECTIONS = 100
-
-
-class _Gpt6OpenAIClient(OpenAIClient):
-    """graphiti-core 0.30.2 recognises reasoning models by a ``gpt-5`` prefix.
-
-    A ``gpt-6`` model therefore gets ``temperature`` and no ``reasoning``. The
-    provider accepts that and silently runs at its default medium effort
-    (live probe, 21 November 2026: 18 reasoning tokens for a one-word answer,
-    none with effort ``none``). This sends the request shape graphiti-core
-    0.31.2 sends for ``gpt-6``, including explicit prompt-cache mode, which
-    stops the default 1.25x cache writes for prompts of 1,024+ tokens.
-
-    Remove when the graphiti-core pin reaches 0.31.2 or later.
-    """
-
-    async def _create_structured_completion(
-        self,
-        model: str,
-        messages: list[Any],
-        temperature: float | None,
-        max_tokens: int,
-        response_model: type[BaseModel],
-        reasoning: str | None = None,
-        verbosity: str | None = None,
-    ) -> Any:
-        if not model.startswith("gpt-6"):
-            return await super()._create_structured_completion(
-                model,
-                messages,
-                temperature,
-                max_tokens,
-                response_model,
-                reasoning,
-                verbosity,
-            )
-        request: dict[str, Any] = {
-            "model": model,
-            "input": messages,
-            "max_output_tokens": max_tokens,
-            "text_format": response_model,
-            "extra_body": {"prompt_cache_options": {"mode": "explicit"}},
-        }
-        effort = self._resolve_reasoning_effort(model, reasoning)
-        if effort:
-            request["reasoning"] = {"effort": effort}
-        if verbosity is not None:
-            request["text"] = {"verbosity": verbosity}
-        return await self.client.responses.parse(**request)
-
-    async def _create_completion(
-        self,
-        model: str,
-        messages: list[Any],
-        temperature: float | None,
-        max_tokens: int,
-        response_model: type[BaseModel] | None = None,
-        reasoning: str | None = None,
-        verbosity: str | None = None,
-    ) -> Any:
-        if not model.startswith("gpt-6"):
-            return await super()._create_completion(
-                model,
-                messages,
-                temperature,
-                max_tokens,
-                response_model,
-                reasoning,
-                verbosity,
-            )
-        return await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_completion_tokens=max_tokens,
-            response_format={"type": "json_object"},
-            extra_body={"prompt_cache_options": {"mode": "explicit"}},
-        )
 
 
 def _openai_provider_clients() -> tuple[
@@ -241,7 +169,7 @@ def _openai_provider_clients() -> tuple[
     )
     return (
         shared,
-        _Gpt6OpenAIClient(config=llm_config, client=shared, reasoning="none"),
+        OpenAIClient(config=llm_config, client=shared, reasoning="none"),
         OpenAIEmbedder(client=shared),
         OpenAIRerankerClient(
             config=LLMConfig(model=LLM_SMALL_MODEL),
@@ -688,6 +616,24 @@ class BoundedFalkorDriver(FalkorDriver):
             )
             self._init_owner.result.raise_if_failed()
 
+    def build_fulltext_query(
+        self,
+        query: str,
+        group_ids: list[str] | None = None,
+        max_query_length: int = 128,
+    ) -> str:
+        # graphiti-core 0.31.2 (and 0.30.2) turns every word of the text into
+        # one term of an OR list but leaves ``_`` alone, and RediSearch rejects
+        # a term that is a bare ``_`` with a syntax error. ``a <x>_<y> b``
+        # becomes ``a | x | _ | y | b`` and fails the whole search, which fails
+        # the projection or the recall that issued it. A word made only of
+        # underscores can match nothing, so drop it. Every index search builds
+        # its phrase here (``search_utils.fulltext_query``).
+        words = (word for word in self.sanitize(query).split() if word.strip("_"))
+        return super().build_fulltext_query(
+            " ".join(words), group_ids, max_query_length
+        )
+
     async def execute_query(self, cypher_query_: str, **kwargs: Any) -> Any:
         self._init_owner.admit(self._init_record)
         async with self._query_bound:
@@ -723,7 +669,7 @@ class BoundedFalkorDriver(FalkorDriver):
 
 
 class _CairnGraphiti(Graphiti):
-    """Graphiti 0.30.2 with Cairn's incremental bulk-dedupe seam."""
+    """Graphiti 0.31.2 with Cairn's incremental bulk-dedupe seam."""
 
     _cairn_extraction_cache: _CacheStore | None = None
     _cairn_safe_logger: SafeLogger | None = None
@@ -756,13 +702,21 @@ class _CairnGraphiti(Graphiti):
         edge_types: dict[str, type[BaseModel]] | None,
         entity_types: dict[str, type[BaseModel]] | None,
         excluded_entity_types: list[str] | None,
+        strict_edge_types: bool = False,
         custom_extraction_instructions: str | None = None,
+        use_combined_extraction: bool = True,
         clients: GraphitiClients | None = None,
     ) -> tuple[
         dict[str, list[EntityNode]],
         dict[str, str],
         list[list[EntityEdge]],
     ]:
+        # The signature is upstream's, because upstream's ``add_episode_bulk``
+        # calls this by keyword. ``_project_many`` pins separate extraction
+        # and leaves strict edge types off; any other value has no field in
+        # the extraction cache key, so it is refused rather than served blind.
+        if strict_edge_types or use_combined_extraction:
+            raise GraphitiIndexError("graphiti_bulk_extraction_mode")
         clients = clients or self.clients
         (
             extracted_nodes_bulk,
@@ -788,6 +742,45 @@ class _CairnGraphiti(Graphiti):
             entity_types,
         )
         return nodes_by_episode, uuid_map, extracted_edges_bulk
+
+    async def _resolve_nodes_and_edges_bulk(
+        self,
+        nodes_by_episode: dict[str, list[EntityNode]],
+        edges_by_episode: dict[str, list[EntityEdge]],
+        episode_context: list[tuple[EpisodicNode, list[EpisodicNode]]],
+        entity_types: dict[str, type[BaseModel]] | None,
+        edge_types: dict[str, type[BaseModel]] | None,
+        edge_type_map: dict[tuple[str, str], list[str]],
+        episodes: list[EpisodicNode],
+        clients: GraphitiClients | None = None,
+    ) -> tuple[list[EntityNode], list[EntityEdge], list[EntityEdge], dict[str, str]]:
+        # Upstream's own resolution, then one object per stored edge: see
+        # ``coalesce_edge_copies`` for the copies a chunk otherwise saves
+        # over one another.
+        (
+            nodes,
+            resolved,
+            invalidated,
+            uuid_map,
+        ) = await super()._resolve_nodes_and_edges_bulk(
+            nodes_by_episode,
+            edges_by_episode,
+            episode_context,
+            entity_types,
+            edge_types,
+            edge_type_map,
+            episodes,
+            clients=clients,
+        )
+        try:
+            resolved, invalidated = graphiti_bulk_module.coalesce_edge_copies(
+                resolved, invalidated, edge_types_configured=bool(edge_types)
+            )
+        except ValueError:
+            # Copies whose attributes disagree with no rule to settle it;
+            # the chunk fails and its facts are projected one by one.
+            raise GraphitiIndexError("graphiti_bulk_edge_attributes") from None
+        return nodes, resolved, invalidated, uuid_map
 
 
 def _construct_graphiti(
@@ -1184,7 +1177,7 @@ class GraphitiIndex:
         # pre-marker code that wrote ``"cairn.fact"`` before extracting; it
         # is resumed by falling through, not trusted and not deleted.
         #
-        # graphiti-core 0.30.2's ``add_episode(uuid=...)`` is an *update*:
+        # graphiti-core 0.31.2's ``add_episode(uuid=...)`` is an *update*:
         # it loads the episode by that uuid and raises NodeNotFoundError
         # when absent, so passing the identity on a first projection can
         # never succeed — found live by scripts/graphiti-smoke, invisible
@@ -1215,6 +1208,8 @@ class GraphitiIndex:
             source=EpisodeType.text,
             group_id=group_id,
             uuid=identity,
+            entity_types=ENTITY_TYPES,
+            custom_extraction_instructions=EXTRACTION_INSTRUCTIONS,
         )
         # Re-load before stamping. ``add_episode`` saved the episode again
         # with the ``entity_edges`` extraction produced, and the save query
@@ -1279,7 +1274,17 @@ class GraphitiIndex:
                 )
                 for _, state in pending
             ]
-            bulk_results = await self._graphiti.add_episode_bulk(raw, group_id=group_id)
+            # Separate node and edge extraction, as the per-fact path
+            # (``add_episode``) still does. graphiti-core 0.31.2 made combined
+            # extraction the bulk default; Cairn's calibration and cache key
+            # were measured on the separate path, so the switch is pinned.
+            bulk_results = await self._graphiti.add_episode_bulk(
+                raw,
+                group_id=group_id,
+                entity_types=ENTITY_TYPES,
+                custom_extraction_instructions=EXTRACTION_INSTRUCTIONS,
+                use_combined_extraction=False,
+            )
             # Spec verification item 4: ``AddBulkEpisodeResults.episodes``
             # is the per-episode completion evidence, validated as a
             # complete set BEFORE any marker is stamped. An omitted
@@ -1500,7 +1505,7 @@ class GraphitiIndex:
         self,
         loop: asyncio.AbstractEventLoop,
         coroutine: Coroutine[Any, Any, Any],
-        context: Context | None = None,
+        **keywords: Any,
     ) -> asyncio.Task[Any]:
         """Register child tasks against the adapter call that spawned them.
 
@@ -1508,13 +1513,20 @@ class GraphitiIndex:
         and child contexts inherit ``_GRAPHITI_TASK_SCOPE``. This gives each
         concurrent adapter call its own cancellation set without changing
         asyncio globally or confusing a retrieval call with bulk delivery.
+
+        The loop decides which ``create_task`` keywords reach a factory:
+        uvloop 0.22 passed ``context`` alone, 0.23 adds ``eager_start``. They
+        go to the task unexamined, so a new one cannot break task creation.
         """
-        task = asyncio.Task(coroutine, loop=loop, context=context)
+        context: Context | None = keywords.get("context")
+        # Read before the task exists: an eager task runs its first step
+        # inside the constructor and may set a scope of its own there.
         scope = (
             context.get(_GRAPHITI_TASK_SCOPE)
             if context is not None
             else _GRAPHITI_TASK_SCOPE.get()
         )
+        task = asyncio.Task(coroutine, loop=loop, **keywords)
         if scope is None:
             return task
         tasks = self._scoped_tasks.setdefault(scope, set())

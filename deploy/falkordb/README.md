@@ -3,8 +3,8 @@
 Cairn ships a recipe for a Linux amd64 server runtime. The operator builds it
 locally from pinned source: FalkorDB 4.20.7 at commit
 `2811bc690c37558b345c0f8491c05424729e6953` with its exact recursive gitlinks,
-Redis 8.10.2 with SHA-256
-`b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3`, and
+Redis 8.10.3 with SHA-256
+`edde778f6bdee7581e42fc139ca9e07e2822212092f7501f99989656e3629d02`, and
 `google/cpu_features` at commit
 `438a66e41807cd73e0c403966041b358f5eafc68`. The builder and final runtime
 stages use Ubuntu 24.04 pinned at digest
@@ -13,7 +13,7 @@ Cairn does not publish this database image to GHCR or attach database images or
 source bundles to new releases.
 
 These pins are Cairn's local runtime. They were built and
-accepted on 15 October 2026;
+accepted on 22 November 2026;
 `provenance.json` records that build's identities and scan, and `release.json`
 its local tag and archive hash. Each operator's own build has its own identity:
 the actual local descriptor comes from `scripts/falkordb_runtime.py` after the
@@ -79,7 +79,7 @@ The build is accepted only when `build.sh` exits zero, prints the final `Built
 cairn-local/falkordb-server:rebuild` line, and `falkordb_runtime.py` exits zero
 after writing all three files above. Any non-zero exit, missing final line,
 missing output, checksum failure or diagnostic outside those listed categories
-remains a failure to investigate. The 15 October 2026 build at these pins
+remains a failure to investigate. The 22 November 2026 build at these pins
 emitted diagnostics in those categories only.
 
 For a guided Docker or Linux native semantic install, provide
@@ -197,6 +197,6 @@ Rollback means restoring the pre-upgrade volume, which is exact only if nothing
 was written after it was copied, or running `cairn rebuild-index` on an empty
 volume to regenerate derived index state. After restoring a Cairn backup,
 always rebuild. An in-place downgrade is not part of this recipe.
-Redis 8.10.2 saves RDB format 15, which Redis 8.6.x refuses to load, so copy
+Redis 8.10 saves RDB format 15, which Redis 8.6.x refuses to load, so copy
 `dump.rdb` after stopping the old container and before the new image first
 starts; Cairn's own backups do not include the graph.

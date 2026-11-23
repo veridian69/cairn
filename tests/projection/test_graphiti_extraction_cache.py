@@ -2,11 +2,12 @@
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import threading
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,6 +104,7 @@ class _FakeLLMClient(LLMClient):
         super().__init__(config=None)
         self._responses = list(responses) if responses is not None else []
         self.calls: list[Any] = []
+        self.requests: list[dict[str, Any]] = []
 
     async def _generate_response(
         self,
@@ -110,6 +112,8 @@ class _FakeLLMClient(LLMClient):
         response_model: type[BaseModel] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         model_size: ModelSize = ModelSize.medium,
+        *,
+        model: str | None = None,
     ) -> dict[str, Any]:
         raise AssertionError(
             "the fake answers at generate_response, not the retry path"
@@ -128,8 +132,20 @@ class _FakeLLMClient(LLMClient):
         prompt_name: str | None = None,
         *,
         attribute_extraction: bool = False,
+        model: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append(messages)
+        self.requests.append(
+            {
+                "messages": [message.model_dump() for message in messages],
+                "response_model": response_model,
+                "max_tokens": max_tokens,
+                "model_size": model_size,
+                "group_id": group_id,
+                "prompt_name": prompt_name,
+                "attribute_extraction": attribute_extraction,
+            }
+        )
         return self._responses.pop(0)
 
 
@@ -182,7 +198,11 @@ class _Recorder:
         entity_types: dict[str, type] | None = None,
         excluded_entity_types: list[str] | None = None,
         custom_extraction_instructions: str | None = None,
+        use_combined_extraction: bool = True,
     ) -> tuple[list[list[EntityNode]], list[list[EntityEdge]]]:
+        # graphiti-core 0.31.2 defaults this to True; the seam must pin the
+        # separate path its key and calibration were measured on.
+        assert use_combined_extraction is False
         self.calls.append(list(episode_context))
         nodes_bulk = []
         edges_bulk = []
@@ -908,7 +928,7 @@ async def test_the_bulk_seam_leaves_the_cache_kind_to_the_table() -> None:
 
 @pytest.mark.anyio
 async def test_a_transient_failure_is_not_cached_and_a_retry_caches() -> None:
-    # R2: graphiti 0.30.2 swallows provider failures and leaves both
+    # R2: graphiti 0.31.2 swallows provider failures and leaves both
     # fields null. Caching that state would make a temporary failure
     # indistinguishable from a valid "no timestamp" answer and suppress
     # every future retry — so a failed call writes no row, and the next
@@ -1342,6 +1362,7 @@ async def test_the_bulk_override_passes_the_store_through(
         edge_types=None,
         entity_types=None,
         excluded_entity_types=None,
+        use_combined_extraction=False,
     )
 
     assert len(store.rows) == 1
@@ -1351,7 +1372,7 @@ async def test_the_bulk_override_passes_the_store_through(
 async def test_the_bulk_override_preserves_the_request_scoped_clients(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Graphiti 0.30.2 isolates concurrent groups with a per-request
+    """Graphiti 0.31.2 isolates concurrent groups with a per-request
     driver in this bundle. Replacing it with the instance bundle would
     send extraction and dedupe reads to whichever graph the instance owns."""
     calls: list[tuple[str, object]] = []
@@ -1389,6 +1410,7 @@ async def test_the_bulk_override_preserves_the_request_scoped_clients(
         edge_types=None,
         entity_types=None,
         excluded_entity_types=None,
+        use_combined_extraction=False,
         clients=request_clients,
     )
 
@@ -1456,3 +1478,161 @@ def test_construct_graphiti_without_a_store_leaves_extraction_uncached(
         assert graphiti.embedder.client is embedder.client
     finally:
         asyncio.run(shared.close())
+
+
+_REFERENCE = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("fact", "response"),
+    [
+        ("A moved to Bern", {"valid_at": "2026-01-02T03:04:05Z", "invalid_at": None}),
+        (
+            "A lived in Bern",
+            {"valid_at": "2020-01-01", "invalid_at": "2024-05-06T00:00:00+02:00"},
+        ),
+        ("nothing dated", {"valid_at": None, "invalid_at": None}),
+        # Future-tense plan: upstream clamps valid_at to the reference time
+        # and drops a soft deadline.
+        (
+            "A plans to finish the report by Friday",
+            {"valid_at": "2026-06-05T00:00:00Z", "invalid_at": "2026-06-05T00:00:00Z"},
+        ),
+        # Future-tense with no timestamps at all still gets the reference time.
+        ("A will move to Bern", {"valid_at": None, "invalid_at": None}),
+        # An ongoing state with an end keeps its invalid_at.
+        (
+            "A plans to stay in Bern until March",
+            {"valid_at": None, "invalid_at": "2027-03-01T00:00:00Z"},
+        ),
+        ("A moved to Bern", {"valid_at": "not a date", "invalid_at": None}),
+        (
+            "A will move to Bern",
+            {"valid_at": "2026-07-01T00:00:00Z", "invalid_at": "nope"},
+        ),
+    ],
+)
+@pytest.mark.parametrize("edge_reference", [None, _REFERENCE - timedelta(days=30)])
+async def test_the_owned_timestamp_call_is_upstreams_call_and_result(
+    fact: str, response: dict[str, Any], edge_reference: datetime | None
+) -> None:
+    """The seam owns a copy of the pinned ``_extract_edge_timestamps``.
+
+    Same request to the provider and the same edge afterwards, for the same
+    answer, as the pinned function itself: a pin change that alters either
+    fails here rather than in production.
+    """
+    upstream = edge_operations._extract_edge_timestamps
+    episode = _episode()
+    episode.valid_at = _REFERENCE
+
+    def edge() -> EntityEdge:
+        made = _edge("source", "target", fact)
+        made.reference_time = edge_reference
+        return made
+
+    plain = _FakeLLMClient(responses=[dict(response)])
+    expected = edge()
+    await upstream(plain, expected, episode)
+
+    cached = _FakeLLMClient(responses=[dict(response)])
+    seam.install_edge_timestamp_caching(_FakeStore(), cached)
+    actual = edge()
+    await edge_operations._extract_edge_timestamps(cached, actual, episode)
+
+    assert edge_operations._extract_edge_timestamps is not upstream
+    assert cached.requests == plain.requests
+    assert (actual.valid_at, actual.invalid_at) == (
+        expected.valid_at,
+        expected.invalid_at,
+    )
+
+
+@pytest.mark.anyio
+async def test_the_timestamp_key_uses_the_edges_own_reference_time() -> None:
+    # graphiti-core 0.31.2 prefers the edge's reference time to the
+    # episode's; it is prompt input, so it is the key material.
+    store = _FakeStore()
+    llm_client = _FakeLLMClient(responses=[{"valid_at": None, "invalid_at": None}])
+    seam.install_edge_timestamp_caching(store, llm_client)
+    episode = _episode()
+    episode.valid_at = _REFERENCE
+    edge = _edge("source", "target", "A moved to Bern")
+    edge.reference_time = _REFERENCE - timedelta(days=30)
+
+    await edge_operations._extract_edge_timestamps(llm_client, edge, episode)
+
+    key = seam.timestamps_cache_key(edge.fact, edge.reference_time, llm_client)
+    assert (key, str(episode.uuid)) in store.rows
+    assert (
+        edge.reference_time.isoformat()
+        in llm_client.requests[0]["messages"][1]["content"]
+    )
+
+
+@pytest.mark.anyio
+async def test_a_timestamp_call_without_an_episode_is_upstreams_uncached() -> None:
+    store = _FakeStore()
+    llm_client = _FakeLLMClient(
+        responses=[{"valid_at": "2026-01-02T03:04:05Z", "invalid_at": None}]
+    )
+    seam.install_edge_timestamp_caching(store, llm_client)
+    edge = _edge("source", "target", "A moved to Bern")
+    edge.reference_time = _REFERENCE
+
+    await edge_operations._extract_edge_timestamps(llm_client, edge, None)
+
+    assert edge.valid_at == datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    assert store.rows == {}
+
+
+def test_the_timestamp_wrapper_accepts_what_upstream_passes() -> None:
+    upstream = inspect.signature(edge_operations._extract_edge_timestamps)
+    seam.install_edge_timestamp_caching(_FakeStore(), _FakeLLMClient())
+    wrapper = inspect.signature(edge_operations._extract_edge_timestamps)
+
+    assert [(p.name, p.kind) for p in wrapper.parameters.values()] == [
+        (p.name, p.kind) for p in upstream.parameters.values()
+    ]
+
+
+def test_the_bulk_override_has_upstreams_signature() -> None:
+    """Upstream's ``add_episode_bulk`` calls the override by keyword, so a
+    parameter the override lacks is a ``TypeError`` on every bulk chunk."""
+    from graphiti_core import Graphiti
+
+    upstream = inspect.signature(Graphiti._extract_and_dedupe_nodes_bulk)
+    override = inspect.signature(
+        graphiti_module._CairnGraphiti._extract_and_dedupe_nodes_bulk
+    )
+
+    assert [(p.name, p.kind, p.default) for p in override.parameters.values()] == [
+        (p.name, p.kind, p.default) for p in upstream.parameters.values()
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "mode",
+    [{"use_combined_extraction": True}, {"strict_edge_types": True}, {}],
+)
+async def test_the_bulk_override_refuses_an_unkeyed_extraction_mode(
+    mode: dict[str, Any],
+) -> None:
+    # Neither switch has a field in the extraction cache key. ``{}`` is
+    # upstream's default, which is combined extraction.
+    instance = object.__new__(graphiti_module._CairnGraphiti)
+    instance.clients = _clients()
+
+    with pytest.raises(graphiti_module.GraphitiIndexError) as raised:
+        await instance._extract_and_dedupe_nodes_bulk(
+            [(_episode("a"), [])],
+            edge_type_map={},
+            edge_types=None,
+            entity_types=None,
+            excluded_entity_types=None,
+            **mode,
+        )
+
+    assert raised.value.code == "graphiti_bulk_extraction_mode"

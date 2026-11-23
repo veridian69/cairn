@@ -18,15 +18,15 @@ def test_current_source_pins_and_built_records() -> None:
     dockerfile = (RECIPE / "Dockerfile.source").read_text()
     provenance = json.loads((RECIPE / "provenance.json").read_text())
     commit = "2811bc690c37558b345c0f8491c05424729e6953"
-    redis_sha = "b9ffee226b5eecdba98a679260dad764b2a4ebd90dce4ad5ac9e9f3eef9c02b3"
+    redis_sha = "edde778f6bdee7581e42fc139ca9e07e2822212092f7501f99989656e3629d02"
     assert f"falkor_commit={commit}" in build
-    assert "redis_version=8.10.2" in build
+    assert "redis_version=8.10.3" in build
     assert f"redis_sha={redis_sha}" in build
     assert "cpu_features_commit=438a66e41807cd73e0c403966041b358f5eafc68" in build
-    assert "ARG REDIS_VERSION=8.10.2" in dockerfile
+    assert "ARG REDIS_VERSION=8.10.3" in dockerfile
     assert f'org.opencontainers.image.revision="{commit}"' in dockerfile
     assert (
-        'org.opencontainers.image.version="redis-8.10.2_falkordb-4.20.7"' in dockerfile
+        'org.opencontainers.image.version="redis-8.10.3_falkordb-4.20.7"' in dockerfile
     )
     assert provenance["upstream_commit"] == commit
     assert provenance["redis_source_sha256"] == redis_sha

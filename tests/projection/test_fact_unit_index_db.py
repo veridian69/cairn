@@ -1025,7 +1025,9 @@ def adapter(owned_db: int, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
         async def add_episode(self, **kwargs: Any) -> None:
             self.extractions += 1
 
-        async def add_episode_bulk(self, raw: Any, group_id: str) -> Any:
+        async def add_episode_bulk(
+            self, raw: Any, group_id: str, use_combined_extraction: bool, **_: Any
+        ) -> Any:
             self.extractions += len(raw)
             return SimpleNamespace(
                 episodes=[]

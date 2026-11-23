@@ -1,0 +1,21 @@
+{
+  "schema": "cairn.edge-dedup-corpus.v1",
+  "note": "Synthetic. idx is continuous: existing facts first, then invalidation candidates. contradicted null means not scored.",
+  "items": [
+    {"id": "dup-role-paraphrase", "existing": ["Mara Lindt works at the Aare Bakery as head baker", "Mara Lindt lives in Thun"], "invalidation": [], "new": "Mara Lindt is the head baker at the Aare Bakery", "duplicates": [0], "contradicted": []},
+    {"id": "dup-passive-voice", "existing": ["The Aare Bakery is owned by Tobias Renggli", "Tobias Renggli owns a delivery van"], "invalidation": [], "new": "Tobias Renggli owns the Aare Bakery", "duplicates": [0], "contradicted": []},
+    {"id": "dup-among-distractors", "existing": ["The release train departs every second Tuesday", "The release train is managed by Priya Nair", "Priya Nair joined the platform team in 2024"], "invalidation": [], "new": "Priya Nair manages the release train", "duplicates": [1], "contradicted": []},
+    {"id": "dup-with-date", "existing": ["Jonas Keller adopted a cat named Miso in March 2025"], "invalidation": [], "new": "In March 2025 Jonas Keller adopted Miso, a cat", "duplicates": [0], "contradicted": []},
+    {"id": "dup-with-invalidation-list", "existing": ["The Thun office uses a password manager called Vaultkey"], "invalidation": ["The Thun office is on Bahnhofstrasse", "Vaultkey licences renew each January"], "new": "Vaultkey is the password manager used by the Thun office", "duplicates": [0], "contradicted": []},
+    {"id": "dup-second-of-two", "existing": ["Daniel Frei speaks Romansh", "Daniel Frei coaches the Thun junior football team"], "invalidation": [], "new": "The junior football team in Thun is coached by Daniel Frei", "duplicates": [1], "contradicted": []},
+    {"id": "differ-number", "existing": ["The bakery sells 240 loaves on a typical Saturday"], "invalidation": [], "new": "The bakery sells 420 loaves on a typical Saturday", "duplicates": [], "contradicted": [0]},
+    {"id": "differ-date-separate-events", "existing": ["Mara Lindt visited Lisbon in May 2024"], "invalidation": [], "new": "Mara Lindt visited Lisbon in October 2025", "duplicates": [], "contradicted": []},
+    {"id": "differ-qualifier", "existing": ["Tobias Renggli is allergic to hazelnuts"], "invalidation": [], "new": "Tobias Renggli is allergic to walnuts", "duplicates": [], "contradicted": []},
+    {"id": "differ-object-similar-name", "existing": ["Priya Nair mentors Samuel Okafor", "Priya Nair mentors Lena Frei"], "invalidation": [], "new": "Priya Nair mentors Daniel Frei", "duplicates": [], "contradicted": []},
+    {"id": "differ-role-update", "existing": ["Lena Frei works at Helvetia Robotics as a test engineer"], "invalidation": [], "new": "Lena Frei works at Helvetia Robotics as an engineering manager", "duplicates": [], "contradicted": [0]},
+    {"id": "differ-schedule-superseded", "existing": ["The weekly planning meeting is held on Mondays at 09:00"], "invalidation": ["The weekly planning meeting takes place in room Eiger"], "new": "The weekly planning meeting is held on Wednesdays at 14:00", "duplicates": [], "contradicted": [0]},
+    {"id": "differ-contradicts-invalidation-only", "existing": ["Samuel Okafor plays the cello"], "invalidation": ["Samuel Okafor lives in Basel"], "new": "Samuel Okafor lives in Lausanne", "duplicates": [], "contradicted": [1]},
+    {"id": "differ-unrelated", "existing": ["Miso the cat is afraid of the vacuum cleaner", "Jonas Keller cycles to work"], "invalidation": [], "new": "Jonas Keller brews his own beer", "duplicates": [], "contradicted": []},
+    {"id": "differ-reversed-direction", "existing": ["Helvetia Robotics supplies sensors to Aare Logistics"], "invalidation": [], "new": "Aare Logistics supplies sensors to Helvetia Robotics", "duplicates": [], "contradicted": null}
+  ]
+}

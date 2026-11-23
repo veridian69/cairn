@@ -34,6 +34,9 @@ models. The API also reports `shutdown_date` per model on
 2. LLM roles: run `scripts/evaluate_semantic_memory.py` on the fixed corpus
    and compare with the previous model's result, make one live call through `_openai_provider_clients()` for each
    changed role, and keep both results with the change.
+   When the medium model changes, also run `scripts/evaluate_edge_dedup.py`
+   with `--compare-batch-model` naming the outgoing model: combined edge-dedup
+   calls run on the medium model, and the fixed corpus barely exercises them.
 3. The medium model's name is part of the extraction cache key. The cache
    serves only the bulk path (`delivery.chunk_size` above 1), so
    on such a host the next rebuild re-extracts every fact at provider cost.
@@ -45,5 +48,5 @@ models. The API also reports `shutdown_date` per model on
 ## History
 
 - 21 Nov 2026: `gpt-5.4-nano` (shutdown 1 April 2027, announced 1 Oct 2026)
-  replaced by `gpt-6-luna` in v0.10.0.
+  replaced by `gpt-6-luna` in v0.11.0.
 - 10 Oct 2026: `gpt-4.1-nano` (shutdown 23 Oct 2026) replaced by `gpt-5.6-luna`.

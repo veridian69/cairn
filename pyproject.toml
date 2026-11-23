@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "drystane-cairn"
 # A release has the same identity in source and history-free exports.
-version = "0.10.0"
+version = "0.11.0"
 description = "A scoped, evidence-aware memory authority"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -15,24 +15,25 @@ dependencies = [
   # anyio promoted from the dev group per P-34: P-29 imports anyio.Lock and
   # anyio.to_thread from runtime code, and a runtime import must not rest on
   # Starlette's transitive pin. Same locked version, not a new dependency.
-  "anyio==4.15.1",
+  "anyio==4.16.0",
   "detect-secrets==1.5.0",
-  "fastapi==0.141.1",
+  "fastapi==0.165.0",
   # The P-39 retrieval index: pinned exact, with the FalkorDB driver extra.
-  "graphiti-core[falkordb]==0.30.2",
+  "graphiti-core[falkordb]==0.31.2",
   # The Graphiti adapter constructs one shared provider pool explicitly;
   # direct runtime imports must not rest on graphiti-core's transitive pins.
   "httpx==0.28.1",
-  "httpx2==2.13.0",
+  "httpx2==2.16.2",
   # markdown-it-py promoted to direct: the Claude lifecycle Stop hook parses
   # replies with its CommonMark parser, and a runtime import must not rest on
   # rich's transitive pin. Same locked version, not a new dependency.
-  "markdown-it-py==4.2.0",
-  "openai==3.14.0",
+  "markdown-it-py==4.3.0",
+  "openai==3.57.0",
   # Pin the client whose async pool compatibility is exercised with Redis8.1
   # by the disposable v0.5 graph acceptance (no paid provider required).
-  "falkordb==1.7.1",
-  # Redis8.1 is supported by FalkorDB1.7.1's filtered sync probe kwargs.
+  "falkordb==1.8.2",
+  # Redis8.1 is supported by the FalkorDB client's filtered sync probe kwargs
+  # (1.7.1 onwards; unchanged in 1.8.2).
   # Keep the explicit version and hiredis parser for reproducibility.
   # The hiredis extra (redis declares it as hiredis>=3.2.0) is a performance
   # pin, not a functional one: falkordb hardcodes protocol=2, so without the
@@ -50,7 +51,7 @@ dependencies = [
   # per-callback overhead is paid directly there. Nothing deterministic
   # can see it beyond the loop-type unit test — the check is a live
   # projection drain.
-  "uvloop==0.22.1",
+  "uvloop==0.23.0",
   # MCP 1.30 retains the accepted 2025-11-25 protocol and low-level API.
   # MCP 2.2 eagerly imports OAuth endpoint modules and fails P-49's runtime
   # import boundary. Keep 1.x until that security contract is satisfied;
@@ -60,9 +61,9 @@ dependencies = [
   # in tests/transports/mcp/test_import_boundary.py.
   "mcp==1.30.0",
   "prometheus-client==0.26.0",
-  "pydantic==2.13.5",
-  "PyYAML==6.0.3",
-  "uvicorn==0.53.0",
+  "pydantic==2.14.4",
+  "PyYAML==6.0.4",
+  "uvicorn==0.54.0",
 ]
 
 [project.scripts]
@@ -75,15 +76,15 @@ cairn-install = "cairn_install.cli:run"
 [dependency-groups]
 dev = [
   "asgi-lifespan==2.1.0",
-  "coverage==7.16.1",
-  "hypothesis==6.168.0",
-  "mypy==2.3.1",
+  "coverage==7.17.4",
+  "hypothesis==6.170.17",
+  "mypy==2.4.1",
   "pip-audit==2.10.1",
-  "pytest==9.1.1",
+  "pytest==9.2.0",
   "pytest-cov==7.1.0",
   "pytest-xdist==3.8.0",
-  "ruff==0.16.7",
-  "types-PyYAML==6.0.12.20260906",
+  "ruff==0.17.6",
+  "types-PyYAML==6.0.12.20261113",
 ]
 
 [tool.hatch.build.targets.wheel]

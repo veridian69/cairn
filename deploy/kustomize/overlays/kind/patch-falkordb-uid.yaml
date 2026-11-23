@@ -39,7 +39,7 @@
 # starts, loads the graph module, refuses unauthenticated clients and
 # serves queries as an arbitrary non-root UID with the root filesystem
 # read-only. The current local source recipe targets v4.20.7 with Redis
-# 8.10.2. Its build and this overlay's arbitrary-UID posture still require
+# 8.10.3. Its build and this overlay's arbitrary-UID posture still require
 # acceptance with the selected local runtime descriptor; the placeholder
 # image is not evidence of either check.
 apiVersion: apps/v1

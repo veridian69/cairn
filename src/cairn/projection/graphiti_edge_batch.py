@@ -1,13 +1,27 @@
 """Pinned resolve_edge micro-batching compatibility seam (P-87).
 
-Graphiti 0.30.2 issues one ``dedupe_edges.resolve_edge`` provider call
+Graphiti 0.31.2 issues one ``dedupe_edges.resolve_edge`` provider call
 per extracted edge — 69.2% of all provider busy time in the P-86
-calibration. This module coalesces concurrent calls into combined
+calibration (measured on 0.30.2). This module coalesces concurrent calls into combined
 calls on the medium model path: measured 27 August 2026, batch-on-small
 lost dedup accuracy against single calls (11/15 vs 13/15) while
 batch-on-medium matched them (13/15), with zero false duplicates
 either way. Delete it when the pinned dependency batches edge
 resolution itself.
+
+The combined prompt carries the same duplicate and contradiction rules as
+the pinned library's single ``resolve_edge`` prompt, reworded per item, and
+its three worked examples verbatim. The examples are not decoration: with
+the 0.31.2 rules and no examples the medium model stopped marking a changed
+number, role or schedule as a contradiction (55 of 70 on 22 November 2026,
+against 70 of 70 for the single prompt). A
+pin change that edits that prompt needs the same edit here and a fresh
+``scripts/evaluate_edge_dedup.py`` measurement. The seam rests on three
+upstream facts, each asserted by the tests: ``edge_operations`` reads the
+prompt through its module global ``prompt_library`` at call time, passes
+``prompt_name="dedupe_edges.resolve_edge"`` by keyword on the unrouted
+path, and builds the context keys ``existing_edges``,
+``edge_invalidation_candidates`` and ``new_edge``.
 
 ``install_edge_batching`` mutates a process global: it rebinds
 ``edge_operations.prompt_library`` to a proxy. Any test calling it with
@@ -32,7 +46,7 @@ from cairn.runtime.logging import LogEvent, SafeLogger
 _LOGGER = logging.getLogger(__name__)
 
 _GRAPHITI_CORE_VERSION = version("graphiti-core")
-_GRAPHITI_EDGE_BATCH_COMPATIBILITY_VERSION = "0.30.2"
+_GRAPHITI_EDGE_BATCH_COMPATIBILITY_VERSION = "0.31.2"
 
 
 def _require_graphiti_edge_batch_compatibility() -> None:
@@ -73,7 +87,8 @@ def _batch_messages(contexts: list[dict[str, Any]]) -> list[Message]:
         Message(
             role="system",
             content="You are a fact deduplication assistant. "
-            "NEVER mark facts with key differences as duplicates.",
+            "NEVER mark facts as contradicted unless the new fact explicitly "
+            "makes the old fact false.",
         ),
         Message(
             role="user",
@@ -89,14 +104,46 @@ CANDIDATES.
 NEVER mark facts as duplicates if they have key differences, particularly
 around numeric values, dates, or key qualifiers.
 
+Only mark a fact as contradicted when the NEW FACT and the existing fact
+cannot both be true. Do NOT treat additional activity, progress, status, or
+project-update facts as contradictions of role, ownership, responsibility,
+membership, or assignment facts. A person doing work on a project is
+compatible with that person remaining responsible for, owning, leading, or
+being the DRI for the project.
+
 IMPORTANT constraints, per item:
 - duplicate_facts: ONLY idx values from that item's EXISTING FACTS (NEVER
   include FACT INVALIDATION CANDIDATES)
 - contradicted_facts: idx values from EITHER of that item's lists
 - If the NEW FACT represents identical factual information as an EXISTING
-  FACT, its idx belongs in duplicate_facts; an EXISTING FACT can be both a
-  duplicate AND contradicted when the new fact updates or supersedes it.
+  FACT, its idx belongs in duplicate_facts.
+- A contradiction requires explicit evidence that the old fact stopped being
+  true or was replaced, such as clear termination, replacement, transfer, or
+  mutually exclusive current-state language. Do NOT infer contradiction from
+  recency alone, episode dates, meeting dates, weekly snapshots, section
+  headings such as "updates" or "status changes", or a new event involving
+  the same entities.
+- Do NOT mark a role/ownership/responsibility/assignment fact as contradicted
+  merely because the NEW FACT describes work performed, updates shipped,
+  documents created, progress made, blockers, next steps, or collaboration
+  involving the same person and project.
+- An EXISTING FACT can be both a duplicate AND contradicted only when the
+  same assertion is restated with an explicit incompatible change.
 - Empty lists when there are no duplicates or contradictions.
+
+<EXAMPLE>
+EXISTING FACT: idx=0, "Alice joined Acme Corp in 2020"
+NEW FACT: "Alice joined Acme Corp in 2020"
+Result: duplicate_facts=[0], contradicted_facts=[] (identical factual information)
+
+EXISTING FACT: idx=1, "Alice works at Acme Corp as a software engineer"
+NEW FACT: "Alice works at Acme Corp as a senior engineer"
+Result: duplicate_facts=[], contradicted_facts=[1] (same relationship but updated title — contradiction, NOT a duplicate)
+
+EXISTING FACT: idx=2, "Bob ran 5 miles on Tuesday"
+NEW FACT: "Bob ran 3 miles on Wednesday"
+Result: duplicate_facts=[], contradicted_facts=[] (different events on different days — neither duplicate nor contradiction)
+</EXAMPLE>
 
 {body}
 """,
@@ -242,8 +289,8 @@ class EdgeBatcher:
         # max_tokens caps the response, and one combined response covers
         # every item, so the batch needs at least the largest budget any
         # single item asked for — taking one item's value could truncate
-        # the answer for the rest. Graphiti 0.30.2 never passes one
-        # (edge_operations.py:726-731), so today this always folds to None.
+        # the answer for the rest. Graphiti 0.31.2 never passes one
+        # (edge_operations.py:986-995), so today this always folds to None.
         budgets = [tokens for _, _, tokens in batch if tokens is not None]
         max_tokens = max(budgets) if budgets else None
         try:

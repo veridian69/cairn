@@ -491,10 +491,10 @@ def test_ambiguous_close_task_submission_is_owned_on_late_start(
     def interrupted(
         loop: asyncio.AbstractEventLoop,
         coro: Coroutine[Any, Any, Any],
-        context: Any = None,
+        **keywords: Any,
     ) -> asyncio.Task[Any]:
         nonlocal failed
-        task = original(loop, coro, context)
+        task = original(loop, coro, **keywords)
         if not failed:
             failed = True
             raise RuntimeError("private submission error")
