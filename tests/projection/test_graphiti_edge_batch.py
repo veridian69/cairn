@@ -195,8 +195,14 @@ async def test_results_map_by_item_number_not_arrival_order() -> None:
             )
         ]
     )
+    # The contradiction is incidental: confirmation is off so the test keeps
+    # to what it checks, which item each answer lands on.
     batcher = seam.EdgeBatcher(
-        provider, batch_size=2, linger_seconds=60.0, max_facts=1000
+        provider,
+        batch_size=2,
+        linger_seconds=60.0,
+        max_facts=1000,
+        confirm_contradictions=False,
     )
     first, second = await asyncio.gather(
         batcher.submit(_context("a"), None), batcher.submit(_context("b"), None)
@@ -276,6 +282,8 @@ async def test_an_unanswered_item_is_asked_again_on_its_own_with_one_safe_event(
         linger_seconds=60.0,
         max_facts=1000,
         logger=configure_logging(stream),
+        # Contradictions here are payload markers, not the subject.
+        confirm_contradictions=False,
     )
     with caplog.at_level(logging.WARNING, logger=_SEAM_LOGGER):
         answered, orphan = await asyncio.gather(
@@ -323,7 +331,11 @@ async def test_an_unanswered_item_is_silent_without_a_safe_logger(
         ]
     )
     batcher = seam.EdgeBatcher(
-        provider, batch_size=2, linger_seconds=60.0, max_facts=1000
+        provider,
+        batch_size=2,
+        linger_seconds=60.0,
+        max_facts=1000,
+        confirm_contradictions=False,
     )
     with caplog.at_level(logging.WARNING, logger=_SEAM_LOGGER):
         results = await asyncio.gather(
@@ -372,6 +384,8 @@ async def test_wrongly_numbered_answers_are_all_asked_again(
         linger_seconds=60.0,
         max_facts=1000,
         logger=configure_logging(stream),
+        # The scripted contradictions are payload markers, not the subject.
+        confirm_contradictions=False,
     )
     first, second = await asyncio.gather(
         batcher.submit(_context("a"), None), batcher.submit(_context("b"), None)
@@ -441,8 +455,14 @@ class _CancellableRetryProvider:
 @pytest.mark.anyio
 async def test_a_waiter_cancelled_during_the_combined_call_is_not_asked_again() -> None:
     provider = _CancellableRetryProvider()
+    # The retries answer with a contradiction; confirming it would add a
+    # second call per retry, which is not what this test counts.
     batcher = seam.EdgeBatcher(
-        provider, batch_size=3, linger_seconds=60.0, max_facts=1000
+        provider,
+        batch_size=3,
+        linger_seconds=60.0,
+        max_facts=1000,
+        confirm_contradictions=False,
     )
     a, b, c = (
         asyncio.ensure_future(batcher.submit(_context(f"edge {n}"), None))
@@ -461,8 +481,15 @@ async def test_a_waiter_cancelled_during_the_combined_call_is_not_asked_again() 
 @pytest.mark.anyio
 async def test_a_waiter_cancelled_during_its_retry_cancels_only_that_call() -> None:
     provider = _CancellableRetryProvider()
+    # The retries answer with a contradiction; confirming it would send a
+    # further call to this provider, which has no answer for it. Off, so the
+    # test keeps to what it checks: which retry is cancelled.
     batcher = seam.EdgeBatcher(
-        provider, batch_size=3, linger_seconds=60.0, max_facts=1000
+        provider,
+        batch_size=3,
+        linger_seconds=60.0,
+        max_facts=1000,
+        confirm_contradictions=False,
     )
     a, b, c = (
         asyncio.ensure_future(batcher.submit(_context(f"edge {n}"), None))
@@ -521,6 +548,542 @@ async def test_a_flush_cancelled_during_a_single_retry_fails_its_waiter() -> Non
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(orphan, 2)
     await asyncio.sleep(0)
+    assert batcher._inflight == set()
+
+
+_CONFIRMING = "You are given 1 independent ITEMs"
+
+
+def _is_confirming(call: dict[str, object]) -> bool:
+    """The combined prompt for exactly one item: only a confirming call has it."""
+    return call[
+        "prompt_name"
+    ] == "dedupe_edges.resolve_edge_batch" and _CONFIRMING in str(call["messages"])
+
+
+class _RoutedProvider:
+    """Answers by call kind and item, not by queue order.
+
+    Confirming calls for several items run concurrently, so their order is
+    not fixed. A call is one of three kinds: the combined call for a real
+    batch (answered with ``batch``); a single small-model call (answered
+    from ``small``); or a confirming call, which is the combined prompt for
+    one item on the medium model (answered from ``medium``). The tables are
+    keyed by a marker string found in the rendered messages. A table value
+    that is an exception is raised. ``batch_gate``, ``small_gate`` and
+    ``medium_gate`` hold those calls until released; ``started`` and
+    ``cancelled`` list the markers of the small and medium calls by kind.
+    """
+
+    def __init__(
+        self,
+        *,
+        batch: object = None,
+        small: dict[str, object] | None = None,
+        medium: dict[str, object] | None = None,
+        batch_gate: asyncio.Future[None] | None = None,
+        small_gate: asyncio.Future[None] | None = None,
+        medium_gate: asyncio.Future[None] | None = None,
+    ) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.started: dict[str, list[str]] = {"small": [], "medium": []}
+        self.cancelled: dict[str, list[str]] = {"small": [], "medium": []}
+        self._batch = batch
+        self._tables = {"small": small or {}, "medium": medium or {}}
+        self._batch_gate = batch_gate
+        self._gates = {"small": small_gate, "medium": medium_gate}
+
+    async def __call__(
+        self,
+        messages: Any,
+        response_model: Any = None,
+        max_tokens: int | None = None,
+        model_size: ModelSize = ModelSize.medium,
+        group_id: str | None = None,
+        prompt_name: str | None = None,
+        **keywords: Any,
+    ) -> object:
+        call: dict[str, object] = {
+            "messages": messages,
+            "response_model": response_model,
+            "max_tokens": max_tokens,
+            "model_size": model_size,
+            "prompt_name": prompt_name,
+        }
+        self.calls.append(call)
+        if prompt_name == "dedupe_edges.resolve_edge_batch" and not _is_confirming(
+            call
+        ):
+            if self._batch_gate is not None:
+                await asyncio.shield(self._batch_gate)
+            return self._batch
+        kind = "small" if model_size is ModelSize.small else "medium"
+        table = self._tables[kind]
+        marker = next(key for key in table if key in str(messages))
+        self.started[kind].append(marker)
+        gate = self._gates[kind]
+        if gate is not None:
+            try:
+                # Shielded: cancelling one call must not cancel the gate.
+                await asyncio.shield(gate)
+            except asyncio.CancelledError:
+                self.cancelled[kind].append(marker)
+                raise
+        answer = table[marker]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _answer(duplicates: list[int], contradictions: list[int]) -> dict[str, object]:
+    return {"duplicate_facts": duplicates, "contradicted_facts": contradictions}
+
+
+def _item(
+    item: int, duplicates: list[int], contradictions: list[int]
+) -> dict[str, object]:
+    return {
+        "item": item,
+        "duplicate_facts": duplicates,
+        "contradicted_facts": contradictions,
+    }
+
+
+def _confirm(contradictions: list[int]) -> dict[str, object]:
+    """A trusted confirming answer: item 0 declaring ``contradictions``."""
+    return _resolutions(_item(0, [], contradictions))
+
+
+def _confirmation_calls(provider: _RoutedProvider) -> list[dict[str, object]]:
+    return [c for c in provider.calls if _is_confirming(c)]
+
+
+def _batcher(
+    provider: _RoutedProvider, size: int, linger: float = 60.0, **options: Any
+) -> seam.EdgeBatcher:
+    return seam.EdgeBatcher(
+        provider, batch_size=size, linger_seconds=linger, max_facts=1000, **options
+    )
+
+
+@pytest.mark.anyio
+async def test_a_combined_contradiction_the_confirming_call_shares_is_kept() -> None:
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [0], [1]), _item(1, [], [])),
+        medium={"alpha": _confirm([1])},
+    )
+    context = _context("alpha")
+    batcher = _batcher(provider, 2)
+    first, second = await asyncio.gather(
+        batcher.submit(context, None), batcher.submit(_context("beta"), None)
+    )
+    assert first == _answer([0], [1])
+    assert second == _answer([], [])
+    (confirming,) = _confirmation_calls(provider)
+    assert len(provider.calls) == 2
+    assert confirming["model_size"] is ModelSize.medium
+    assert confirming["prompt_name"] == "dedupe_edges.resolve_edge_batch"
+    assert confirming["response_model"] is seam.EdgeDuplicateBatch
+    # Cairn's combined prompt for this one item, not the library prompt.
+    assert confirming["messages"] == seam._batch_messages([context])
+    assert "beta" not in str(confirming["messages"])
+
+
+@pytest.mark.anyio
+async def test_a_combined_contradiction_the_confirming_call_does_not_share_is_dropped() -> (
+    None
+):
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [0], [1]), _item(1, [], [])),
+        medium={"alpha": _resolutions(_item(0, [], []))},
+    )
+    batcher = _batcher(provider, 2)
+    first, second = await asyncio.gather(
+        batcher.submit(_context("alpha"), None), batcher.submit(_context("beta"), None)
+    )
+    # Duplicates are not confirmed: the first answer's stand, whatever the
+    # confirming answer says about them.
+    assert first == _answer([0], [])
+    assert second == _answer([], [])
+    assert len(_confirmation_calls(provider)) == 1
+
+
+@pytest.mark.anyio
+async def test_confirmation_keeps_only_declared_contradictions_in_declared_order() -> (
+    None
+):
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [3], [2, 0, 1]), _item(1, [], [])),
+        # 5 was never declared by the first answer, so it cannot be added.
+        medium={"alpha": _confirm([1, 2, 5])},
+    )
+    batcher = _batcher(provider, 2)
+    results = await asyncio.gather(
+        batcher.submit(_context("alpha"), None), batcher.submit(_context("beta"), None)
+    )
+    assert results[0] == _answer([3], [2, 1])
+
+
+@pytest.mark.anyio
+async def test_only_an_item_that_declared_a_contradiction_gets_a_confirming_call() -> (
+    None
+):
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [], [1]), _item(1, [0], [])),
+        medium={"alpha": _confirm([1])},
+    )
+    batcher = _batcher(provider, 2)
+    first, second = await asyncio.gather(
+        batcher.submit(_context("alpha"), None), batcher.submit(_context("beta"), None)
+    )
+    assert first == _answer([], [1])
+    assert second == _answer([0], [])
+    assert len(provider.calls) == 2  # the combined call and one confirmation
+    (confirming,) = _confirmation_calls(provider)
+    assert "alpha" in str(confirming["messages"])
+
+
+@pytest.mark.anyio
+async def test_confirmation_can_be_switched_off() -> None:
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [], [1, 2]), _item(1, [], []))
+    )
+    batcher = _batcher(provider, 2, confirm_contradictions=False)
+    first, second = await asyncio.gather(
+        batcher.submit(_context("alpha"), None), batcher.submit(_context("beta"), None)
+    )
+    assert first == _answer([], [1, 2])
+    assert second == _answer([], [])
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("second_opinion", "expected"),
+    [
+        pytest.param([3, 1], [3], id="agreed"),
+        pytest.param([], [], id="not-agreed"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_single_call_contradiction_is_confirmed_on_the_medium_model(
+    second_opinion: list[int], expected: list[int]
+) -> None:
+    """A batch of one asks small first, then confirms its contradiction on medium."""
+    provider = _RoutedProvider(
+        small={"solo": _answer([0], [3])}, medium={"solo": _confirm(second_opinion)}
+    )
+    context = _context("solo")
+    result = await _batcher(provider, 1).submit(context, 300)
+    assert result == _answer([0], expected)
+    assert [c["model_size"] for c in provider.calls] == [
+        ModelSize.small,
+        ModelSize.medium,
+    ]
+    assert [c["prompt_name"] for c in provider.calls] == [
+        "dedupe_edges.resolve_edge",
+        "dedupe_edges.resolve_edge_batch",
+    ]
+    assert provider.calls[1]["response_model"] is seam.EdgeDuplicateBatch
+    assert provider.calls[1]["messages"] == seam._batch_messages([context])
+    assert provider.calls[1]["max_tokens"] == 300
+
+
+@pytest.mark.anyio
+async def test_a_single_call_without_a_contradiction_is_not_confirmed() -> None:
+    provider = _RoutedProvider(small={"solo": _answer([0], [])})
+    result = await _batcher(provider, 1).submit(_context("solo"), None)
+    assert result == _answer([0], [])
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("second_opinion", "expected"),
+    [
+        pytest.param([2], [2], id="agreed"),
+        pytest.param([], [], id="not-agreed"),
+    ],
+)
+@pytest.mark.anyio
+async def test_an_unanswered_item_answered_singly_is_confirmed_too(
+    second_opinion: list[int], expected: list[int]
+) -> None:
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [], [])),
+        small={"beta": _answer([], [2])},
+        medium={"beta": _confirm(second_opinion)},
+    )
+    batcher = _batcher(provider, 2)
+    first, second = await asyncio.gather(
+        batcher.submit(_context("alpha"), None), batcher.submit(_context("beta"), None)
+    )
+    assert first == _answer([], [])
+    assert second == _answer([], expected)
+    assert [c["model_size"] for c in provider.calls] == [
+        ModelSize.medium,  # the combined call
+        ModelSize.small,
+        ModelSize.medium,
+    ]
+    assert _is_confirming(provider.calls[2])
+    assert "beta" in str(provider.calls[2]["messages"])
+
+
+@pytest.mark.anyio
+async def test_only_a_call_for_several_items_goes_to_the_combined_call() -> None:
+    # The combined call may carry other provider settings (I-102). An item
+    # asked again on its own and a confirmation keep the ordinary call.
+    combined = _RoutedProvider(batch=_resolutions(_item(0, [], [1])))
+    ordinary = _RoutedProvider(
+        small={"beta": _answer([], [2])},
+        medium={"alpha": _confirm([1]), "beta": _confirm([2])},
+    )
+    batcher = _batcher(ordinary, 2, combined_call=combined)
+    first, second = await asyncio.gather(
+        batcher.submit(_context("alpha"), None), batcher.submit(_context("beta"), None)
+    )
+    assert first == _answer([], [1])
+    assert second == _answer([], [2])
+    [call] = combined.calls
+    assert call["prompt_name"] == "dedupe_edges.resolve_edge_batch"
+    assert not _is_confirming(call)
+    assert sorted(ordinary.started["small"]) == ["beta"]
+    assert sorted(ordinary.started["medium"]) == ["alpha", "beta"]
+    assert len(ordinary.calls) == 3
+
+
+@pytest.mark.anyio
+async def test_a_batch_of_one_does_not_use_the_combined_call() -> None:
+    combined = _RoutedProvider()
+    ordinary = _RoutedProvider(
+        small={"alpha": _answer([], [1])}, medium={"alpha": _confirm([1])}
+    )
+    batcher = _batcher(ordinary, 2, linger=0.0, combined_call=combined)
+    assert await batcher.submit(_context("alpha"), None) == _answer([], [1])
+    assert combined.calls == []
+    assert len(ordinary.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("untrusted", "answered"),
+    [
+        pytest.param({"resolutions": []}, 0, id="empty"),
+        pytest.param(_resolutions(_item(1, [], [3])), 1, id="only-item-1"),
+        pytest.param(
+            _resolutions(_item(0, [], [3]), _item(0, [], [3])), 2, id="item-0-twice"
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_an_untrusted_confirming_answer_keeps_no_contradiction(
+    untrusted: dict[str, object], answered: int
+) -> None:
+    provider = _RoutedProvider(
+        small={"solo": _answer([0], [3])}, medium={"solo": untrusted}
+    )
+    stream = StringIO()
+    batcher = _batcher(provider, 1, logger=configure_logging(stream))
+    result = await batcher.submit(_context("solo"), None)
+    assert result == _answer([0], [])
+    payloads = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert len(payloads) == 1
+    assert payloads[0] == {
+        "answered": answered,
+        "event": "edge_batch_item_missing",
+        "item": 0,
+        "size": 1,
+        "time": payloads[0]["time"],
+    }
+    assert "solo" not in stream.getvalue()
+
+
+@pytest.mark.parametrize(
+    "untrusted",
+    [
+        pytest.param({"resolutions": []}, id="empty"),
+        pytest.param(_resolutions(_item(1, [], [3])), id="only-item-1"),
+        pytest.param(
+            _resolutions(_item(0, [], [3]), _item(0, [], [3])), id="item-0-twice"
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_an_untrusted_confirming_answer_is_silent_without_a_safe_logger(
+    untrusted: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    provider = _RoutedProvider(
+        small={"solo": _answer([0], [3])}, medium={"solo": untrusted}
+    )
+    with caplog.at_level(logging.WARNING, logger=_SEAM_LOGGER):
+        result = await _batcher(provider, 1).submit(_context("solo"), None)
+    assert result == _answer([0], [])
+    assert not any(
+        "edge_batch_item_missing" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.anyio
+async def test_extra_keys_in_a_single_call_answer_survive_confirmation() -> None:
+    provider = _RoutedProvider(
+        small={"solo": {**_answer([0], [3, 4]), "note": "kept"}},
+        medium={"solo": _confirm([4])},
+    )
+    result = await _batcher(provider, 1).submit(_context("solo"), None)
+    assert result == {**_answer([0], [4]), "note": "kept"}
+
+
+@pytest.mark.parametrize(
+    ("second_opinion", "expected"),
+    [
+        pytest.param([3], [3], id="agreed"),
+        pytest.param([], [], id="not-agreed"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_foreign_loop_call_is_confirmed(
+    second_opinion: list[int], expected: list[int]
+) -> None:
+    provider = _RoutedProvider(
+        small={"binds": _answer([], []), "foreign": _answer([], [3])},
+        medium={"foreign": _confirm(second_opinion)},
+    )
+    batcher = _batcher(provider, 10, linger=0.01)
+    await batcher.submit(_context("binds the loop"), None)
+    foreign_result: list[object] = []
+
+    def foreign() -> None:
+        foreign_result.append(asyncio.run(batcher.submit(_context("foreign"), None)))
+
+    thread = threading.Thread(target=foreign)
+    thread.start()
+    thread.join(timeout=5)
+    assert foreign_result == [_answer([], expected)]
+    assert [c["model_size"] for c in provider.calls[1:]] == [
+        ModelSize.small,
+        ModelSize.medium,
+    ]
+    assert _is_confirming(provider.calls[-1])
+
+
+@pytest.mark.anyio
+async def test_a_failed_confirming_call_fails_only_its_own_waiter() -> None:
+    error = RuntimeError("provider down")
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [], [1]), _item(1, [], [2]), _item(2, [4], [])),
+        medium={"alpha": error, "beta": _confirm([2])},
+    )
+    batcher = _batcher(provider, 3)
+    results = await asyncio.gather(
+        batcher.submit(_context("alpha"), None),
+        batcher.submit(_context("beta"), None),
+        batcher.submit(_context("gamma"), None),
+        return_exceptions=True,
+    )
+    assert results[0] is error
+    assert results[1] == _answer([], [2])
+    assert results[2] == _answer([4], [])
+
+
+@pytest.mark.anyio
+async def test_a_waiter_cancelled_during_its_confirming_call_cancels_only_that_call() -> (
+    None
+):
+    gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [], [1]), _item(1, [], [2]), _item(2, [], [])),
+        medium={"alpha": _confirm([1]), "beta": _confirm([2])},
+        medium_gate=gate,
+    )
+    batcher = _batcher(provider, 3)
+    a, b, c = (
+        asyncio.ensure_future(batcher.submit(_context(name), None))
+        for name in ("alpha", "beta", "gamma")
+    )
+    for _ in range(10):  # the combined call answers; alpha and beta confirm
+        await asyncio.sleep(0)
+    assert sorted(provider.started["medium"]) == ["alpha", "beta"]
+    a.cancel()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert provider.cancelled["medium"] == ["alpha"]
+    gate.set_result(None)
+    assert await asyncio.wait_for(b, 2) == _answer([], [2])
+    assert await asyncio.wait_for(c, 2) == _answer([], [])
+    assert a.cancelled()
+    await asyncio.sleep(0)
+    assert batcher._inflight == set()
+
+
+@pytest.mark.anyio
+async def test_a_waiter_cancelled_during_the_combined_call_is_not_confirmed() -> None:
+    gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    provider = _RoutedProvider(
+        batch=_resolutions(_item(0, [], [1]), _item(1, [], [2])),
+        medium={"alpha": _confirm([1]), "beta": _confirm([2])},
+        batch_gate=gate,
+    )
+    batcher = _batcher(provider, 2)
+    a, b = (
+        asyncio.ensure_future(batcher.submit(_context(name), None))
+        for name in ("alpha", "beta")
+    )
+    for _ in range(3):
+        await asyncio.sleep(0)
+    a.cancel()  # while the combined call is out
+    await asyncio.sleep(0)
+    gate.set_result(None)
+    assert await asyncio.wait_for(b, 2) == _answer([], [2])
+    assert provider.started["medium"] == ["beta"]
+
+
+@pytest.mark.anyio
+async def test_a_batch_of_one_cancelled_during_its_small_call_is_not_confirmed() -> (
+    None
+):
+    gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    provider = _RoutedProvider(
+        small={"solo": _answer([], [3])},
+        medium={"solo": _confirm([3])},
+        small_gate=gate,
+    )
+    batcher = _batcher(provider, 1)
+    waiter = asyncio.ensure_future(batcher.submit(_context("solo"), None))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert provider.started["small"] == ["solo"]
+    waiter.cancel()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    # The call is cancelled with its waiter, so it never gets to declare the
+    # contradiction that would have started a confirming call.
+    assert provider.cancelled["small"] == ["solo"]
+    gate.set_result(None)
+    for _ in range(5):  # let the flush task finish and its callback fire
+        await asyncio.sleep(0)
+    assert waiter.cancelled()
+    assert len(provider.calls) == 1
+    assert batcher._inflight == set()
+
+
+@pytest.mark.anyio
+async def test_a_batch_of_one_cancelled_during_its_confirming_call_cancels_it() -> None:
+    gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    provider = _RoutedProvider(
+        small={"solo": _answer([], [3])},
+        medium={"solo": _confirm([3])},
+        medium_gate=gate,
+    )
+    batcher = _batcher(provider, 1)
+    waiter = asyncio.ensure_future(batcher.submit(_context("solo"), None))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert provider.started["medium"] == ["solo"]
+    waiter.cancel()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert provider.cancelled["medium"] == ["solo"]
+    assert waiter.cancelled()
+    gate.set_result(None)
+    for _ in range(5):  # let the flush task finish and its callback fire
+        await asyncio.sleep(0)
     assert batcher._inflight == set()
 
 
@@ -742,7 +1305,7 @@ def _restore_prompt_library(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _FakeClient:
-    def __init__(self, provider: _FakeProvider) -> None:
+    def __init__(self, provider: Any) -> None:
         self.generate_response = provider
 
 
@@ -853,16 +1416,69 @@ async def test_a_second_install_returns_the_existing_batcher() -> None:
     assert client.generate_response is wrapped
 
 
-def test_a_batch_size_of_one_installs_nothing() -> None:
-    provider = _FakeProvider([])
-    client = _FakeClient(provider)
-    assert (
-        seam.install_edge_batching(client, batch_size=1, linger_ms=75, max_facts=1000)
-        is None
+@pytest.mark.anyio
+async def test_a_batch_size_of_one_still_confirms_a_contradiction() -> None:
+    # Nothing is combined at size 1, but the item must not skip the
+    # confirmation every other path gives it.
+    provider = _RoutedProvider(
+        small={"alpha": _answer([], [1, 2])}, medium={"alpha": _confirm([2])}
     )
-    assert client.generate_response is provider
+    client = _FakeClient(provider)
+    seam.install_edge_batching(client, batch_size=1, linger_ms=75, max_facts=1000)
     module: Any = edge_operations
-    assert not isinstance(module.prompt_library, seam._PromptLibraryProxy)
+    messages = module.prompt_library.dedupe_edges.resolve_edge(_context("alpha"))
+    result = await client.generate_response(
+        messages, prompt_name="dedupe_edges.resolve_edge"
+    )
+    assert result == _answer([], [2])
+    assert [c["model_size"] for c in provider.calls] == [
+        ModelSize.small,
+        ModelSize.medium,
+    ]
+    assert provider.calls[0]["prompt_name"] == "dedupe_edges.resolve_edge"
+    assert _is_confirming(provider.calls[1])
+
+
+@pytest.mark.anyio
+async def test_a_batch_size_of_one_asks_each_item_on_its_own() -> None:
+    provider = _RoutedProvider(
+        small={"alpha": _answer([0], []), "beta": _answer([], [])}
+    )
+    batcher = seam.install_edge_batching(
+        _FakeClient(provider), batch_size=1, linger_ms=75, max_facts=1000
+    )
+    first, second = await asyncio.gather(
+        batcher.submit(_context("alpha"), None), batcher.submit(_context("beta"), None)
+    )
+    assert (first, second) == (_answer([0], []), _answer([], []))
+    assert sorted(provider.started["small"]) == ["alpha", "beta"]
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_install_hands_the_combined_call_to_the_batcher() -> None:
+    ordinary = _FakeProvider([])
+    combined = _FakeProvider(
+        [
+            _resolutions(
+                {"item": 0, "duplicate_facts": [], "contradicted_facts": []},
+                {"item": 1, "duplicate_facts": [], "contradicted_facts": []},
+            )
+        ]
+    )
+    batcher = seam.install_edge_batching(
+        _FakeClient(ordinary),
+        batch_size=2,
+        linger_ms=75,
+        max_facts=1000,
+        combined_call=combined,
+    )
+    assert batcher is not None
+    await asyncio.gather(
+        batcher.submit(_context("a"), None), batcher.submit(_context("b"), None)
+    )
+    assert len(combined.calls) == 1
+    assert ordinary.calls == []
 
 
 def test_the_prompt_proxy_installs_once_and_carries_context() -> None:
@@ -977,3 +1593,82 @@ def test_install_refuses_version_drift(monkeypatch: pytest.MonkeyPatch) -> None:
         seam.install_edge_batching(
             _FakeClient(_FakeProvider([])), batch_size=2, linger_ms=75, max_facts=1000
         )
+
+
+class _OrderedProvider:
+    """Answers each call from a plain future the test completes itself, so a
+    test controls exactly which wake-up the loop has queued first."""
+
+    def __init__(self) -> None:
+        self.answers: list[asyncio.Future[dict[str, Any]]] = []
+        self.prompts: list[str | None] = []
+
+    async def __call__(self, messages: Any, **keywords: Any) -> dict[str, Any]:
+        self.prompts.append(keywords.get("prompt_name"))
+        answer: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self.answers.append(answer)
+        return await answer
+
+
+async def _until(condition: Any) -> None:
+    for _ in range(100):
+        if condition():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition not reached")
+
+
+@pytest.mark.anyio
+async def test_a_small_answer_arriving_just_before_cancellation_is_not_confirmed() -> (
+    None
+):
+    """The small call's answer is queued ahead of the cancellation callback,
+    so the single task resumes first: it must see for itself that its waiter
+    has gone before it asks for confirmation."""
+    provider = _OrderedProvider()
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=1, linger_seconds=60.0, max_facts=1000
+    )
+    waiter = asyncio.ensure_future(batcher.submit(_context("alone"), None))
+    await _until(lambda: len(provider.answers) == 1)
+    provider.answers[0].set_result({"duplicate_facts": [], "contradicted_facts": [0]})
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert provider.prompts == ["dedupe_edges.resolve_edge"]
+
+
+@pytest.mark.anyio
+async def test_a_flagged_item_cancelled_before_its_task_starts_is_not_confirmed() -> (
+    None
+):
+    """A combined answer flags an item whose waiter is cancelled in the same
+    loop step: the confirming task is created but must not call."""
+    provider = _OrderedProvider()
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=2, linger_seconds=60.0, max_facts=1000
+    )
+    first = asyncio.ensure_future(batcher.submit(_context("first"), None))
+    second = asyncio.ensure_future(batcher.submit(_context("second"), None))
+    await _until(lambda: len(provider.answers) == 1)
+    provider.answers[0].set_result(
+        {
+            "resolutions": [
+                {"item": 0, "duplicate_facts": [], "contradicted_facts": [0]},
+                {"item": 1, "duplicate_facts": [0], "contradicted_facts": []},
+            ]
+        }
+    )
+    # Queue the cancellation behind the combined answer's own wake-up, so it
+    # lands after the confirming task exists and before that task first runs.
+    asyncio.get_running_loop().call_soon(first.cancel)
+    assert await second == {"duplicate_facts": [0], "contradicted_facts": []}
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert provider.prompts == ["dedupe_edges.resolve_edge_batch"]

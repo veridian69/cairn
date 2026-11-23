@@ -22,5 +22,12 @@ LLM_MEDIUM_MODEL = "gpt-6-luna"
 # gpt-5.6-luna rejects OpenAIRerankerClient's request shape.
 LLM_SMALL_MODEL = "gpt-5.6-luna"
 
+# Reasoning effort. Every call runs with reasoning off except the combined
+# edge-dedup call, which judges up to ten unrelated items in one answer: with
+# reasoning off it retired unrelated facts and missed real contradictions, the
+# more of those the more items shared the call (I-102).
+LLM_REASONING = "none"
+LLM_COMBINED_EDGE_REASONING = "low"
+
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSION = 1024

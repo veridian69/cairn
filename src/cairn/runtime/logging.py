@@ -64,6 +64,8 @@ class LogEvent(StrEnum):
     PROJECTION_EMBEDDING_CACHE_BATCH = "projection_embedding_cache_batch"
     EDGE_BATCH_ITEM_MISSING = "edge_batch_item_missing"
     SEMANTIC_REBUILD_NEEDED = "semantic_rebuild_needed"
+    # #281 (I-101): the same search refusal while a projection is in flight.
+    SEMANTIC_PROJECTION_IN_FLIGHT = "semantic_projection_in_flight"
     PROJECTION_REPAIR_ENQUEUED = "projection_repair_enqueued"
     PROJECTION_REPAIR_OVER_CAP = "projection_repair_over_cap"
     PROJECTION_REPAIR_UNREPAIRABLE = "projection_repair_unrepairable"
@@ -375,8 +377,11 @@ class SafeLogger:
         )
 
         # No partition, query, identity, vector or exception detail belongs in
-        # this operator action signal. The event itself is the complete shape.
-        if event is LogEvent.SEMANTIC_REBUILD_NEEDED and any(
+        # these search refusal signals. The event itself is the complete shape.
+        if event in (
+            LogEvent.SEMANTIC_REBUILD_NEEDED,
+            LogEvent.SEMANTIC_PROJECTION_IN_FLIGHT,
+        ) and any(
             value is not None
             for value in (
                 instance_id,
@@ -409,7 +414,7 @@ class SafeLogger:
                 answered,
             )
         ):
-            raise TypeError("semantic rebuild event accepts no payload fields")
+            raise TypeError("semantic refusal events accept no payload fields")
 
         self._logger.log(
             level,
