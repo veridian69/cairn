@@ -104,7 +104,15 @@ jobs:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - run: make image IMAGE=cairn:ci
       - run: make smoke-image IMAGE=cairn:ci
-      - name: Report all HIGH and CRITICAL vulnerabilities
+      - run: make image-edge VERSION=ci EDGE_IMAGE=cairn-edge:ci
+      - name: Build the Garden image
+        run: |
+          docker build --pull=false --build-arg VERSION=ci \
+            --build-arg REVISION="$GITHUB_SHA" \
+            --tag cairn-garden:ci --file garden/Dockerfile garden
+      # Every report runs before the first rejecting scan, so one image's
+      # failure never hides what the other images carry.
+      - name: Report all HIGH and CRITICAL vulnerabilities (server)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: cairn:ci
@@ -112,10 +120,42 @@ jobs:
           exit-code: "0"
           ignore-unfixed: false
           severity: HIGH,CRITICAL
-      - name: Reject fixable HIGH and CRITICAL vulnerabilities
+      - name: Report all HIGH and CRITICAL vulnerabilities (edge)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn-edge:ci
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          severity: HIGH,CRITICAL
+      - name: Report all HIGH and CRITICAL vulnerabilities (Garden)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn-garden:ci
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          severity: HIGH,CRITICAL
+      - name: Reject fixable HIGH and CRITICAL vulnerabilities (server)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: cairn:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Reject fixable HIGH and CRITICAL vulnerabilities (edge)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn-edge:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Reject fixable HIGH and CRITICAL vulnerabilities (Garden)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: cairn-garden:ci
           format: table
           exit-code: "1"
           ignore-unfixed: true

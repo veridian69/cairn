@@ -17,7 +17,7 @@ ROW = re.compile(r"^\| `([^`]+)` \| `([^`]+)` \|")
 GO_ROW_PREFIX = "| Go standard library and runtime reference texts | `go1.25.0` | "
 TOP_LEVEL_FILES = ("LICENSE", "LICENSE.txt", "NOTICE", "COPYING")
 SUPPLEMENTAL_FILES = {
-    "github.com/klauspost/compress@v1.18.5/LICENSE-s2": (
+    "github.com/klauspost/compress@v1.18.7/LICENSE-s2": (
         "github.com/klauspost/compress",
         "s2/LICENSE",
     ),
