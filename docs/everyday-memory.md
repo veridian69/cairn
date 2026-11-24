@@ -384,7 +384,7 @@ at most 4096 facts; beyond that the header shows `selection incomplete`, so
 search to narrow it. A search uses relevance order with `relevant_only: true`.
 Each row shows a trust marker (`[C]` candidate, `[V]` validated, `[F]` failed
 approach), the recorded time and the body's first line; `^` marks a fact
-inherited from an ancestor scope.
+inherited from an ancestor scope, and `*` the marked fact.
 
 | Key | List | Detail | Evidence |
 | --- | --- | --- | --- |
@@ -396,6 +396,14 @@ inherited from an ancestor scope.
 | `f` | Cycle filter all, candidate, validated | | |
 | `r` | Refresh from a new snapshot | | |
 | `p` | Promote the selected candidate | Promote this candidate | |
+| `m` | Mark the selected fact (again clears) | Mark this fact | |
+| `x` | Correct (invalidate) the selected fact | Correct this fact | |
+| `X` | Correct, superseded by the marked fact | The same for this fact | |
+| `d` | Disagree: the marked fact against the selected one | The same for this fact | |
+| `P` | Open pending proposals | | |
+| `s` | Suggestions for the selected fact | Suggestions for this fact | |
+| `c` | Connection and grants | | |
+| `S` | Session commands | | |
 | `e` | | Open source evidence | |
 | `n`/`b` | | | Next/previous window |
 | Esc, Backspace | | Back to list | Back to detail |
@@ -415,6 +423,71 @@ through `evidence-window`, 16384 bytes at a time, continuing at
 `next_start_byte`. All memory and evidence text is untrusted data: control,
 format and line-separator characters are drawn as visible escapes such as
 `\x1b`, never sent to the terminal.
+
+The footers show only the keys the current grants and the selected fact
+allow. The list footer leaves out the movement keys; on a narrower terminal it
+also leaves out Enter, `r`, `f`, `/`, `c`, `S` and `s`, in that order, until the
+other bindings fit, and the detail footer leaves out its scroll keys first.
+Every footer fits in 80 columns.
+
+### Pending proposals
+
+`P` opens a read-only view of the pending proposals at the profile scope,
+through `proposal-list`, 50 per request. `proposal-list` returns proposals in
+every state, ordered by proposal ID rather than by time; the browser shows only
+the pending ones and fetches up to ten further pages per keypress to fill the
+view. The pages are not a snapshot across requests, which the header states;
+`r` starts the listing again. Each row shows the recorded time, the state, the
+target scope, the start of the source fact ID and the first line of the
+proposal's reason. The movement keys work as in the list, and Esc, Backspace
+or `q` return to the list.
+
+Enter reads the selected proposal again through `proposal-read` and shows its
+ID, state, scope, target scope, source fact with its trust and invalidation,
+classification, proposer, recorded time, mutation ID, the whole reason wrapped
+and any decision recorded since the listing. The scroll keys move through it;
+Esc, Backspace or `q` return to the proposals. The view never accepts a
+proposal; `x` rejects a pending one, as described below. `proposal-list` needs a covering `retrieve` grant; when
+`check` reports no `retrieve`, `P` shows `proposals not permitted for this
+profile` and sends nothing. If the server refuses the listing or the first
+request fails, the view shows them as unavailable with the failure code; a
+failed later page marks the listing incomplete, and a failed read stays on the
+proposals with the failure code. Proposal reasons are untrusted text and are escaped like memory text.
+
+### Suggestions
+
+`s` asks `suggest` for the selected fact in the list, or the open fact in
+detail, with that one fact ID, a budget of 16384 and at most 8 suggestions.
+Each suggestion shows its kind (exact or possible duplicate, possible
+correction, related disagreement), its match basis and Cairn's fixed
+explanation, then each fact involved with its ID, trust, scope, recorded and
+invalidation times and its whole body, and any recorded correction or
+disagreement with its reason. The view also shows the budget consumed and
+whether the budget was exhausted or semantic recall was degraded. Bodies and
+reasons are untrusted text and are escaped like memory text. The scroll keys
+move through the view; Esc, Backspace or `q` return to where it was opened.
+The browser never acts on a suggestion: it does not correct, record a
+disagreement or save anything. An empty result says so, and does not prove
+there are no duplicates. A refused or failed request shows the failure code,
+never an empty result. `suggest` needs `retrieve`; without it `s` shows
+`suggestions not permitted for this profile`.
+
+### Connection and grants
+
+`c` shows what `check` reports: the status, the server's evaluation time, the
+instance ID, product version, contract identity and both contract digests, the
+authenticated principal and its kind, the scope and classification, and the
+`retrieve`, `ingest`, `promote` and `invalidate` permissions at that exact
+scope and classification. Below them it states which browser functions those
+grants make available: suggestions and proposals need `retrieve`, promotion
+needs `ingest` and `promote`, correction needs `invalidate`, disagreement needs
+`retrieve` and `ingest`, and proposal rejection needs `retrieve` (Cairn also
+checks `promote` at the proposal's target scope). It never shows the credential. Opening the view
+runs the diagnosis again, and `r` repeats it; a successful reading also
+updates which functions the browser offers. If a reading fails, the view shows
+the failure code above the last successful result, which keeps its own
+evaluation time. Grants can change at any moment, and Cairn checks every
+request again regardless of what the view shows.
 
 ### Promotion from the browser
 
@@ -445,6 +518,173 @@ starting another promotion. Quitting with an unknown
 outcome exits 3 and writes the content-free identities to stderr, with
 recovery `resubmit_identical_propose_then_proposal-accept_same_idempotency_keys_and_fields`.
 The reason is not repeated there; resubmit it exactly as entered.
+
+### Correcting, disagreeing and rejecting from the browser
+
+Three more writes follow the same pattern as promotion. Each needs a typed
+reason (1..4096 UTF-8 bytes; the input accepts nothing longer), then a confirm
+screen that shows exactly what will be sent, and is sent only when you press
+`y` there. Esc at the reason, or Esc or `n` on the confirm screen, cancels
+and sends nothing. The browser never repeats a write by itself.
+
+- `x` corrects the selected or open fact through `correct`: Cairn invalidates
+  it and keeps its history. `X` does the same with `superseded_by` set to the
+  marked fact. The browser corrects one fact at a time (the command accepts
+  up to 100), only at the profile's exact scope, and not a fact that is
+  already invalidated. Both need `invalidate`.
+- `d` records a disagreement through `disagree` between the marked fact (left)
+  and the selected or open fact (right). Both must be at the profile's exact
+  scope. Neither fact is changed, invalidated or re-trusted. It needs
+  `retrieve` and `ingest`.
+- In the pending proposals list or a proposal's detail, `x` rejects that
+  proposal through `proposal-reject`. The browser reads the proposal again
+  after you enter the reason; if it is no longer pending, it says so and sends
+  nothing. Nothing is published and the source fact is not invalidated. It
+  needs `retrieve`; Cairn also checks `promote` at the proposal's target scope,
+  which `check` does not evaluate, so a refusal is possible even when `x` is
+  offered.
+
+The second fact is always one you chose: `m` marks the selected or open fact,
+the row shows `*` and the header shows the mark, and `m` on the marked fact
+clears it. `x` ignores the mark; only `X` and `d` use it, and both refuse when
+nothing is marked, when the marked fact is the same fact, or when its ID is
+not a canonical UUIDv4. When a write's grant is missing from `check`, its key
+is left out of the footer and pressing it shows, for example, `correction not
+permitted for this profile`.
+
+The confirm screen shows the operation, every fact or proposal ID in full with
+the first line of the fact body or proposal reason (untrusted text, escaped),
+the reason, the scope (and for a rejection the target scope; for a
+disagreement the classification), and the idempotency key. The key is created
+once per attempt and reused for every retry of it.
+
+The outcome screen reports success only from a receipt: the receipt outcome
+(`committed`, or `replayed` for a resubmission), the mutation ID, the audit
+event and its time, and for a correction the invalidation time or for a
+disagreement the relationship ID. After a success the browser reloads the
+list, or the pending proposals after a rejection, and clears the mark. A
+confirmed refusal shows its failure code and that nothing was changed; a
+request that was never sent says so and `R` may send it with the same key.
+
+When the outcome is unknown (the request may have reached Cairn but no answer
+came back), the screen says so and reports neither success nor failure. It
+shows the identities and the reason, and `R` resubmits the identical request
+with the same key, which replays rather than duplicates. Only a receipt for
+that attempt resolves it; a retry that is refused or not sent leaves it
+unknown. While it is unknown, any new write, promotion included, reopens it.
+The classification follows the command line: a correction is unknown on any
+transport, internal or proxy failure, while a disagreement or rejection is
+unknown only once its own request was sent. Quitting with an unknown outcome
+exits 3 and writes to stderr, for each such write, the exact command (for
+example `cairn-memory --profile PATH correct`) and its stdin JSON with the
+same IDs and idempotency key, under `corrections`, `disagreements` or
+`proposal_rejections`, with recovery
+`resubmit_identical_correction_same_idempotency_key_and_fields`,
+`resubmit_identical_disagree_same_idempotency_key_and_fields` or
+`resubmit_identical_proposal-reject_same_idempotency_key_and_fields`. The
+reason is not repeated there: copy it from the outcome screen before quitting
+and resubmit it exactly as entered.
+
+### Session commands from the browser
+
+`S` opens the session view, the home of the six session commands. They use
+the profile's `session_id` and call the same client sequence, input checks
+and exit classification as `cairn-memory arrive`, `acknowledge-visit`,
+`remember`, `status`, `resume` and `abandon`. A profile without a
+`session_id` gets a view that says the session commands are unavailable and
+why (the command line refuses them with `session_id_required`), and offers
+none of them.
+
+| Key | Session view |
+| --- | --- |
+| `r` | Read `status` again (also read on opening) |
+| `a` | `arrive`: type a query, confirm, read the briefing |
+| `v` | `acknowledge-visit` for the visit shown in the view |
+| `w` | `remember`: type observations and a response, confirm |
+| `u` | `resume` the turn shown in the view |
+| `b` | `abandon` the turn shown in the view, with a reason |
+| Up/Down, `k`/`j`, PgUp/PgDn, `g`/`G` | Scroll |
+| Esc, Backspace, `q` | Back to the list |
+
+`status` is the only session command sent without a confirm screen: it reads
+the session (`session-read`) and opens nothing. It needs `retrieve`. Once this
+browser has sent a checkpoint, it reads `status` for that turn (as `status`
+with `turn_id` does); before that, for the session alone, which reports the
+session state but not a turn's, and does not report a visit ID. The view
+shows what it reports: the state, the turn and attempt IDs of the turn it
+reports, the turn count and prepared bytes, the visit ID, visit watermark and
+time, the acknowledged watermark and time, whether a committed custody receipt
+is present, and the number of stored observations (stored output is not fact
+custody). A failed read shows its code and no older status.
+
+Every other session command changes session state, needs `retrieve` and
+`ingest` as `check` reports them, and is sent only after `y` on a confirm
+screen that shows everything that will be sent; Esc or `n` cancels and sends
+nothing. Cairn checks every request again.
+
+- `arrive` asks for a query (1..8192 UTF-8 bytes) and uses the default budget
+  and no history fact IDs. The confirm screen says that it will open or
+  replay the session and issue a visit. The result screen shows the briefing
+  (warnings, failures, the selected summary with attribution and trust, and
+  the counts of recall hits, history packets and change references) and
+  states that the visit is NOT acknowledged. Each arrival issues a fresh
+  visit, so there is no resubmission key.
+- `acknowledge-visit` is never automatic. `v` offers the visit this browser's
+  own arrival just issued, otherwise a visit ID that `status` reports, if it
+  reports one. The result is an operational receipt; it saves no facts.
+- `remember` asks for one observation body per entry (1..4096 bytes); Enter on
+  an empty line ends the list, and the eighth entry ends it by itself. Zero
+  observations are allowed. Then it asks for the response (0..32768 bytes,
+  may be empty). The browser does not offer the optional observation
+  timestamps or `replaces_turn_id`; use the command line for those. It
+  generates `turn_id` and `attempt_id` once, when the checkpoint is created,
+  and the confirm screen shows them, the response and every observation in
+  full, and the turn-begin and turn-prepare keys.
+- `resume` and `abandon` act on the turn shown in the view: this browser's
+  unresolved or latest checkpoint, otherwise a turn that `status` reports, if
+  it reports one. For any other turn, use the command line. Both
+  are confirmed; `abandon` also needs a reason (1..4096 bytes). Abandoning
+  fences only an unprepared started turn; Cairn refuses it for prepared or
+  completed output.
+
+The outcome of `remember` and `resume` uses the command line's own states and
+never claims more:
+
+- Saved only when the turn is committed with a committed custody receipt; the
+  screen shows the fact IDs and the custody key. Saved facts are candidates,
+  and their searchability is not confirmed.
+- Skipped when there were no observations: no facts were saved.
+- Prepared means Cairn holds the output, but fact custody is not confirmed;
+  nothing is reported as saved, and `u` resumes the same turn to commit it.
+- Interrupted means the turn is started only; resume cannot recover lost
+  output, so resubmit the identical checkpoint (`R`) or abandon the turn.
+- Abandoned means the turn was abandoned and nothing was saved.
+
+Acknowledgement, abandonment and the visit are operational receipts and are
+never presented as saved facts. A confirmed refusal shows its code and the
+last confirmed stage.
+
+When an outcome is unknown, the screen says so and reports neither success
+nor failure. For a checkpoint, `R` resubmits it identically (same turn and
+attempt IDs, response and observations) and `u` resumes the same turn; for
+`resume`, `acknowledge-visit` and `abandon`, `R` resubmits with the same
+identities. Only a settled outcome for that turn or visit resolves it.
+After a saved checkpoint the browser reloads the list; after every session
+command it reads `status` again. Quitting with an unknown outcome exits 3 and
+writes, under `checkpoints`, `resumes`, `acknowledgements`, `abandonments` or
+`arrivals`, the exact command and stdin JSON with the command line's recovery
+value: `resubmit_identical_checkpoint_same_identities` names `remember` with
+the same `turn_id` and `attempt_id`, and
+`status_then_resume_without_regeneration` names `resume` with the same
+`turn_id` (or `status`, for an arrival). The command line reports an
+unconfirmed acknowledgement or abandonment as exit 4 without a recovery
+value; the browser keeps it unknown, as
+`resubmit_identical_acknowledge-visit_same_visit_id` or
+`resubmit_identical_abandon_same_turn_id_and_reason`. The response,
+observations and reason are not repeated there. The outcome screen of an
+unresolved checkpoint shows the response and every observation in full, and
+that of an abandonment its reason: copy them before quitting and resubmit
+them exactly as entered.
 
 ## Output and exit codes
 

@@ -240,6 +240,13 @@ session, and keeps the token in memory only. `history --remote --last N` shows
 up to 100 messages. `watch --remote` polls every two seconds. Remote `chat`
 cannot promote memories or pause agents.
 
+These commands do not work inside a user namespace, such as the command
+sandbox some agent hosts run shell commands in. A namespace that maps only the
+caller shows every other owner, root included, as one unidentifiable user, so
+Garden cannot tell whether the parents of its home are trustworthy and refuses,
+saying so. Run the command outside the sandbox. An agent reaches Garden
+through its plugin's tools, whose process the host starts outside the sandbox.
+
 ## Per-agent profiles and tools
 
 Install the binary, helpers and example profiles on each agent node:

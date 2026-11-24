@@ -1,9 +1,12 @@
 package attention
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -225,5 +228,78 @@ func TestChooseIdentityRejectsMissingAndInvalidNames(t *testing.T) {
 	}
 	if _, err := ChooseIdentity(strings.Repeat("a", 64), defaults, "claude"); err != nil {
 		t.Fatalf("64-character name refused: %v", err)
+	}
+}
+
+func TestInitialUserNamespace(t *testing.T) {
+	for mapping, want := range map[string]bool{
+		"         0          0 4294967295\n": true,
+		"      1000       1000          1\n": false,
+		"         0       1000          1\n": false,
+		"0 0 4294967295\n1 1 1\n":            false,
+		"":                                   false,
+	} {
+		if got := initialUserNamespace(mapping); got != want {
+			t.Errorf("initialUserNamespace(%q) = %v, want %v", mapping, got, want)
+		}
+	}
+}
+
+func TestParseOverflowUID(t *testing.T) {
+	for content, want := range map[string]uint32{"65534\n": 65534, "4242\n": 4242, "": 65534, "x": 65534} {
+		if got := parseOverflowUID(content); got != want {
+			t.Errorf("parseOverflowUID(%q) = %d, want %d", content, got, want)
+		}
+	}
+}
+
+func TestOwnerUnmappedIsFalseOutsideANamespace(t *testing.T) {
+	mapping, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil || !initialUserNamespace(string(mapping)) {
+		t.Skip("this test process is itself in a user namespace")
+	}
+	// A real "nobody" outside a namespace is another user, not an unmapped one.
+	if OwnerUnmapped(defaultOverflowUID) {
+		t.Fatal("the overflow uid counted as unmapped in the initial namespace")
+	}
+}
+
+// In a namespace that maps only the caller, a root-owned parent is still refused, and the refusal
+// names the namespace instead of "another user".
+func TestTrustedParentsRefusalNamesTheUserNamespace(t *testing.T) {
+	if os.Getenv("GARDEN_USERNS_CHILD") == "1" {
+		err := checkTrustedParents(os.Getenv("GARDEN_USERNS_PATH"), "the Garden home")
+		var parent *unsafeParentError
+		if !errors.As(err, &parent) {
+			t.Fatalf("no refusal inside the namespace: %v", err)
+		}
+		if parent.reason != UnmappedOwnerReason("the Garden home") {
+			t.Fatalf("reason = %q", parent.reason)
+		}
+		if strings.Contains(safeReason(err), string(filepath.Separator)) {
+			t.Fatalf("the safe reason carries a path: %q", safeReason(err))
+		}
+		return
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root owns every parent")
+	}
+	home := filepath.Join(privateHome(t), "home")
+	if err := checkTrustedParents(home, "the Garden home"); err != nil {
+		t.Skipf("the parents are not trusted even outside a namespace: %v", err)
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestTrustedParentsRefusalNamesTheUserNamespace$", "-test.v")
+	child.Env = append(os.Environ(), "GARDEN_USERNS_CHILD=1", "GARDEN_USERNS_PATH="+home)
+	child.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:  syscall.CLONE_NEWUSER,
+		UidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getuid(), HostID: os.Getuid(), Size: 1}},
+		GidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getgid(), HostID: os.Getgid(), Size: 1}},
+	}
+	out, err := child.CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "--- FAIL") && !strings.Contains(string(out), "--- PASS") {
+		t.Skipf("cannot create a user namespace here: %v", err)
+	}
+	if err != nil || !strings.Contains(string(out), "--- PASS") {
+		t.Fatalf("child failed: %v\n%s", err, out)
 	}
 }

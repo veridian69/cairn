@@ -83,6 +83,18 @@ func fixtureBeforeStart(t *testing.T, before func(*fixture)) *fixture {
 	t.Cleanup(func() { f.http.Close(); _ = f.srv.Close() })
 	return f
 }
+
+// restart stops the embedded NATS server and starts a new one on dataDir. f.ns is replaced only
+// once the new server is up, so a failed start leaves the cleanup a server it can stop.
+func (f *fixture) restart(t *testing.T, dataDir string) {
+	t.Helper()
+	f.ns.Stop()
+	ns, err := transport.NewServer(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ns = ns
+}
 func (f *fixture) start() {
 	f.t.Helper()
 	var err error
@@ -435,11 +447,7 @@ func TestDaemonRestartReconnectsThroughURLFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.ns.Stop()
-	f.ns, err = transport.NewServer(f.cfg.DataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f.restart(t, f.cfg.DataDir)
 	if err = os.WriteFile(f.cfg.DaemonURLFile, []byte(f.ns.ClientURL()), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -582,12 +590,8 @@ func TestRemoteClientRejectsEncodedResponsesAtHTTPBoundary(t *testing.T) {
 func TestReconnectRejectsDifferentDaemonStorage(t *testing.T) {
 	f := newFixture(t)
 	c := f.client("alice")
-	f.ns.Stop()
+	f.restart(t, t.TempDir())
 	var err error
-	f.ns, err = transport.NewServer(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err = os.WriteFile(f.cfg.DaemonURLFile, []byte(f.ns.ClientURL()), 0600); err != nil {
 		t.Fatal(err)
 	}
