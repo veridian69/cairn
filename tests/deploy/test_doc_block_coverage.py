@@ -172,6 +172,11 @@ EXCUSED = {
         "Install with the prepared nodes",
         1,
     ): "a flag fragment, not a command; the rehearsal passes the receipt flag",
+    (
+        "deploy/falkordb/README.md",
+        "Build and retain the runtime",
+        2,
+    ): "needs Trivy, which the rehearsal host is not required to carry; the scan is run by hand on each build and recorded in provenance.json",
 }
 
 

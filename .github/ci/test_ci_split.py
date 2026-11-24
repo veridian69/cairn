@@ -324,11 +324,23 @@ class SplitTests(unittest.TestCase):
         steps = image["steps"]
         self.assertIn({"run": "make image IMAGE=cairn:ci"}, steps)
         self.assertIn({"run": "make smoke-image IMAGE=cairn:ci"}, steps)
+        self.assertIn(
+            {"run": "make image-edge VERSION=ci EDGE_IMAGE=cairn-edge:ci"}, steps
+        )
+        garden = [s["run"] for s in steps if "garden/Dockerfile" in s.get("run", "")]
+        self.assertEqual(len(garden), 1)
+        self.assertIn("--tag cairn-garden:ci", garden[0])
+        # Every image the repository builds is scanned: all reports first,
+        # then the rejecting scans, so one failure cannot hide another.
+        images = ["cairn:ci", "cairn-edge:ci", "cairn-garden:ci"]
         trivy = [s["with"] for s in steps if "trivy-action@" in s.get("uses", "")]
         self.assertEqual(
-            [(s["exit-code"], s["ignore-unfixed"]) for s in trivy],
-            [("0", "false"), ("1", "true")],
+            [(s["image-ref"], s["exit-code"], s["ignore-unfixed"]) for s in trivy],
+            [(image, "0", "false") for image in images]
+            + [(image, "1", "true") for image in images],
         )
+        for scan in trivy:
+            self.assertEqual(scan["severity"], "HIGH,CRITICAL")
         for step in steps:
             self.assertNotIn("continue-on-error", step)
 

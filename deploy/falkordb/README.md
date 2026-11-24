@@ -69,6 +69,24 @@ and archive hash; it makes no registry-publication claim. Scan and test that
 build before using it for a real installation. The export verifies the complete
 OCI graph, so a Docker store which loses the image index is rejected.
 
+Scan the built image with Trivy, using the gate the repository's image check
+applies to the other images: the first command reports every HIGH and CRITICAL
+finding, the second fails on any that has a fix.
+
+```sh
+trivy image --severity HIGH,CRITICAL cairn-local/falkordb-server:rebuild
+trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+  cairn-local/falkordb-server:rebuild
+```
+
+A build is fit to select only when the second command exits zero. A fixable
+finding in the Ubuntu layer is normally cleared by rebuilding, since the final
+stage upgrades its packages; a rebuild is a new image and needs the scan and
+acceptance again. Record the scanner version, its database date and the counts
+with the build, as `provenance.json` does for the accepted one. This scan does
+not replace `scripts/check-runtime-currency`: it sees the Ubuntu packages only,
+as described above.
+
 The pinned upstream build currently emits non-fatal diagnostics from Ubuntu's
 missing optional manual-page alternatives, package-configuration deferral and
 container service-start/runlevel handling; Redis/FalkorDB cleanup and configure

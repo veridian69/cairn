@@ -1,6 +1,6 @@
 # Build with the garden/ directory as the context. Cairn's root context deliberately
 # excludes this component, its state and its credentials.
-ARG GO_IMAGE=golang:1.25.0-bookworm@sha256:81dc45d05a7444ead8c92a389621fafabc8e40f8fd1a19d7e5df14e61e98bc1a
+ARG GO_IMAGE=golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 FROM ${GO_IMAGE} AS builder
 # No default: an image whose binary and version label say `dev` is a

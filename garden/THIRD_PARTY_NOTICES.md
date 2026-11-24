@@ -17,7 +17,7 @@ module.
 
 | Module | Version | Licence identified from the bundled source file |
 | --- | --- | --- |
-| `github.com/antithesishq/antithesis-sdk-go` | `v0.6.0-default-no-op` | MIT |
+| `github.com/antithesishq/antithesis-sdk-go` | `v0.7.0-default-no-op` | MIT |
 | `github.com/atotto/clipboard` | `v0.1.4` | BSD-3-Clause |
 | `github.com/aymanbagabas/go-osc52/v2` | `v2.0.1` | MIT |
 | `github.com/charmbracelet/bubbles` | `v0.21.0` | MIT |
@@ -31,19 +31,19 @@ module.
 | `github.com/dustin/go-humanize` | `v1.0.1` | MIT |
 | `github.com/google/jsonschema-go` | `v0.4.3` | MIT |
 | `github.com/google/uuid` | `v1.6.0` | BSD-3-Clause |
-| `github.com/klauspost/compress` | `v1.18.5` | BSD-3-Clause |
+| `github.com/klauspost/compress` | `v1.18.7` | BSD-3-Clause |
 | `github.com/lucasb-eyer/go-colorful` | `v1.2.0` | MIT |
 | `github.com/mattn/go-isatty` | `v0.0.20` | MIT |
 | `github.com/mattn/go-runewidth` | `v0.0.16` | MIT |
-| `github.com/minio/highwayhash` | `v1.0.4-0.20251030100505-070ab1a87a76` | Apache-2.0 |
+| `github.com/minio/highwayhash` | `v1.0.4` | Apache-2.0 |
 | `github.com/modelcontextprotocol/go-sdk` | `v1.7.0` | Apache-2.0 and MIT (file-level transition described in the upstream licence) |
 | `github.com/muesli/ansi` | `v0.0.0-20230316100256-276c6243b2f6` | MIT |
 | `github.com/muesli/cancelreader` | `v0.2.2` | MIT |
 | `github.com/muesli/termenv` | `v0.16.0` | MIT |
-| `github.com/nats-io/jwt/v2` | `v2.8.1` | Apache-2.0 |
-| `github.com/nats-io/nats-server/v2` | `v2.12.6` | Apache-2.0 |
-| `github.com/nats-io/nats.go` | `v1.50.0` | Apache-2.0 |
-| `github.com/nats-io/nkeys` | `v0.4.15` | Apache-2.0 |
+| `github.com/nats-io/jwt/v2` | `v2.8.2` | Apache-2.0 |
+| `github.com/nats-io/nats-server/v2` | `v2.12.12` | Apache-2.0 |
+| `github.com/nats-io/nats.go` | `v1.51.0` | Apache-2.0 |
+| `github.com/nats-io/nkeys` | `v0.4.16` | Apache-2.0 |
 | `github.com/nats-io/nuid` | `v1.0.1` | Apache-2.0 |
 | `github.com/remyoudompheng/bigfft` | `v0.0.0-20230129092748-24d4a6f8daec` | BSD-3-Clause |
 | `github.com/rivo/uniseg` | `v0.4.7` | MIT |
@@ -53,11 +53,11 @@ module.
 | `github.com/spf13/pflag` | `v1.0.9` | BSD-3-Clause |
 | `github.com/xo/terminfo` | `v0.0.0-20220910002029-abceb7e1c41e` | MIT |
 | `github.com/yosida95/uritemplate/v3` | `v3.0.2` | BSD-3-Clause |
-| `golang.org/x/crypto` | `v0.49.0` | BSD-3-Clause |
+| `golang.org/x/crypto` | `v0.55.0` | BSD-3-Clause |
 | `golang.org/x/oauth2` | `v0.35.0` | BSD-3-Clause |
-| `golang.org/x/sync` | `v0.20.0` | BSD-3-Clause |
-| `golang.org/x/sys` | `v0.42.0` | BSD-3-Clause |
-| `golang.org/x/term` | `v0.41.0` | BSD-3-Clause |
+| `golang.org/x/sync` | `v0.22.0` | BSD-3-Clause |
+| `golang.org/x/sys` | `v0.47.0` | BSD-3-Clause |
+| `golang.org/x/term` | `v0.45.0` | BSD-3-Clause |
 | `golang.org/x/time` | `v0.15.0` | BSD-3-Clause |
 | Go standard library and runtime reference texts | `go1.25.0` | BSD-3-Clause; the actual compiler version for each binary is recorded with `go version -m` |
 | `gopkg.in/yaml.v3` | `v3.0.1` | MIT and Apache-2.0 (file-level split described in `LICENSE` and `NOTICE`) |
@@ -72,7 +72,7 @@ Supplemental source files included in the bundle:
   texts for the Go standard library and runtime. The licence check compares the
   active Go 1.25-or-newer toolchain to these exact bytes; the binary's actual
   compiler version remains part of per-artefact `go version -m` evidence.
-- `github.com/klauspost/compress@v1.18.5/LICENSE-s2` for the linked `s2`
+- `github.com/klauspost/compress@v1.18.7/LICENSE-s2` for the linked `s2`
   package.
 - `gopkg.in/yaml.v3@v3.0.1/NOTICE` from the module root.
 - `modernc.org/libc@v1.70.0/LICENSE-3RD-PARTY.md` for code incorporated from
