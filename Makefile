@@ -162,8 +162,13 @@ compose-config:
 	FALKORDB_CONFIG_FILE=./falkordb.conf \
 		$(COMPOSE) -f $(COMPOSE_DIR)/compose.graphiti.yaml config -q
 
+# The CI split policy test pins this file's digest and the shape of the
+# workflows. Hosted CI runs it only where the workflows run, so a checkout
+# that CI never sees could carry a stale pin unnoticed; running it here
+# closes that, and it takes about half a minute.
 check: check-cairn-mcp check-garden
 	uv lock --check
+	uv run --locked python -B .github/ci/test_ci_split.py
 	./scripts/check-license
 	uv run --locked ruff check .
 	uv run --locked ruff format --check .

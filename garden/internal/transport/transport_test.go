@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -499,5 +502,41 @@ func TestSubscribeFromSeqEphemeralDoesNotRetainOnStream(t *testing.T) {
 	stream.mu.Unlock()
 	if retained != 0 {
 		t.Fatalf("ephemeral subscriptions retained %d stop funcs on the Stream", retained)
+	}
+}
+
+// A start that fails inside the embedded server reports the server's own reason, not only
+// "not ready": the server logs it as a fatal line and returns without a listener.
+func TestNewServerReportsWhyTheServerDidNotStart(t *testing.T) {
+	dir := t.TempDir()
+	// JetStream keeps its files under <store>/jetstream; a regular file there cannot be used.
+	if err := os.WriteFile(filepath.Join(dir, "jetstream"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(dir)
+	if err == nil {
+		server.Stop()
+		t.Fatal("a store that cannot hold JetStream started")
+	}
+	if !strings.HasPrefix(err.Error(), "NATS server not ready: ") || !strings.Contains(err.Error(), "JetStream") {
+		t.Fatalf("error does not carry the server's reason: %v", err)
+	}
+}
+
+func TestStartFailurePrefersTheFirstFatalLine(t *testing.T) {
+	failure := &startFailure{}
+	if failure.reason() != "" {
+		t.Fatal("a reason before any line")
+	}
+	failure.Errorf("first %s", "error")
+	failure.Errorf("last %s", "error")
+	if got := failure.reason(); got != "last error" {
+		t.Fatalf("reason = %q", got)
+	}
+	failure.Fatalf("fatal %d", 1)
+	failure.Fatalf("fatal %d", 2)
+	failure.Errorf("later error")
+	if got := failure.reason(); got != "fatal 1" {
+		t.Fatalf("reason = %q", got)
 	}
 }

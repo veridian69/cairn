@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -96,6 +97,9 @@ func checkTrustedParents(path, what string) error {
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok || (stat.Uid != 0 && stat.Uid != uid) {
+			if ok && OwnerUnmapped(stat.Uid) {
+				return &unsafeParentError{UnmappedOwnerReason(what), current}
+			}
 			return &unsafeParentError{"a parent of " + what + " is owned by another user", current}
 		}
 		if info.Mode().Perm()&0022 != 0 && info.Mode()&os.ModeSticky == 0 {
@@ -444,4 +448,42 @@ func lockHome(root *os.Root) (func(), error) {
 		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 		_ = file.Close()
 	}, nil
+}
+
+// A process in a user namespace sees every owner the namespace does not map as the kernel's
+// overflow uid. An agent's command sandbox is such a namespace: it maps the caller alone, so a
+// root-owned /home looks no different from a directory owned by a stranger. The ownership rule
+// cannot be decided there and stays a refusal; these helpers only let the refusal say why.
+
+const defaultOverflowUID = 65534
+
+// OwnerUnmapped reports whether uid stands for an owner this process's user namespace does not
+// map, as opposed to a real other user.
+func OwnerUnmapped(uid uint32) bool {
+	overflow, _ := os.ReadFile("/proc/sys/kernel/overflowuid")
+	mapping, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil {
+		return false
+	}
+	return uid == parseOverflowUID(string(overflow)) && !initialUserNamespace(string(mapping))
+}
+
+// UnmappedOwnerReason is what a refusal says when OwnerUnmapped holds. It names no path.
+func UnmappedOwnerReason(what string) string {
+	return "a parent of " + what + " has an owner this process cannot identify, because it runs in a user namespace (a command sandbox); run garden outside the sandbox, or use the Garden tools of the agent's plugin"
+}
+
+func parseOverflowUID(content string) uint32 {
+	value, err := strconv.ParseUint(strings.TrimSpace(content), 10, 32)
+	if err != nil {
+		return defaultOverflowUID
+	}
+	return uint32(value)
+}
+
+// initialUserNamespace reports whether a uid_map is the identity map over every uid, which only
+// the initial namespace has. Anything it cannot read as that counts as a namespace.
+func initialUserNamespace(mapping string) bool {
+	fields := strings.Fields(mapping)
+	return len(fields) == 3 && fields[0] == "0" && fields[1] == "0" && fields[2] == "4294967295"
 }

@@ -1,5 +1,6 @@
 """#108: the memory MCP server tells clients its conventions."""
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -11,6 +12,7 @@ from memory_support import REALM, Instance, serve
 
 from cairn import __version__
 from cairn.runtime.config import McpConfig
+from cairn.transports.memory import contracts
 from cairn.transports.memory.contracts import MANIFEST_NAME, packaged_bytes
 from cairn.transports.memory.instructions import (
     REALM_PLACEHOLDER,
@@ -61,6 +63,28 @@ def test_every_scope_parameter_in_the_manifest_carries_the_hint() -> None:
         )
 
 
+def test_the_manifest_carries_the_instruction_template() -> None:
+    # With the realm unsubstituted: the realm is deployment configuration.
+    manifest = json.loads(packaged_bytes(MANIFEST_NAME))
+    assert manifest["instructions"] == TEMPLATE
+    assert REALM_PLACEHOLDER in manifest["instructions"]
+
+
+def test_a_changed_template_changes_the_manifest_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The packaged manifest is what ``mcp_contract_digest`` hashes, and a
+    # contract test pins it to this render: a template edit fails that test
+    # until the manifest is regenerated, and the digest then moves.
+    monkeypatch.setattr(contracts, "TEMPLATE", TEMPLATE + "\n- One more rule.")
+    changed = contracts.render_document(mcp=True).encode()
+    assert changed != packaged_bytes(MANIFEST_NAME)
+    assert (
+        hashlib.sha256(changed).digest()
+        != hashlib.sha256(packaged_bytes(MANIFEST_NAME)).digest()
+    )
+
+
 async def _initialize(instance: Instance) -> dict[str, Any]:
     _, token = instance.add_actor()
     async with serve(instance) as http:
@@ -98,6 +122,11 @@ async def test_initialize_returns_the_instructions_for_the_configured_realm(
     result = await _initialize(instance)
 
     assert result["instructions"] == connector_instructions(REALM)
+    # The served text is the manifest's, with the realm filled in.
+    manifest = json.loads(packaged_bytes(MANIFEST_NAME))
+    assert result["instructions"] == manifest["instructions"].replace(
+        REALM_PLACEHOLDER, REALM
+    )
 
 
 @pytest.mark.anyio

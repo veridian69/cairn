@@ -1248,6 +1248,53 @@ async def test_a_cancelled_flush_task_fails_every_waiter() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_flush_task_cancelled_before_its_first_step_fails_every_waiter() -> (
+    None
+):
+    # A task cancelled before it first runs never enters _run, so
+    # nothing inside _run can settle the waiters.
+    provider = _FakeProvider([])
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=2, linger_seconds=60.0, max_facts=1000
+    )
+    first = asyncio.ensure_future(batcher.submit(_context("a"), None))
+    second = asyncio.ensure_future(batcher.submit(_context("b"), None))
+    await asyncio.sleep(0)  # both submits run; the second flushes
+    (flush_task,) = batcher._inflight
+    flush_task.cancel()  # before the flush task's first step
+
+    for waiter in (first, second):
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(waiter, 2)
+    assert provider.calls == []  # _run never started
+    assert flush_task.cancelled()
+    assert batcher._inflight == set()
+
+
+@pytest.mark.anyio
+async def test_a_flush_task_that_fails_after_the_combined_call_fails_every_waiter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The same class of fault: the task ends with waiters unsettled,
+    # here through a fault after the provider call has returned.
+    def broken(*args: Any, **kwargs: Any) -> dict[int, Any]:
+        raise RuntimeError("fault after the combined call")
+
+    monkeypatch.setattr(seam, "_trusted_answers", broken)
+    provider = _FakeProvider([_two_empty_resolutions()])
+    batcher = seam.EdgeBatcher(
+        provider, batch_size=2, linger_seconds=60.0, max_facts=1000
+    )
+    first = asyncio.ensure_future(batcher.submit(_context("a"), None))
+    second = asyncio.ensure_future(batcher.submit(_context("b"), None))
+
+    for waiter in (first, second):
+        with pytest.raises(RuntimeError, match="fault after the combined call"):
+            await asyncio.wait_for(waiter, 2)
+    assert batcher._inflight == set()
+
+
+@pytest.mark.anyio
 async def test_a_cancelled_submit_leaves_nothing_queued() -> None:
     # submit() appends its entry then awaits. GraphitiIndex._call's
     # timeout and shutdown paths cancel that await, and nothing removed

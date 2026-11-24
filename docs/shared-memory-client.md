@@ -102,6 +102,18 @@ client validates the response and compares any supplied expected identity or
 digests. Authentication failure, lack of authority, incompatible contracts,
 wrong instance and malformed responses remain distinct outcomes.
 
+`mcp_contract_digest` is the SHA-256 of `contracts/cairn-memory-mcp-tools-v1.json`.
+Besides the tools, that file carries the text the memory MCP server sends as
+its `instructions` when a realm is configured, in the `instructions` key and
+with `<realm>` in place of the realm. A changed instruction text therefore
+changes the digest. Three limits apply:
+
+- The digest shows drift from a reviewed file. It is no defence against a
+  hostile server, which answers `diagnose` itself.
+- An MCP client has read the instructions before it can call any tool, so the
+  check serves operators and installers, not a session already under way.
+- The realm is deployment configuration and lies outside the digest.
+
 Diagnostics describe eligibility at the reported evaluation time. Each
 subsequent operation still checks current grants, content and evidence. A
 principal label supplied by a model is never the authenticated identity. The

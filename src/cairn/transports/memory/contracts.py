@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from pydantic.json_schema import JsonSchemaMode, models_json_schema
 
 from cairn.catalogue.transactions import FailureCode
+from cairn.transports.memory.instructions import TEMPLATE
 from cairn.transports.memory.models import PageFailureEnvelope
 from cairn.transports.memory.operations import OPERATIONS, PROPOSAL_TOOL_NAMES
 from cairn.transports.memory.server import PROPOSAL_KEY_SCHEMA, build_memory_tool
@@ -90,6 +91,10 @@ def manifest_document() -> dict[str, Any]:
             for entry in OPERATIONS
         ],
         "failureCodes": [code.value for code in FailureCode],
+        # The text sent as the MCP ``instructions`` field, with the realm
+        # unsubstituted: the realm is deployment configuration. Its place
+        # here puts the text under ``mcp_contract_digest``.
+        "instructions": TEMPLATE,
     }
 
 

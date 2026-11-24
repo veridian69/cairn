@@ -195,6 +195,30 @@ def _cancel_task(task: asyncio.Task[Any], _: asyncio.Future[Any]) -> None:
     task.cancel()
 
 
+def _settle_abandoned(
+    batch: list[tuple[dict[str, Any], asyncio.Future[dict[str, Any]], int | None]],
+    task: asyncio.Task[None],
+) -> None:
+    """Fail every waiter a finished batch task left without an answer.
+
+    ``_run`` settles its waiters itself wherever it can. It cannot when the
+    task is cancelled before its first step, because the coroutine then never
+    runs, nor when it raises outside its own handlers. Without this a waiter
+    would wait until its caller's deadline.
+    """
+    if task.cancelled():
+        error: BaseException | None = None
+    else:
+        error = task.exception() or RuntimeError("edge batch ended unanswered")
+    for _, future, _ in batch:
+        if future.done():
+            continue
+        if error is None:
+            future.cancel()
+        else:
+            future.set_exception(error)
+
+
 def _still_wanted(waiter: asyncio.Future[Any] | None) -> None:
     """Stop before a provider call whose waiter has already gone."""
     if waiter is not None and waiter.done():
@@ -311,6 +335,7 @@ class EdgeBatcher:
         task = self._loop.create_task(self._run(batch))
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
+        task.add_done_callback(functools.partial(_settle_abandoned, batch))
         if self._pending:
             self._timer = self._loop.call_later(self._linger_seconds, self._flush)
 

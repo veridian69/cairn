@@ -155,6 +155,9 @@ func checkCAFile(path string) error {
 			return errors.New("a parent of the Garden TLS CA file is not a plain directory")
 		}
 		if !ownedByCallerOrRoot(info) {
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok && attention.OwnerUnmapped(stat.Uid) {
+				return errors.New(attention.UnmappedOwnerReason("the Garden TLS CA file"))
+			}
 			return errors.New("a parent of the Garden TLS CA file is owned by another user")
 		}
 		if info.Mode().Perm()&0022 != 0 && info.Mode()&os.ModeSticky == 0 {

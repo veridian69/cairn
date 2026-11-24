@@ -3,6 +3,7 @@ package transport
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -50,11 +51,24 @@ func NewServer(dataDir string) (_ *Server, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// NoLog keeps the server quiet, and it also hides why a start failed: Start returns
+	// without a listener when JetStream cannot be enabled, and reports the reason only as
+	// a fatal log line. Keep that line for the error below.
+	failure := &startFailure{}
+	ns.SetLogger(failure, false, false)
 	ns.Start()
 
-	if !ns.ReadyForConnections(5 * time.Second) {
+	// A fatal line means Start has given up, so there is nothing left to wait for.
+	ready := false
+	for deadline := time.Now().Add(5 * time.Second); !ready && time.Now().Before(deadline) && !failure.failed(); {
+		ready = ns.ReadyForConnections(50 * time.Millisecond)
+	}
+	if !ready {
 		ns.Shutdown()
 		ns.WaitForShutdown()
+		if reason := failure.reason(); reason != "" {
+			return nil, fmt.Errorf("NATS server not ready: %s", reason)
+		}
 		return nil, errors.New("NATS server not ready")
 	}
 	canonical, err := filepath.Abs(dataDir)
@@ -84,6 +98,47 @@ func NewServer(dataDir string) (_ *Server, err error) {
 		return nil, err
 	}
 	return &Server{ns: ns, identityConnection: nc, storeLock: lock}, nil
+}
+
+// startFailure is the embedded server's logger. It keeps the first fatal line, or failing that
+// the last error line, and drops everything else.
+type startFailure struct {
+	mu          sync.Mutex
+	fatal, last string
+}
+
+func (f *startFailure) Fatalf(format string, v ...any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fatal == "" {
+		f.fatal = fmt.Sprintf(format, v...)
+	}
+}
+
+func (f *startFailure) Errorf(format string, v ...any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.last = fmt.Sprintf(format, v...)
+}
+
+func (*startFailure) Noticef(string, ...any) {}
+func (*startFailure) Warnf(string, ...any)   {}
+func (*startFailure) Debugf(string, ...any)  {}
+func (*startFailure) Tracef(string, ...any)  {}
+
+func (f *startFailure) failed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fatal != ""
+}
+
+func (f *startFailure) reason() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fatal != "" {
+		return f.fatal
+	}
+	return f.last
 }
 
 // ClientURL returns the connection URL for NATS clients.

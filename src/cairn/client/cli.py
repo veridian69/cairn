@@ -52,7 +52,7 @@ _QUERY = (
 _TURN = '"turn_id":"11111111-1111-4111-8111-111111111111"'
 _HELP = {
     "check": "No stdin read. Check explicit expected instance and current grants; ready is not a write permission guarantee.",
-    "browse": "Interactive terminal browser; no stdin JSON. Requires a terminal on stdin and stdout, else exit 2 (terminal_required). Lists current facts at the profile scope and its ancestors newest first (recall-page, relevant_only false); / searches, f filters candidate/validated/all on fetched pages, Enter opens history, e opens source evidence. p promotes a candidate at the exact profile scope only when check reports ingest and promote: it records a proposal, then accepts it with the fact's own source evidence, after a required reason and explicit y. Facts without source evidence are refused. Exit 0 on quit; 3 if a promotion outcome is still unknown, with content-free recovery identities on stderr; 4 operational failure.",
+    "browse": "Interactive terminal browser; no stdin JSON. Requires a terminal on stdin and stdout, else exit 2 (terminal_required). Lists current facts at the profile scope and its ancestors newest first (recall-page, relevant_only false); / searches, f filters candidate/validated/all on fetched pages, Enter opens history, e opens source evidence. s shows read-only suggestions for the selected or open fact (suggest; never acted on), P lists pending proposals read only (proposal-list), both only when check reports retrieve. c shows the connection and current grants as check reports them, read again on opening and with r. p promotes a candidate at the exact profile scope only when check reports ingest and promote: it records a proposal, then accepts it with the fact's own source evidence, after a required reason and explicit y. Facts without source evidence are refused. m marks the selected or open fact as the second fact. x corrects (invalidates) the selected or open fact at the exact profile scope, X does so superseded by the marked fact, both only when check reports invalidate; d records a disagreement between the marked fact and this one, both at the exact profile scope, only when check reports retrieve and ingest; x in the proposal views rejects a pending proposal, re-read first, only when check reports retrieve (Cairn checks promote at its target). One fact per correction. Every write needs a reason (1..4096 UTF-8 bytes), shows a confirm screen with what will be sent and its idempotency key, and is sent only on y; Esc cancels and sends nothing. Only a receipt is reported as success; an unknown outcome keeps the same key for R. S opens the session view for the profile's session_id (without one, every session command is unavailable, as in the CLI): it reads status on opening and with r, the only session command sent without confirmation. a arrive asks for a query, opens/replays the session and issues a visit after y, then shows the briefing; it never acknowledges. v acknowledge-visit acknowledges the visit just issued (or one status reports), after y. w remember takes 0..8 observation bodies (1..4096 bytes each, no timestamps; an empty line ends) and a response (0..32768 bytes, may be empty), generates turn_id and attempt_id once and sends after y. u resume and b abandon (reason required) act on this browser's latest turn (or one status reports), after y; status is read for that turn once there is one. These need retrieve and ingest as check reports them (status: retrieve). Only a committed custody receipt is reported as saved; prepared is not saved, empty observations are skipped, and an unknown checkpoint keeps its identities for R or u. Exit 0 on quit; 3 if any write outcome is still unknown, with content-free recovery identities and the exact command and stdin JSON (reason, response and observations not repeated) on stderr; 4 operational failure.",
     "arrive": _QUERY
     + '\nhistory_fact_ids: optional distinct UUIDv4 array, 0..8. Opens/replays the configured session and issues a fresh visit. Never acknowledges. Example: {"query":"current work","history_fact_ids":[]}',
     "recall": _QUERY
@@ -325,20 +325,24 @@ async def execute(
 
                 permissions = diagnostic.permissions
                 controller = BrowseController(
-                    MemoryBrowseBackend(client, browse_dispatched),
+                    MemoryBrowseBackend(
+                        client, browse_dispatched, session_id=profile.session_id
+                    ),
                     scope=profile.scope,
                     may_promote=permissions is not None
                     and permissions.ingest
                     and permissions.promote,
+                    connection=diagnostic,
+                    profile=profile,
                 )
                 terminal_failed = False
                 try:
                     await run_terminal(controller)
                 except RuntimeError:
                     terminal_failed = True
-                packet = recovery_packet(controller)
+                packet = recovery_packet(controller, args.profile)
                 if packet is not None:
-                    # An unknown promotion outcome stays exit 3 even if the
+                    # An unknown write outcome stays exit 3 even if the
                     # terminal or stderr failed afterwards.
                     try:
                         write(stderr, render_result(command, packet, human=human))
