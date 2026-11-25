@@ -56,5 +56,5 @@ models. The API also reports `shutdown_date` per model on
 ## History
 
 - 21 Nov 2026: `gpt-5.4-nano` (shutdown 1 April 2027, announced 1 Oct 2026)
-  replaced by `gpt-6-luna` in v0.11.5.
+  replaced by `gpt-6-luna` in v0.11.6.
 - 10 Oct 2026: `gpt-4.1-nano` (shutdown 23 Oct 2026) replaced by `gpt-5.6-luna`.

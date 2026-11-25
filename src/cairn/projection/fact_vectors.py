@@ -9,8 +9,10 @@ import hashlib
 import json
 import math
 import struct
+import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
 
 from graphiti_core.driver.driver import GraphDriver
 from graphiti_core.embedder.openai import OpenAIEmbedder
@@ -247,10 +249,284 @@ _COVERAGE_ROWS = (
     + "RETURN e.uuid AS uuid, valid\n"
 )
 
+# #318: the gate text restricted to named episodes, for the facts one
+# projection wrote. Same predicate, so a fact it passes passes the gate.
+_COVERAGE_NAMED = _COVERAGE_ROWS.replace(
+    "MATCH (e:Episodic) WHERE e.group_id = $group_id",
+    "MATCH (e:Episodic) WHERE e.uuid IN $uuids AND e.group_id = $group_id",
+)
+assert _COVERAGE_NAMED != _COVERAGE_ROWS
+# #318: scoring for a partition whose coverage is already established (see
+# ``PartitionVerdicts``). It proves nothing; for a covered partition whose
+# counts agree it selects what ``_COVERAGE_SEARCH`` selects, in that order.
+_TRUSTED_SEARCH = """
+MATCH (v:CairnFactVector) WHERE v.group_id = $group_id
+WITH v.uuid AS uuid,
+     (2 - vec.cosineDistance(vecf32(v.embedding), vecf32($query_vector)))/2 AS score
+WHERE score > $cutoff
+WITH uuid, score ORDER BY score DESC, uuid ASC
+RETURN collect(uuid)[..$limit] AS candidates
+"""
+# One row even for an empty graph: each aggregate has no grouping key.
+PARTITION_COUNTS = """
+OPTIONAL MATCH (e:Episodic)
+WITH count(e) AS all_episodes, count(DISTINCT e.uuid) AS identities,
+     count(CASE WHEN e.group_id = $group_id THEN 1 ELSE null END) AS episodes
+OPTIONAL MATCH (v:CairnFactVector)
+WITH all_episodes, identities, episodes, count(v) AS all_vectors,
+     count(CASE WHEN v.group_id = $group_id THEN 1 ELSE null END) AS vectors
+OPTIONAL MATCH (h:CairnFactChunkSet)
+RETURN all_episodes, identities, episodes, all_vectors, vectors, count(h) AS all_headers,
+       count(CASE WHEN h.group_id = $group_id THEN 1 ELSE null END) AS headers
+"""
+
+
+async def partition_counts(driver: GraphDriver, group_id: str) -> tuple[int, int, int]:
+    """Episodes, fact vectors and chunk-set headers of this partition in the
+    driver's graph. A record of any other partition there is a defect: the
+    gates walk episodes and the trusted scans walk records, and only a graph
+    holding nothing else lets equal counts stand for the same facts."""
+    await _ready(driver)
+    rows, _, _ = await driver.execute_query(PARTITION_COUNTS, group_id=group_id)
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+        raise FactVectorError("fact_vector_rebuild_required")
+    names = ("episodes", "vectors", "headers")
+    counts = tuple(rows[0].get(name) for name in names)
+    totals = tuple(rows[0].get("all_" + name) for name in names)
+    if any(type(count) is not int or count < 0 for count in counts + totals):
+        raise FactVectorError("fact_vector_rebuild_required")
+    # Two episodes sharing an identity would each pass the gates on the one
+    # record they share, and leave room for a record no episode owns.
+    if counts != totals or rows[0].get("identities") != counts[0]:
+        raise FactVectorError("fact_vector_rebuild_required")
+    return cast(tuple[int, int, int], counts)
+
+
+def counts_agree(counts: tuple[int, int, int], units: bool) -> bool:
+    """One fact vector per episode and, where units are graded, one header.
+
+    The gates walk episodes, so they cannot see a record no episode owns.
+    Equal counts beside a passed gate make the trusted scans, which walk the
+    records, select from exactly the facts the gate covered."""
+    episodes, vectors, headers = counts
+    return episodes == vectors and (not units or episodes == headers)
+
+
+@dataclass(slots=True)
+class _Verdict:
+    verified: bool = False
+    units: bool = False
+    counts: tuple[int, int, int] | None = None
+    epoch: int = 0
+    writers: int = 0
+    base: bool = False
+    base_units: bool = False
+    failed: bool = False
+
+
+class PartitionVerdicts:
+    """#318: which partitions have passed their coverage gates since the
+    last write, so a read need not walk the partition again to prove it.
+
+    A verdict is established by a gated read that passed, and only if no
+    write was running at any point of it. A write withdraws it for as long as it runs; when
+    the last overlapping write ends it is restored only if the partition
+    held a verdict before, every one of those writes succeeded and the
+    facts they wrote passed the same gates by name. Anything else leaves the
+    partition unverified, and the next read proves it in full as before.
+
+    What this gives up is detection, at the next read, of a record damaged
+    behind this process's back between writes. The stored counts catch a
+    lost or added record on the next read; the start-up audit (I-99) and
+    every gated read still see the rest. Thread-safe: reads and deliveries
+    arrive on different threads."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._verdicts: dict[str, _Verdict] = {}
+        # One clock for every epoch, so no two events share a value. A
+        # partition with no entry stands at ``_floor``, the last drop of all.
+        self._clock = 0
+        self._floor = 0
+
+    def _tick(self) -> int:
+        self._clock += 1
+        return self._clock
+
+    def _of(self, group: str) -> _Verdict:
+        """The entry for a partition that was written to or holds a verdict.
+        Reads alone never create one: a caller may name any partition, and
+        an entry per name asked for would grow without bound."""
+        verdict = self._verdicts.get(group)
+        if verdict is None:
+            verdict = self._verdicts[group] = _Verdict(epoch=self._floor)
+        return verdict
+
+    def _epoch(self, group: str) -> int:
+        verdict = self._verdicts.get(group)
+        return self._floor if verdict is None else verdict.epoch
+
+    def epoch(self, group: str) -> int:
+        with self._lock:
+            return self._epoch(group)
+
+    def held(self, group: str, units: bool) -> tuple[int, tuple[int, int, int]] | None:
+        """The epoch and counts of a verdict that covers this read."""
+        with self._lock:
+            verdict = self._verdicts.get(group)
+            if (
+                verdict is None
+                or not verdict.verified
+                or verdict.counts is None
+                or (units and not verdict.units)
+            ):
+                return None
+            return verdict.epoch, verdict.counts
+
+    def unchanged(self, group: str, epoch: int) -> bool:
+        with self._lock:
+            verdict = self._verdicts.get(group)
+            return verdict is not None and verdict.verified and verdict.epoch == epoch
+
+    def establish(
+        self, group: str, epoch: int, counts: tuple[int, int, int], units: bool
+    ) -> None:
+        """Record a passed gated read, unless a write or a drop intervened.
+
+        An empty partition gets no verdict: its walk costs nothing, and a
+        verdict for every empty partition a caller names would be unbounded."""
+        with self._lock:
+            if (
+                self._epoch(group) != epoch
+                or counts[0] == 0
+                or not counts_agree(counts, units)
+            ):
+                return
+            verdict = self._of(group)
+            if verdict.writers:
+                return
+            if verdict.verified and verdict.units and not units:
+                return  # Keep the wider proof already held.
+            verdict.verified, verdict.units, verdict.counts = True, units, counts
+
+    def drop(self, group: str | None = None) -> None:
+        """Withdraw one verdict, or all of them; overlapping writes cannot
+        restore what was dropped."""
+        with self._lock:
+            if group is not None:
+                targets = [self._verdicts[group]] if group in self._verdicts else []
+            else:
+                # Entries with a write in progress keep their bookkeeping;
+                # the rest are forgotten and stand at the new floor.
+                self._floor = self._tick()
+                self._verdicts = {
+                    name: verdict
+                    for name, verdict in self._verdicts.items()
+                    if verdict.writers
+                }
+                targets = list(self._verdicts.values())
+            for verdict in targets:
+                verdict.verified = False
+                verdict.failed = True
+                verdict.epoch = self._tick()
+
+    def begin_write(self, group: str) -> bool:
+        """Withdraw the verdict for the write; whether it is restorable."""
+        with self._lock:
+            verdict = self._of(group)
+            if verdict.writers == 0:
+                verdict.base, verdict.base_units = verdict.verified, verdict.units
+                verdict.failed = False
+            verdict.writers += 1
+            verdict.verified = False
+            verdict.epoch = self._tick()
+            return verdict.base and not verdict.failed
+
+    def abandon_write(self, group: str) -> None:
+        """A write whose work may still be running after its call gave up
+        (timeout, shutdown). Its slot is never released: the partition holds
+        no verdict again in this process and every read of it is gated."""
+        with self._lock:
+            verdict = self._of(group)
+            verdict.verified = False
+            verdict.failed = True
+            verdict.epoch = self._tick()
+
+    def end_write(
+        self, group: str, counts: tuple[int, int, int] | None, units: bool
+    ) -> None:
+        """``counts`` is ``None`` unless the write succeeded and what it
+        wrote passed the gates by name; ``units`` says the unit gate was
+        among them."""
+        with self._lock:
+            verdict = self._of(group)
+            verdict.writers -= 1
+            # A gated read that took its epoch while this write ran saw a
+            # partition in motion: it must establish nothing either.
+            verdict.epoch = self._tick()
+            proven_units = verdict.base_units and units
+            if counts is None or not counts_agree(counts, proven_units):
+                verdict.failed = True
+            if not units:
+                verdict.base_units = False
+            if verdict.writers == 0 and verdict.base and not verdict.failed:
+                assert counts is not None
+                verdict.verified = True
+                verdict.units, verdict.counts = verdict.base_units, counts
+
+
+def named_rows_valid(rows: object, identities: Sequence[str]) -> bool:
+    """Whether per-episode verdict rows name exactly ``identities``, all valid."""
+    if type(rows) is not list or len(rows) != len(set(identities)):
+        return False
+    seen: set[str] = set()
+    for row in rows:
+        if (
+            type(row) is not dict
+            or set(row) != {"uuid", "valid"}
+            or type(row["uuid"]) is not str
+            or row["valid"] is not True
+        ):
+            return False
+        seen.add(row["uuid"])
+    return seen == set(identities)
+
 
 class FactVectorIndex:
     def __init__(self, representation: FactRepresentation) -> None:
         self.representation = representation
+
+    async def verify(
+        self, driver: GraphDriver, group_id: str, identities: Sequence[str]
+    ) -> bool:
+        """#318: the coverage gate's verdict for these episodes alone."""
+        await _ready(driver)
+        rows, _, _ = await driver.execute_query(
+            _COVERAGE_NAMED,
+            uuids=list(identities),
+            group_id=group_id,
+            representation=self.representation.metadata()["sha256"],
+            dimension=self.representation.dimension,
+        )
+        return named_rows_valid(rows, identities)
+
+    async def trusted_search(
+        self, driver: GraphDriver, group_id: str, vector: list[float], limit: int
+    ) -> list[str]:
+        """#318: candidates without the coverage walk. Only for a partition
+        whose verdict the caller holds."""
+        _unit(vector, self.representation.dimension)
+        await _ready(driver)
+        rows, _, _ = await driver.execute_query(
+            _TRUSTED_SEARCH,
+            group_id=group_id,
+            query_vector=vector,
+            cutoff=FACT_CUTOFF,
+            limit=limit,
+        )
+        if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+            raise FactVectorError("fact_vector_rebuild_required")
+        return _candidates(rows[0].get("candidates"), limit)
 
     async def ensure(
         self, driver: GraphDriver, group_id: str, states: Sequence[ProjectedFactState]
@@ -319,14 +595,7 @@ class FactVectorIndex:
         )
         if len(rows) != 1 or rows[0].get("coverage_valid") is not True:
             raise FactVectorError("fact_vector_rebuild_required")
-        candidates = rows[0].get("candidates")
-        if (
-            not isinstance(candidates, list)
-            or len(candidates) > limit
-            or any(not isinstance(value, str) for value in candidates)
-        ):
-            raise FactVectorError("fact_vector_rebuild_required")
-        return candidates
+        return _candidates(rows[0].get("candidates"), limit)
 
     async def preflight(self, driver: GraphDriver, group_id: str) -> None:
         await self._read(driver, group_id, None, 0)
@@ -347,6 +616,16 @@ class FactVectorIndex:
     ) -> list[str]:
         _unit(vector, self.representation.dimension)
         return await self._read(driver, group_id, vector, limit)
+
+
+def _candidates(candidates: object, limit: int) -> list[str]:
+    if (
+        not isinstance(candidates, list)
+        or len(candidates) > limit
+        or any(not isinstance(value, str) for value in candidates)
+    ):
+        raise FactVectorError("fact_vector_rebuild_required")
+    return candidates
 
 
 def audit_rows(rows: object) -> CoverageAudit:
