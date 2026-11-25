@@ -172,7 +172,7 @@ def test_a_projections_own_vector_failure_keeps_the_rebuild_warning() -> None:
     adapter._project = lambda state: fail()
     try:
         with pytest.raises(GraphitiIndexError, match="fact_vector_rebuild_required"):
-            adapter.project(object())
+            adapter.project(SimpleNamespace(partition_key="acme\n[]"))
     finally:
         adapter._loop.call_soon_threadsafe(adapter._loop.stop)
         thread.join()
@@ -198,9 +198,10 @@ def test_projection_counts_itself_in_flight_only_while_it_runs(fails: bool) -> N
     adapter._call = call
     adapter._project = lambda state: asyncio.sleep(0)
     adapter._project_many = lambda states: asyncio.sleep(0)
+    fact = SimpleNamespace(partition_key="acme\n[]")
     runs: tuple[Callable[[], object], ...] = (
-        lambda: adapter.project(object()),
-        lambda: adapter.project_many((object(),)),
+        lambda: adapter.project(fact),
+        lambda: adapter.project_many((fact,)),
     )
     for run in runs:
         if fails:

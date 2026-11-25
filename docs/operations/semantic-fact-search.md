@@ -48,6 +48,22 @@ pointing operators to targeted repair or rebuild below. Read-side fingerprints a
 not independent authenticity proofs. Delivery and explicit rebuild bind derived
 records to immutable fact bodies.
 
+A partition is not walked again on every search. Once a search has passed the
+checks for a partition, the adapter holds that verdict in memory and later
+searches of it score candidates without revalidating. A projection into the
+partition withdraws the verdict while it runs; it is restored only if a
+verdict was held before, every overlapping projection succeeded, the facts
+written pass the same checks by name and the record counts agree. `clear`, an
+unverified index, a failed scan or changed record counts also withdraw it, and
+the next search is then checked in full. After a start the first search of
+each partition is the slow one.
+
+A derived record altered underneath the running process in a way that leaves
+the counts unchanged is therefore found by the start-up audit, by
+`repair-index` or by the next fully checked search, not by the next search.
+Restart Cairn after restoring or editing the index store underneath it. The
+remaining scans still grow in line with the number of stored facts.
+
 A fact being projected fails the same check for its whole partition until its
 projection completes, so a search made during a save, a bulk load or a rebuild
 is refused in the same way. That refusal is logged as

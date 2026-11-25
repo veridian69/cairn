@@ -27,6 +27,7 @@ from cairn.projection.fact_vectors import (
     FactVectorError,
     _ready,
     audit_rows,
+    named_rows_valid,
 )
 from cairn.projection.semantic_evidence import (
     GRADE_LIMIT,
@@ -335,6 +336,28 @@ _COVERAGE_ROWS = (
     + "RETURN e.uuid AS uuid, valid\n"
 )
 
+# #318: the gathered domain restricted to named episodes, for the facts one
+# projection wrote. Same predicate, so a fact it passes passes the gate.
+_COVERAGE_NAMED = _COVERAGE_ROWS.replace(
+    "MATCH (e:Episodic)\n", "MATCH (e:Episodic) WHERE e.uuid IN $uuids\n", 1
+)
+assert _COVERAGE_NAMED != _COVERAGE_ROWS
+
+# #318: scoring for a partition whose coverage is already established (see
+# ``PartitionVerdicts``). It proves nothing; for a covered partition whose
+# counts agree it returns what ``_SEARCH`` returns: the same eligible count
+# and the same grades in the same order.
+_TRUSTED_SEARCH = """
+MATCH (h:CairnFactChunkSet)-[:CAIRN_UNIT]->(c:CairnFactChunk)
+WHERE h.group_id = $group_id
+WITH h, max((2-vec.cosineDistance(vecf32(c.embedding),vecf32($query_vector)))/2) AS score
+WHERE score > $cutoff
+WITH h.uuid AS uuid, h.fingerprint AS fingerprint, score
+ORDER BY score DESC, uuid ASC
+WITH collect({uuid:uuid, fingerprint:fingerprint, score:score}) AS eligible
+RETURN size(eligible) AS eligible_count, eligible[..$limit] AS grades
+"""
+
 # Shared predicate; coverage is retained even for zero hits. Never select chunks
 # before validating all retained facts. Scores examine distinct children once.
 _SEARCH = (
@@ -470,47 +493,39 @@ class FactUnitIndex:
         )
         if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
             raise FactVectorError("fact_vector_rebuild_required")
-        row = rows[0]
-        count, grades = row.get("eligible_count"), row.get("grades")
-        if (
-            row.get("coverage_valid") is not True
-            or type(count) is not int
-            or not 0 <= count <= 2**63 - 1
-            or type(grades) is not list
-            or len(grades) != min(count, GRADE_LIMIT)
-        ):
+        if rows[0].get("coverage_valid") is not True:
             raise FactVectorError("fact_vector_rebuild_required")
-        hits = []
-        seen = set()
-        for grade in grades:
-            if type(grade) not in (dict, OrderedDict):
-                raise FactVectorError("fact_vector_rebuild_required")
-            identity, fingerprint, score = (
-                grade.get("uuid"),
-                grade.get("fingerprint"),
-                grade.get("score"),
-            )
-            if (
-                type(identity) is not str
-                or len(identity) != 36
-                or identity in seen
-                or type(fingerprint) is not str
-                or not _HEX.fullmatch(fingerprint)
-                or type(score) is not float
-                or not math.isfinite(score)
-                or not LOCAL_CUTOFF < score <= 1.0 + 1e-6
-            ):
-                raise FactVectorError("fact_vector_rebuild_required")
-            try:
-                if str(UUID(identity)) != identity:
-                    raise ValueError
-            except ValueError:
-                raise FactVectorError("fact_vector_rebuild_required") from None
-            seen.add(identity)
-            hits.append((identity, fingerprint, min(score, 1.0)))
-        if hits != sorted(hits, key=lambda hit: (-hit[2], hit[0])):
+        return _grades(rows[0])
+
+    async def verify(
+        self, driver: GraphDriver, group: str, identities: Sequence[str]
+    ) -> bool:
+        """#318: the unit gate's verdict for these episodes alone."""
+        await _ready(driver)
+        rows, _, _ = await driver.execute_query(
+            _COVERAGE_NAMED,
+            uuids=list(identities),
+            group_id=group,
+            representation=local_representation_sha256(),
+        )
+        return named_rows_valid(rows, identities)
+
+    async def trusted_search(
+        self, driver: GraphDriver, group: str, vector: list[float]
+    ) -> tuple[int, tuple[tuple[str, str, float], ...]]:
+        """#318: grades without the coverage walk. Only for a partition
+        whose verdict the caller holds."""
+        await _ready(driver)
+        rows, _, _ = await driver.execute_query(
+            _TRUSTED_SEARCH,
+            group_id=group,
+            query_vector=_vector(vector),
+            cutoff=LOCAL_CUTOFF,
+            limit=GRADE_LIMIT,
+        )
+        if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
             raise FactVectorError("fact_vector_rebuild_required")
-        return count, tuple(hits)
+        return _grades(rows[0])
 
     async def preflight(self, driver: GraphDriver, group: str) -> None:
         await _ready(driver)
@@ -542,3 +557,48 @@ class FactUnitIndex:
         self, driver: GraphDriver, group: str, vector: list[float]
     ) -> tuple[int, tuple[tuple[str, str, float], ...]]:
         return await self._read(driver, group, _vector(vector))
+
+
+def _grades(
+    row: dict[str, Any],
+) -> tuple[int, tuple[tuple[str, str, float], ...]]:
+    """Validate one result envelope's eligible count and ordered grades."""
+    count, grades = row.get("eligible_count"), row.get("grades")
+    if (
+        type(count) is not int
+        or not 0 <= count <= 2**63 - 1
+        or type(grades) is not list
+        or len(grades) != min(count, GRADE_LIMIT)
+    ):
+        raise FactVectorError("fact_vector_rebuild_required")
+    hits = []
+    seen = set()
+    for grade in grades:
+        if type(grade) not in (dict, OrderedDict):
+            raise FactVectorError("fact_vector_rebuild_required")
+        identity, fingerprint, score = (
+            grade.get("uuid"),
+            grade.get("fingerprint"),
+            grade.get("score"),
+        )
+        if (
+            type(identity) is not str
+            or len(identity) != 36
+            or identity in seen
+            or type(fingerprint) is not str
+            or not _HEX.fullmatch(fingerprint)
+            or type(score) is not float
+            or not math.isfinite(score)
+            or not LOCAL_CUTOFF < score <= 1.0 + 1e-6
+        ):
+            raise FactVectorError("fact_vector_rebuild_required")
+        try:
+            if str(UUID(identity)) != identity:
+                raise ValueError
+        except ValueError:
+            raise FactVectorError("fact_vector_rebuild_required") from None
+        seen.add(identity)
+        hits.append((identity, fingerprint, min(score, 1.0)))
+    if hits != sorted(hits, key=lambda hit: (-hit[2], hit[0])):
+        raise FactVectorError("fact_vector_rebuild_required")
+    return count, tuple(hits)

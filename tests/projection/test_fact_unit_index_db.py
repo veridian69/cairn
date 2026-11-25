@@ -1204,3 +1204,370 @@ def test_audit_names_the_episode_the_unit_gate_refuses(owned_db: int) -> None:
             await driver.close()
 
     asyncio.run(asyncio.wait_for(run(), timeout=30))
+
+
+# --- #318: reads that rely on a partition's verdict --------------------------
+
+
+def _unit_vector(*components: float) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in components))
+    return [value / norm for value in components] + [0.0] * (1024 - len(components))
+
+
+def test_trusted_scans_return_what_the_gated_searches_return_and_name_what_fails(
+    owned_db: int,
+) -> None:
+    from cairn.projection.fact_vectors import (
+        FactVectorIndex,
+        counts_agree,
+        partition_counts,
+    )
+
+    async def run() -> None:
+        driver = BoundedFalkorDriver(
+            host="127.0.0.1", port=owned_db, database=GROUP, concurrency_limit=2
+        )
+        try:
+            await driver.execute_query("MATCH (n) DETACH DELETE n")
+            assert await partition_counts(driver, GROUP) == (0, 0, 0)
+            identities = [str(UUID(int=4096 + position)) for position in range(12)]
+            for position, identity in enumerate(identities):
+                await driver.execute_query(
+                    "CREATE (:Episodic {uuid:$uuid, group_id:$group, source_description:'cairn.fact.projected'})",
+                    uuid=identity,
+                    group=GROUP,
+                )
+                # Scores spread across the cutoffs, with exact ties to order.
+                angle = (position // 2) * 0.12
+                first = _unit_vector(math.cos(angle), math.sin(angle))
+                second = _unit_vector(math.cos(angle + 0.9), math.sin(angle + 0.9))
+                await publish(
+                    driver,
+                    replace(state(), fact_id=UUID(identity)),
+                    GROUP,
+                    EmbeddedLocalFact(
+                        (UnitSpan(0, 32, 0), UnitSpan(32, 64, 1)),
+                        (first, second),
+                        first,
+                    ),
+                    representation(),
+                )
+            counts = await partition_counts(driver, GROUP)
+            assert counts == (12, 12, 12) and counts_agree(counts, True)
+            units, vectors = (
+                FactUnitIndex(representation()),
+                FactVectorIndex(representation()),
+            )
+            for query in (
+                _unit_vector(1.0, 0.0),
+                _unit_vector(0.6, 0.8),
+                _unit_vector(0.0, 0.0, 1.0),
+            ):
+                gated = await units.search(driver, GROUP, query)
+                assert await units.trusted_search(driver, GROUP, query) == gated
+                for limit in (1, 5, 256):
+                    assert await vectors.trusted_search(
+                        driver, GROUP, query, limit
+                    ) == await vectors.search(driver, GROUP, query, limit)
+            assert (await units.search(driver, GROUP, _unit_vector(1.0, 0.0)))[0] > 1
+
+            assert await units.verify(driver, GROUP, identities)
+            assert await vectors.verify(driver, GROUP, identities[:3])
+            assert await units.verify(driver, GROUP, [])
+            unknown = str(UUID(int=9))
+            assert not await units.verify(driver, GROUP, [identities[0], unknown])
+            assert not await vectors.verify(driver, GROUP, [unknown])
+            await driver.execute_query(
+                "MATCH (c:CairnFactChunk {uuid:$uuid}) WHERE c.slot = 1 SET c.input_bytes = 31",
+                uuid=identities[1],
+            )
+            await driver.execute_query(
+                "MATCH (v:CairnFactVector {uuid:$uuid}) SET v.dim = 3",
+                uuid=identities[2],
+            )
+            assert not await units.verify(driver, GROUP, identities[:2])
+            assert await units.verify(driver, GROUP, identities[:1])
+            assert not await vectors.verify(driver, GROUP, identities[:3])
+            assert await vectors.verify(driver, GROUP, identities[:2])
+            # A pending episode owns no records: the counts stop agreeing.
+            await driver.execute_query(
+                "CREATE (:Episodic {uuid:$uuid, group_id:$group, source_description:'cairn.fact.projecting'})",
+                uuid=unknown,
+                group=GROUP,
+            )
+            assert not counts_agree(await partition_counts(driver, GROUP), False)
+            await driver.execute_query(
+                "MATCH (e:Episodic {uuid:$uuid}) DETACH DELETE e", uuid=unknown
+            )
+            assert await partition_counts(driver, GROUP) == (12, 12, 12)
+            # Security review, P3: a record of another partition here could
+            # balance the counts while the gates, which walk this partition's
+            # episodes, never see it. The graph is refused outright.
+            for label in ("Episodic", "CairnFactVector", "CairnFactChunkSet"):
+                for other in ('"' + "c" * 64 + '"', "null"):
+                    await driver.execute_query(
+                        f"CREATE (:{label} {{uuid:$uuid, group_id:{other}}})",
+                        uuid=unknown,
+                    )
+                    with pytest.raises(FactVectorError):
+                        await partition_counts(driver, GROUP)
+                    await driver.execute_query(
+                        f"MATCH (n:{label} {{uuid:$uuid}}) DETACH DELETE n",
+                        uuid=unknown,
+                    )
+            assert await partition_counts(driver, GROUP) == (12, 12, 12)
+            # Round 2: two episodes with one identity pass the gates on the
+            # record they share and would hide a record no episode owns.
+            await driver.execute_query(
+                "CREATE (:Episodic {uuid:$uuid, group_id:$group, source_description:'cairn.fact.projected'})",
+                uuid=identities[0],
+                group=GROUP,
+            )
+            with pytest.raises(FactVectorError):
+                await partition_counts(driver, GROUP)
+        finally:
+            await driver.execute_query("MATCH (n) DETACH DELETE n")
+            await driver.close()
+
+    asyncio.run(asyncio.wait_for(run(), timeout=90))
+
+
+def _recorded_queries(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    seen: list[str] = []
+    original = BoundedFalkorDriver.execute_query
+
+    # Positional-only: Graphiti passes parameters named like these as keywords.
+    async def recording(self: Any, cypher_query_: str, /, **kwargs: Any) -> Any:
+        seen.append(cypher_query_)
+        return await original(self, cypher_query_, **kwargs)
+
+    monkeypatch.setattr(BoundedFalkorDriver, "execute_query", recording)
+    return seen
+
+
+def _paths(seen: list[str]) -> tuple[bool, bool]:
+    """Whether the recorded queries walked the gates, and whether they
+    used the trusted scans; then forget them."""
+    import cairn.projection.fact_unit_index as fact_unit_index
+    import cairn.projection.fact_vectors as fact_vectors
+
+    gated = {
+        fact_unit_index._SEARCH,
+        fact_unit_index._COVERAGE_ONLY,
+        fact_vectors._COVERAGE_SEARCH,
+        fact_vectors._COVERAGE_ONLY,
+    }
+    trusted = {fact_unit_index._TRUSTED_SEARCH, fact_vectors._TRUSTED_SEARCH}
+    result = (any(q in gated for q in seen), any(q in trusted for q in seen))
+    seen.clear()
+    return result
+
+
+def _evidence(adapter: Any, partition: str = "acme\n[]") -> Any:
+    result = adapter.search_with_evidence("entry", 8, (partition,))
+    return result.candidate_ids, result.partitions
+
+
+def test_actual_second_read_relies_on_the_verdict_and_a_write_restores_it(
+    adapter: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn.projection.adapter import FactProjected
+
+    seen = _recorded_queries(monkeypatch)
+    assert adapter.project(state()) == FactProjected()
+    seen.clear()
+    first = _evidence(adapter)
+    assert _paths(seen) == (True, False)
+    assert _evidence(adapter) == first
+    assert _paths(seen) == (False, True)
+    # The plain search holds to the same verdict.
+    assert state().fact_id in adapter.search("entry", 8, ("acme\n[]",))
+    assert _paths(seen) == (False, True)
+
+    second = replace(state(), fact_id=UUID(int=2))
+    third = replace(state(), fact_id=UUID(int=3))
+    assert adapter.project(second) == FactProjected()
+    seen.clear()
+    candidates, partitions = _evidence(adapter)
+    assert _paths(seen) == (False, True)
+    assert {grade.fact_id for grade in partitions[0].grades} == {
+        state().fact_id,
+        second.fact_id,
+    }
+    assert adapter.project_many((third, second)) == (FactProjected(), FactProjected())
+    seen.clear()
+    candidates, partitions = _evidence(adapter)
+    assert _paths(seen) == (False, True)
+    assert len(partitions[0].grades) == 3 and third.fact_id in candidates
+
+
+def test_actual_failed_write_leaves_the_partition_to_the_gates(
+    adapter: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn.projection.adapter import FactProjected
+    from cairn.projection.graphiti import GraphitiIndexError
+    from cairn.projection.semantic_evidence import SemanticEvidenceError
+
+    seen = _recorded_queries(monkeypatch)
+    adapter.project(state())
+    _evidence(adapter)
+    _evidence(adapter)
+    assert _paths(seen)[1] is True
+    second = replace(state(), fact_id=UUID(int=2))
+    adapter._graphiti.embedder.fail = True
+    with pytest.raises(GraphitiIndexError):
+        adapter.project(second)
+    seen.clear()
+    # The interrupted projection left a pending episode: gated, and refused.
+    with pytest.raises(SemanticEvidenceError):
+        _evidence(adapter)
+    assert _paths(seen) == (True, False)
+    adapter._graphiti.embedder.fail = False
+    assert adapter.project(second) == FactProjected()
+    seen.clear()
+    # A write restores only a verdict that was held before it began.
+    _evidence(adapter)
+    assert _paths(seen) == (True, False)
+    _evidence(adapter)
+    assert _paths(seen) == (False, True)
+
+
+def test_actual_lost_record_clear_and_unverified_index_withdraw_the_verdict(
+    adapter: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn.projection.partition import derive_group_id
+    from cairn.projection.semantic_evidence import SemanticEvidenceError
+
+    seen = _recorded_queries(monkeypatch)
+    second = replace(state(), fact_id=UUID(int=2))
+    adapter.project_many((state(), second))
+    _evidence(adapter)
+    _evidence(adapter)
+    assert _paths(seen)[1] is True
+
+    async def lose() -> None:
+        driver = adapter._driver.clone(database=derive_group_id("acme\n[]"))
+        await driver.execute_query(
+            "MATCH (v:CairnFactVector {uuid:$uuid}) DETACH DELETE v",
+            uuid=str(second.fact_id),
+        )
+
+    adapter._call(lose())
+    seen.clear()
+    # Behind the adapter's back: the counts moved, so the gates decide.
+    with pytest.raises(SemanticEvidenceError):
+        _evidence(adapter)
+    assert _paths(seen) == (True, False)
+    adapter.project(second)
+    _evidence(adapter)
+    _evidence(adapter)
+    assert _paths(seen)[1] is True
+
+    adapter.set_coverage_verified(False)
+    with pytest.raises(SemanticEvidenceError):
+        _evidence(adapter)
+    adapter.set_coverage_verified(True)
+    seen.clear()
+    _evidence(adapter)
+    assert _paths(seen) == (True, False)
+    _evidence(adapter)
+    assert _paths(seen) == (False, True)
+
+    adapter.clear(("acme\n[]",))
+    seen.clear()
+    assert _evidence(adapter)[0] == ()
+    assert _paths(seen) == (True, False)
+
+
+def test_actual_projection_that_gave_up_leaves_its_partition_gated(
+    adapter: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn.projection.adapter import FactProjected
+    from cairn.projection.graphiti import GraphitiIndexError
+
+    seen = _recorded_queries(monkeypatch)
+    other = replace(
+        state(), fact_id=UUID(int=5), partition_key='acme\n[{"kind":"repo","id":"r"}]'
+    )
+    adapter.project(state())
+    adapter.project(other)
+    for partition in (state().partition_key, other.partition_key):
+        _evidence(adapter, partition)
+        _evidence(adapter, partition)
+    assert _paths(seen)[1] is True
+    original = adapter._call
+
+    def gives_up(coroutine: Any, **keywords: Any) -> Any:
+        coroutine.close()
+        raise GraphitiIndexError("graphiti_timeout")
+
+    monkeypatch.setattr(adapter, "_call", gives_up)
+    with pytest.raises(GraphitiIndexError, match="graphiti_timeout"):
+        adapter.project(replace(state(), fact_id=UUID(int=2)))
+    monkeypatch.setattr(adapter, "_call", original)
+    seen.clear()
+    for _ in range(2):
+        _evidence(adapter)
+        assert _paths(seen) == (True, False)
+    assert adapter.project(replace(state(), fact_id=UUID(int=3))) == FactProjected()
+    seen.clear()
+    for _ in range(2):
+        _evidence(adapter)
+        assert _paths(seen) == (True, False)
+    # The other partition keeps its verdict.
+    _evidence(adapter, other.partition_key)
+    assert _paths(seen) == (False, True)
+
+
+def test_actual_write_beginning_during_a_trusted_read_refuses_it(
+    adapter: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cairn.projection.partition import derive_group_id
+    from cairn.projection.semantic_evidence import SemanticEvidenceError
+
+    adapter.project(state())
+    first = _evidence(adapter)
+    assert _evidence(adapter) == first
+    group = derive_group_id("acme\n[]")
+    original = FactUnitIndex.trusted_search
+
+    async def overlapped(self: Any, driver: Any, group_id: str, vector: Any) -> Any:
+        adapter._verdicts().begin_write(group)
+        return await original(self, driver, group_id, vector)
+
+    monkeypatch.setattr(FactUnitIndex, "trusted_search", overlapped)
+    with pytest.raises(SemanticEvidenceError):
+        _evidence(adapter)
+    monkeypatch.setattr(FactUnitIndex, "trusted_search", original)
+    adapter._verdicts().end_write(group, None, False)
+    assert _evidence(adapter) == first
+
+
+def test_actual_damage_that_keeps_the_counts_waits_for_the_next_gated_read(
+    adapter: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318's stated price: a record altered behind the adapter's back, with
+    every count unchanged, is not seen by a read that relies on the verdict.
+    The start-up audit and every gated read still refuse it."""
+    from cairn.projection.partition import derive_group_id
+    from cairn.projection.semantic_evidence import SemanticEvidenceError
+
+    seen = _recorded_queries(monkeypatch)
+    adapter.project(state())
+    _evidence(adapter)
+    _evidence(adapter)
+
+    async def damage() -> None:
+        driver = adapter._driver.clone(database=derive_group_id("acme\n[]"))
+        await driver.execute_query("MATCH (h:CairnFactChunkSet) SET h.complete = false")
+
+    adapter._call(damage())
+    seen.clear()
+    _evidence(adapter)
+    assert _paths(seen) == (False, True)
+    # A restart begins unverified (I-99) and holds no verdict.
+    adapter.set_coverage_verified(False)
+    adapter.set_coverage_verified(True)
+    with pytest.raises(SemanticEvidenceError):
+        _evidence(adapter)
+    assert adapter.coverage_audit("acme\n[]").defective == {str(state().fact_id)}

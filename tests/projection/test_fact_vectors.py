@@ -198,3 +198,269 @@ def test_vector_coverage_rows_share_the_gate_predicate_and_nothing_of_the_search
     assert module._COVERAGE_ROWS.endswith("RETURN e.uuid AS uuid, valid\n")
     for forbidden in ("$query_vector", "$cutoff", "$limit", "$scoring", "score"):
         assert forbidden not in module._COVERAGE_ROWS
+
+
+# --- #318: partition verdicts ------------------------------------------------
+
+EVEN = (3, 3, 3)
+
+
+def _verdicts() -> Any:
+    from cairn.projection.fact_vectors import PartitionVerdicts
+
+    return PartitionVerdicts()
+
+
+def test_a_passed_gated_read_establishes_a_verdict_for_its_own_scope() -> None:
+    verdicts = _verdicts()
+    assert verdicts.held("g", False) is None
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, False)
+    assert verdicts.held("g", False) == (0, EVEN)
+    # A read that did not walk the unit gate proves nothing about units.
+    assert verdicts.held("g", True) is None
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    assert verdicts.held("g", True) == (0, EVEN)
+    # A later narrower pass does not shrink the proof already held.
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, False)
+    assert verdicts.held("g", True) == (0, EVEN)
+    assert verdicts.held("other", False) is None
+
+
+@pytest.mark.parametrize(
+    ("counts", "units"),
+    [((3, 2, 3), False), ((3, 4, 3), False), ((3, 3, 2), True), ((3, 3, 4), True)],
+)
+def test_disagreeing_counts_establish_nothing(
+    counts: tuple[int, int, int], units: bool
+) -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), counts, units)
+    assert verdicts.held("g", units) is None
+
+
+def test_headers_are_not_counted_where_units_are_not_graded() -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), (3, 3, 0), False)
+    assert verdicts.held("g", False) == (0, (3, 3, 0))
+
+
+def test_a_write_or_a_drop_during_a_gated_read_establishes_nothing() -> None:
+    verdicts = _verdicts()
+    epoch = verdicts.epoch("g")
+    verdicts.begin_write("g")
+    verdicts.end_write("g", EVEN, True)
+    verdicts.establish("g", epoch, EVEN, True)
+    assert verdicts.held("g", False) is None
+    epoch = verdicts.epoch("g")
+    verdicts.drop("g")
+    verdicts.establish("g", epoch, EVEN, True)
+    assert verdicts.held("g", False) is None
+    # A write still running refuses even a read that began after it did.
+    verdicts.begin_write("g")
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    assert verdicts.held("g", False) is None
+
+
+@pytest.mark.parametrize("held_before", [False, True])
+@pytest.mark.parametrize("counts", [None, (4, 4, 4)])
+def test_a_gated_read_that_began_during_a_write_establishes_nothing(
+    held_before: bool, counts: tuple[int, int, int] | None
+) -> None:
+    """Security review, P2: the read took its epoch after the write began
+    and finished after it ended, failed or not."""
+    verdicts = _verdicts()
+    if held_before:
+        verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    verdicts.begin_write("g")
+    epoch = verdicts.epoch("g")
+    verdicts.end_write("g", counts, True)
+    before = verdicts.held("g", True)
+    verdicts.establish("g", epoch, (9, 9, 9), True)
+    assert verdicts.held("g", True) == before
+    assert before is None or before[1] == (4, 4, 4)
+
+
+def test_a_successful_verified_write_restores_the_verdict_with_new_counts() -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    held = verdicts.held("g", True)
+    assert held is not None
+    assert verdicts.begin_write("g") is True
+    assert verdicts.held("g", True) is None
+    assert verdicts.unchanged("g", held[0]) is False
+    verdicts.end_write("g", (4, 4, 4), True)
+    restored = verdicts.held("g", True)
+    assert restored is not None and restored[1] == (4, 4, 4)
+    assert restored[0] > held[0]
+
+
+def test_a_write_cannot_create_a_verdict_that_was_not_held() -> None:
+    verdicts = _verdicts()
+    assert verdicts.begin_write("g") is False
+    verdicts.end_write("g", EVEN, True)
+    assert verdicts.held("g", False) is None
+
+
+@pytest.mark.parametrize("counts", [None, (4, 3, 4), (4, 4, 3)])
+def test_a_failed_or_inconsistent_write_leaves_the_partition_unverified(
+    counts: tuple[int, int, int] | None,
+) -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    verdicts.begin_write("g")
+    verdicts.end_write("g", counts, True)
+    assert verdicts.held("g", False) is None
+
+
+def test_a_write_that_did_not_verify_units_narrows_the_restored_proof() -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    verdicts.begin_write("g")
+    verdicts.end_write("g", (4, 4, 3), False)
+    assert verdicts.held("g", True) is None
+    assert verdicts.held("g", False) is not None
+
+
+def test_overlapping_writes_restore_only_when_all_succeed() -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    assert verdicts.begin_write("g") is True
+    assert verdicts.begin_write("g") is True
+    verdicts.end_write("g", (4, 4, 4), True)
+    assert verdicts.held("g", True) is None  # one writer still running
+    verdicts.end_write("g", (5, 5, 5), True)
+    held = verdicts.held("g", True)
+    assert held is not None and held[1] == (5, 5, 5)
+
+    assert verdicts.begin_write("g") is True
+    assert verdicts.begin_write("g") is True
+    verdicts.end_write("g", None, True)
+    assert verdicts.begin_write("g") is False  # joins a failed set of writes
+    verdicts.end_write("g", (6, 6, 6), True)
+    verdicts.end_write("g", (6, 6, 6), True)
+    assert verdicts.held("g", False) is None
+
+
+def test_a_drop_during_a_write_is_not_undone_by_its_end() -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    verdicts.establish("h", verdicts.epoch("h"), EVEN, True)
+    verdicts.begin_write("g")
+    verdicts.drop()
+    verdicts.end_write("g", (4, 4, 4), True)
+    assert verdicts.held("g", False) is None
+    assert verdicts.held("h", False) is None
+
+
+def test_reads_of_any_number_of_partitions_retain_nothing() -> None:
+    """Codex security review, P3: a caller may name any partition. Asking
+    about one, or passing the gates of an empty one, must not keep state."""
+    verdicts = _verdicts()
+    for position in range(1000):
+        group = f"g{position}"
+        epoch = verdicts.epoch(group)
+        assert verdicts.held(group, False) is None
+        assert verdicts.unchanged(group, epoch) is False
+        verdicts.establish(group, epoch, (0, 0, 0), True)
+        verdicts.drop(group)
+        assert verdicts.held(group, False) is None
+    assert verdicts._verdicts == {}
+
+
+def test_a_partition_without_an_entry_still_notices_writes_and_drops() -> None:
+    verdicts = _verdicts()
+    epoch = verdicts.epoch("g")
+    verdicts.begin_write("g")
+    verdicts.end_write("g", EVEN, True)
+    verdicts.establish("g", epoch, EVEN, True)
+    assert verdicts.held("g", False) is None
+
+    epoch = verdicts.epoch("h")
+    verdicts.drop()
+    verdicts.establish("h", epoch, EVEN, True)
+    assert verdicts.held("h", False) is None
+    verdicts.establish("h", verdicts.epoch("h"), EVEN, True)
+    assert verdicts.held("h", True) is not None
+
+
+def test_a_drop_of_everything_forgets_all_but_running_writes() -> None:
+    verdicts = _verdicts()
+    for group in ("a", "b", "c"):
+        verdicts.establish(group, verdicts.epoch(group), EVEN, True)
+    verdicts.begin_write("b")
+    epoch = verdicts.epoch("a")
+    verdicts.drop()
+    assert set(verdicts._verdicts) == {"b"}
+    # No epoch taken before the drop is good after it, entry or not.
+    assert verdicts.epoch("a") != epoch
+    verdicts.establish("a", epoch, EVEN, True)
+    assert verdicts.held("a", False) is None
+    verdicts.end_write("b", (4, 4, 4), True)
+    assert verdicts.held("b", False) is None
+
+
+def test_an_abandoned_write_keeps_the_partition_gated_for_good() -> None:
+    """Security review, round 2: the call gave up, the work may run on."""
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    verdicts.establish("h", verdicts.epoch("h"), EVEN, True)
+    verdicts.begin_write("g")
+    epoch = verdicts.epoch("g")
+    verdicts.abandon_write("g")
+    assert verdicts.held("g", False) is None
+    verdicts.establish("g", epoch, EVEN, True)
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    assert verdicts.held("g", False) is None
+    # A later write that succeeds cannot restore it either.
+    assert verdicts.begin_write("g") is False
+    verdicts.end_write("g", (4, 4, 4), True)
+    verdicts.establish("g", verdicts.epoch("g"), (4, 4, 4), True)
+    assert verdicts.held("g", False) is None
+    assert verdicts.held("h", True) is not None
+
+
+def test_a_trusted_read_notices_a_write_that_began_after_it() -> None:
+    verdicts = _verdicts()
+    verdicts.establish("g", verdicts.epoch("g"), EVEN, True)
+    held = verdicts.held("g", True)
+    assert held is not None and verdicts.unchanged("g", held[0])
+    verdicts.begin_write("g")
+    verdicts.end_write("g", (4, 4, 4), True)
+    # Restored, but not the verdict that read relied on.
+    assert verdicts.unchanged("g", held[0]) is False
+
+
+def test_named_rows_must_name_exactly_the_written_facts_all_valid() -> None:
+    from cairn.projection.fact_vectors import named_rows_valid
+
+    good = [{"uuid": "a", "valid": True}, {"uuid": "b", "valid": True}]
+    assert named_rows_valid(good, ["a", "b"])
+    assert named_rows_valid(good, ["b", "a", "a"])
+    assert named_rows_valid([], [])
+    for rows in (
+        good[:1],
+        good + [{"uuid": "c", "valid": True}],
+        [good[0], {"uuid": "b", "valid": False}],
+        [good[0], {"uuid": "b", "valid": 1}],
+        [good[0], {"uuid": "a", "valid": True}],
+        [good[0], {"uuid": 2, "valid": True}],
+        [good[0], {"uuid": "b", "valid": True, "extra": 1}],
+        "rows",
+        None,
+    ):
+        assert not named_rows_valid(rows, ["a", "b"])
+
+
+def test_the_named_gate_is_the_gate_restricted_to_named_episodes() -> None:
+    import cairn.projection.fact_unit_index as fact_unit_index
+    import cairn.projection.fact_vectors as fact_vectors
+
+    for module in (fact_vectors, fact_unit_index):
+        named, rows = module._COVERAGE_NAMED, module._COVERAGE_ROWS
+        assert named.count("e.uuid IN $uuids") == 1
+        assert (
+            named.replace(" WHERE e.uuid IN $uuids AND", " WHERE").replace(
+                " WHERE e.uuid IN $uuids", ""
+            )
+            == rows
+        )

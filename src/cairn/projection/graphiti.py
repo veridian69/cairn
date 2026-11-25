@@ -27,7 +27,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Coroutine, Iterator, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Sequence
 from concurrent.futures import Future
 from contextlib import ExitStack, contextmanager
 from contextvars import Context, ContextVar
@@ -81,7 +81,9 @@ from cairn.projection.fact_vectors import (
     FactRepresentation,
     FactVectorError,
     FactVectorIndex,
+    PartitionVerdicts,
     _ready,
+    partition_counts,
     policy_metadata,
 )
 from cairn.projection.graphiti_edge_batch import install_edge_batching
@@ -1153,7 +1155,7 @@ class GraphitiIndex:
 
     def project(self, state: ProjectedFactState) -> FactProjected | ProjectionFailed:
         with self._projecting():
-            return self._call(self._project(state))
+            return self._written((state,), lambda: self._call(self._project(state)))
 
     def project_many(
         self, states: tuple[ProjectedFactState, ...]
@@ -1162,8 +1164,11 @@ class GraphitiIndex:
             return ()
         timeout = min(_BULK_TIMEOUT_SECONDS, len(states) * _CALL_TIMEOUT_SECONDS)
         with self._projecting():
-            return self._call(
-                self._project_many(states), timeout=timeout, contain_tasks=True
+            return self._written(
+                states,
+                lambda: self._call(
+                    self._project_many(states), timeout=timeout, contain_tasks=True
+                ),
             )
 
     def search(
@@ -1252,7 +1257,12 @@ class GraphitiIndex:
         )
 
     def clear(self, partition_keys: tuple[str, ...] | None) -> None:
-        self._call(self._clear(partition_keys))
+        # #318: before and after, so no read establishes across the clear.
+        self._verdicts().drop()
+        try:
+            self._call(self._clear(partition_keys))
+        finally:
+            self._verdicts().drop()
 
     def coverage_audit(self, partition_key: str) -> CoverageAudit:
         """#204: which episodes the read-side gates would refuse, by the
@@ -1261,6 +1271,98 @@ class GraphitiIndex:
 
     def set_coverage_verified(self, verified: bool) -> None:
         self._coverage_verified = verified
+        if not verified:
+            self._verdicts().drop()
+
+    def _verdicts(self) -> PartitionVerdicts:
+        with _IN_FLIGHT_LOCK:
+            verdicts = getattr(self, "_partition_verdicts", None)
+            if verdicts is None:
+                verdicts = self._partition_verdicts = PartitionVerdicts()
+            return verdicts
+
+    def _written[ResultT](
+        self, states: tuple[ProjectedFactState, ...], call: Callable[[], ResultT]
+    ) -> ResultT:
+        """#318: a projection withdraws its partition's verdict while it
+        runs and restores it only on the terms ``PartitionVerdicts`` sets.
+        ``call`` is the whole adapter call, so a bulk call's child tasks
+        have settled before anything it wrote is checked. One partition per
+        call, as both projection paths already require."""
+        group_id = derive_group_id(states[0].partition_key)
+        verdicts = self._verdicts()
+        restorable = verdicts.begin_write(group_id)
+        counts: tuple[int, int, int] | None = None
+        units = False
+        abandoned = False
+        try:
+            try:
+                result = call()
+            except GraphitiIndexError as error:
+                # The call gave up; the work it started may not have stopped.
+                abandoned = error.code in ("graphiti_timeout", "graphiti_shutdown")
+                raise
+            outcomes = result if isinstance(result, tuple) else (result,)
+            if restorable and all(isinstance(item, FactProjected) for item in outcomes):
+                units = self.memory_evidence_source() is not None
+                try:
+                    counts = self._call(self._written_counts(group_id, states, units))
+                except Exception:
+                    counts = None  # The write stands, unverified.
+            return result
+        finally:
+            if abandoned:
+                verdicts.abandon_write(group_id)
+            else:
+                verdicts.end_write(group_id, counts, units)
+
+    async def _written_counts(
+        self, group_id: str, states: tuple[ProjectedFactState, ...], units: bool
+    ) -> tuple[int, int, int] | None:
+        """The partition's counts if what was just written passes the gates
+        by name; ``None`` leaves the partition to the next gated read."""
+        try:
+            driver = self._driver.clone(database=group_id)
+            identities = sorted({str(state.fact_id) for state in states})
+            if not await self._fact_vector_index().verify(driver, group_id, identities):
+                return None
+            if units and not await self._fact_unit_index().verify(
+                driver, group_id, identities
+            ):
+                return None
+            return await partition_counts(driver, group_id)
+        except Exception:
+            # Never a projection failure: the write stands, unverified.
+            return None
+
+    async def _held_verdict(
+        self, driver: GraphDriver, group_id: str, units: bool
+    ) -> int | None:
+        """The epoch of a verdict this read may rely on. A partition whose
+        counts moved since the verdict loses it and is proved in full."""
+        verdicts = self._verdicts()
+        held = verdicts.held(group_id, units)
+        if held is None:
+            return None
+        epoch, counts = held
+        try:
+            current = await partition_counts(driver, group_id)
+        except Exception:
+            verdicts.drop(group_id)
+            raise
+        if current != counts:
+            verdicts.drop(group_id)
+            return None
+        return epoch
+
+    async def _establish(
+        self, driver: GraphDriver, group_id: str, epoch: int, units: bool
+    ) -> None:
+        try:
+            counts = await partition_counts(driver, group_id)
+        except Exception:
+            return  # The gated read stands; the next one proves again.
+        self._verdicts().establish(group_id, epoch, counts, units)
 
     # --- Coroutine bodies ------------------------------------------------
 
@@ -1548,14 +1650,23 @@ class GraphitiIndex:
         config = _SEARCH_CONFIG.model_copy(update={"limit": limit})
         fact_vectors = self._fact_vector_index()
         fact_units = self._fact_unit_index() if grades is not None else None
+        verdicts = self._verdicts()
         partitions = []
         for partition in partition_keys:
             group_id = derive_group_id(partition)
             driver = driver_leases.enter_context(self._lease_search_driver(group_id))
-            await fact_vectors.preflight(driver, group_id)
-            if fact_units is not None:
-                await fact_units.preflight(driver, group_id)
-            partitions.append((partition, group_id, driver))
+            # #318: a partition that passed its gates since its last write is
+            # not walked again. Without a verdict the read is gated exactly
+            # as before, and a pass establishes one.
+            held = await self._held_verdict(driver, group_id, fact_units is not None)
+            if held is None:
+                epoch = verdicts.epoch(group_id)
+                await fact_vectors.preflight(driver, group_id)
+                if fact_units is not None:
+                    await fact_units.preflight(driver, group_id)
+            else:
+                epoch = held
+            partitions.append((partition, group_id, driver, held is not None, epoch))
         if not partitions:
             return ()
         # Seam 3: every search_ call in this loop must see live embeddings,
@@ -1565,7 +1676,7 @@ class GraphitiIndex:
             query_vector = await fact_vectors.representation.embed_text(
                 query.replace("\n", " ")
             )
-            for partition, group_id, driver in partitions:
+            for partition, group_id, driver, trusted, epoch in partitions:
                 results = await self._graphiti.search_with_vector(
                     query,
                     config,
@@ -1575,19 +1686,46 @@ class GraphitiIndex:
                 )
                 # This statement also rechecks coverage after preflight, before
                 # any candidates escape. A defect discards the whole search.
-                fact_hits = await fact_vectors.search(
-                    driver, group_id, query_vector, limit
-                )
+                try:
+                    fact_hits = await (
+                        fact_vectors.trusted_search(
+                            driver, group_id, query_vector, limit
+                        )
+                        if trusted
+                        else fact_vectors.search(driver, group_id, query_vector, limit)
+                    )
+                    unit_result = (
+                        None
+                        if fact_units is None or grades is None
+                        else await (
+                            fact_units.trusted_search(driver, group_id, query_vector)
+                            if trusted
+                            else fact_units.search(driver, group_id, query_vector)
+                        )
+                    )
+                except BaseException:
+                    if trusted:
+                        # Whatever stopped a trusted scan, stop trusting.
+                        verdicts.drop(group_id)
+                    raise
+                if trusted:
+                    # A write that began during the read withdrew the
+                    # verdict it relied on: refused, as the gates refuse a
+                    # search a projection overlaps (#281).
+                    if not verdicts.unchanged(group_id, epoch):
+                        raise FactVectorError("fact_vector_rebuild_required")
+                else:
+                    await self._establish(
+                        driver, group_id, epoch, fact_units is not None
+                    )
                 # Preserve existing episode/edge candidate order, then append
                 # relation-independent fact-body candidates.
                 values = [episode.uuid for episode in results.episodes]
                 for edge in results.edges:
                     values.extend(edge.episodes)
                 values.extend(fact_hits)
-                if fact_units is not None and grades is not None:
-                    count, unit_hits = await fact_units.search(
-                        driver, group_id, query_vector
-                    )
+                if unit_result is not None and grades is not None:
+                    count, unit_hits = unit_result
                     grades.append(
                         PartitionGrades(
                             partition,
